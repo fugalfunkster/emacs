@@ -11,6 +11,7 @@ with insight from [Howard Abrams](https://github.com/howardabrams/dot-files)
 
 #### async
 - http://elpa.gnu.org/packages/async.html
+
 #### auto-complete
 #### cider
 - http://www.github.com/clojure-emacs/cider
