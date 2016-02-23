@@ -9,19 +9,16 @@ with insight from [Howard Abrams](https://github.com/howardabrams/dot-files)
 
 ## Packages and Helpful Links
 
-async
+####async
 - http://elpa.gnu.org/packages/async.html
-
-auto-complete
-cider
+####auto-complete
+####cider
 - http://www.github.com/clojure-emacs/cider
-
-clojure-mode
+####clojure-mode
 - http://github.com/clojure-emacs/clojure-mode
-clojure-mode-ex
+####clojure-mode-ex
 - http://github.com/clojure-emacs/clojure-mode
-
-dash
+####dash
 #### emmet-mode
 - fork of zencoding mode
 - https://www.youtube.com/watch?v=p7qore_HpC4
