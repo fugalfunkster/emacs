@@ -1,29 +1,83 @@
 
-# this is a Clojure-friendly emacs config by flyingmachine
+# A JavaScript-friendly emacs Config 
 
-If you're new to emacs, check out
-[this introductory tutorial](http://www.braveclojure.com/basic-emacs/)!
+based on flyingmachines [Clojure-friendly config](https://github.com/flyingmachine/emacs-for-clojure)
 
-## Organization
+and azers [JS config](https://github.com/azer/emacs)
 
-I've tried to separate everything logically and document the purpose
-of every line. [`init.el`](./init.el) acts as a kind of table of
-contents.  It's a good idea to eventually go through `init.el` and the
-files under the `customizations` directory so that you know exactly
-what's going on.
+with insight from [Howard Abrams](https://github.com/howardabrams/dot-files)
 
-## Supporting CSS, HTML, JS, etc.
+## Packages and Helpful Links
 
-Emacs has decent support for CSS, HTML, JS, and many other file types out of the box, but if you want better support, then have a look at [my personal emacs config's init.el](https://github.com/flyingmachine/emacs.d/blob/master/init.el). It's meant to read as a table of contents. The emacs.d as a whole adds the following:
-
-* [Customizes js-mode and html editing](https://github.com/flyingmachine/emacs.d/blob/master/customizations/setup-js.el)
-    * Sets indentation level to 2 spaces for JS
-    * enables subword-mode so that M-f and M-b break on capitalization changes
-    * Uses `tagedit` to give you paredit-like functionality when editing html
-    * adds support for coffee mode
-* [Uses enh-ruby-mode for ruby editing](https://github.com/flyingmachine/emacs.d/blob/master/customizations/setup-ruby.el). enh-ruby-mode is a little nicer than the built-in ruby-mode, in my opinion.
-    * Associates many filenames and extensions with enh-ruby-mode (.rb, .rake, Rakefile, etc)
-    * Adds keybindings for running specs
-* Adds support for YAML and SCSS using the yaml-mode and scss-mode packages
-
-In general, if you want to add support for a language then you should be able to find good instructions for it through Google. Most of the time, you'll just need to install the "x-lang-mode" package for it.
+**** async
+***** http://elpa.gnu.org/packages/async.html
+**** auto-complete
+**** cider
+***** http://www.github.com/clojure-emacs/cider
+**** clojure-mode
+***** http://github.com/clojure-emacs/clojure-mode
+**** clojure-mode-ex
+***** http://github.com/clojure-emacs/clojure-mode
+**** dash
+**** emmet-mode
+***** fork of zencoding mode
+***** https://www.youtube.com/watch?v=p7qore_HpC4
+***** README: https://github.com/rooney/zencoding/blob/master/README.md
+***** https://github.com/smihica/emmet-mode
+**** epl
+***** http://github.com/cask/epl
+**** expand-region
+***** http://emacsrocks.com/e09.html
+**** exec-path-from-shell
+***** https://github.com/purcell/exec-path-from-shell
+**** flycheck (jshint jscs)
+***** https://www.flycheck.org/
+**** git-commit
+***** https://github.com/magit/magit
+**** ido-completing
+***** https://github.com/DarwinAwardWinner/ido-ubiquitous
+**** id-ubiquitous
+***** https://github.com/DarwinAwardWinner/ido-ubiquitous
+**** js-comint
+***** https://github.com/redguardtoo/js-comint
+**** js2-mode
+***** https://github.com/mooz/js2-mode/
+**** js2-refactor
+**** magit
+***** https://github.com/magit/magit
+**** magit-popup
+*****  https://github.com/magit/magit
+**** multi-eshell
+***** http://cims.nyu.edu/~stucchio
+**** multiple-cursors
+***** https://www.youtube.com/watch?v=jNa3axo40qM
+***** https://www.youtube.com/watch?v=4wvLGJQxEjQ
+**** neotree
+***** https://github.com/jaypei/emacs-neotree
+**** nodejs-repl
+***** https://github.com/abicky/nodejs-repl.el 
+**** org
+**** paredit
+**** pkg-info
+***** https://github.com/lunaryorn/pkg-info.
+**** projectile
+***** https://github.com/bbatsov/projectile
+**** queue
+**** rainbow-delimiters
+***** https://github.com/Fanael/rainbow-delimiters
+**** s
+**** seq
+***** http://elpa.gnu.org/packages/seq.html
+**** smart-forward
+**** smex
+***** http://github.com/nonsequitur/smex/
+**** spinner
+***** https://github.com/Malabarba/spinner.el
+**** tagedit
+**** undo-tree
+***** http://www.dr-qubit.org/emacs.php#undo-tree
+**** with-editor
+***** https://github.com/magit/with-editor
+**** yasnippet
+***** https://www.youtube.com/watch?v=-4O-ZYjQxks
+***** http://github.com/capitaomorte/yasnippet
