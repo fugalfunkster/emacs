@@ -12,14 +12,14 @@ with insight from [Howard Abrams](https://github.com/howardabrams/dot-files)
 ## Hotkeys and Chords I use a Lot
 
 Emacs Basics
-- C-g              (quit command)                                                                    
+- C-g              (quit command)
 - C-x b            (switch buffers, and create new buffer)
 - C-x C-f          (open file, and create new file)
 - C-x C-s          (save buffer to a file)
 - C-x C-w          (save as)
 - C-x 0            (remove current window)
 - C-x 1            (remove all window but the window containing the point)
-- C-x 2            (split current window into two: horizontally) 
+- C-x 2            (split current window into two: horizontally)
 - C-x 3            (split current window into two: vertically)
 - C-x o            (move point into another window)
 - M-<              (move point to top of buffer)
