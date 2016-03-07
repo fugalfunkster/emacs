@@ -68,6 +68,7 @@ flycheck
 - C-c ! l          (list all errors)
 - C-c ! x          (disable flycheck in buffer)
 - C-c ! v          (verify flycheck works)
+- to use jscs $ npm install -g jscs
 
 org-mode
 - M-RET            (create return at same level)
