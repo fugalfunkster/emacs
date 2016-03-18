@@ -72,7 +72,7 @@
 
     ;; org mode
     org
-
+  
     ;; JavaScript modes
     js2-mode
     js2-refactor
@@ -105,7 +105,8 @@
 ;; environment variables from the user's shell.
 ;; https://github.com/purcell/exec-path-from-shell
 (if (eq system-type 'darwin)
-    (add-to-list 'my-packages 'exec-path-from-shell))
+    (add-to-list 'my-packages 'exec-path-from-shell)
+)
 
 (dolist (p my-packages)
   (when (not (package-installed-p p))
@@ -171,4 +172,4 @@
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
  )
- 
+
