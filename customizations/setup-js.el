@@ -9,6 +9,7 @@
      (tagedit-add-paredit-like-keybindings)
      (add-hook 'html-mode-hook (lambda () (tagedit-mode 1)))))
 
+;; Matthew's flycheck hook
 (add-hook 'after-init-hook #'global-flycheck-mode)
 
 ;; coffeescript

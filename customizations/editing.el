@@ -9,7 +9,11 @@
 (add-hook 'org-mode-hook (lambda () (org-bullets-mode 1)))
 (deftheme org-beautify-theme "Sub-theme to beautify org mode")
 
-
+;; Matthew yasnippets
+(add-to-list 'load-path
+              "~/.emacs.d/plugins/yasnippet")
+(require 'yasnippet)
+(yas-global-mode 1)
 
 ;; Lisp-friendly hippie expand
 (setq hippie-expand-try-functions-list
