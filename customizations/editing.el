@@ -54,7 +54,6 @@
                                                "backups"))))
 (setq auto-save-default nil)
 
-
 ;; comments
 (defun toggle-comment-on-line ()
   "comment or uncomment current line"
