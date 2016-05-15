@@ -13,3 +13,4 @@ projectile-bookmarks.eld
 projectile.cache
 tutorial
 url
+customizations/local.el
