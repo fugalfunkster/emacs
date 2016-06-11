@@ -4,17 +4,6 @@
 ;; http://www.emacswiki.org/emacs/HippieExpand
 (global-set-key (kbd "M-/") 'hippie-expand)
 
-;; Matthew Org Mode
-(require 'org-bullets)
-(add-hook 'org-mode-hook (lambda () (org-bullets-mode 1)))
-(deftheme org-beautify-theme "Sub-theme to beautify org mode")
-
-;; Matthew yasnippets
-(add-to-list 'load-path
-              "~/.emacs.d/plugins/yasnippet")
-(require 'yasnippet)
-(yas-global-mode 1)
-
 ;; Lisp-friendly hippie expand
 (setq hippie-expand-try-functions-list
       '(try-expand-dabbrev
@@ -85,3 +74,24 @@
     (quit nil)))
 
 (setq electric-indent-mode nil)
+
+;;;;
+;; FUGALFUNKSTER
+;;;;
+
+;; Org Mode
+(require 'org-bullets)
+(add-hook 'org-mode-hook (lambda () (org-bullets-mode 1)))
+(deftheme org-beautify-theme "Sub-theme to beautify org mode")
+
+;; yasnippets
+(add-to-list 'load-path
+              "~/.emacs.d/plugins/yasnippet")
+(require 'yasnippet)
+(yas-global-mode 1)
+
+
+;; avy chords
+(require 'avy)
+(global-set-key (kbd "C-.") 'avy-goto-char-2)
+

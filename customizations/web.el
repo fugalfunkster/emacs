@@ -8,6 +8,11 @@
 (add-to-list 'auto-mode-alist '("\\.djhtml\\'" . web-mode))
 (add-to-list 'auto-mode-alist '("\\.jsx$" . web-mode))
 
+;;;;
+;; FUGALFUNKSTER
+;;;;
+
+;; setup webmode for JSX/React
 (setq web-mode-content-types-alist
   '(("jsx" . "\\.js[x]?\\'")))
 
@@ -20,3 +25,6 @@
       (let ((web-mode-enable-part-face nil))
         ad-do-it)
     ad-do-it))
+
+;; chord for switch to JSX
+

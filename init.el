@@ -67,17 +67,22 @@
 
     ;; git integration
     magit
-
+    
+    ;;;;
     ;; FUGALFUNKSTER
+    ;;;;
 
     ;; org mode
     org
+    org-beautify-theme
+    org-bullets
   
     ;; JavaScript modes
     js2-mode
     js2-refactor
     js-comint
     nodejs-repl
+    tern
     
     ;; syntax and style
     flycheck
@@ -89,6 +94,7 @@
     neotree
 
     ;; tricks
+    avy
     emmet-mode
     expand-region
     multiple-cursors
@@ -163,18 +169,4 @@
 ;; Web stuff
 (load "web.el")
 
-
-(custom-set-variables
- ;; custom-set-variables was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- '(coffee-tab-width 2)
- '(tool-bar-mode nil))
-(custom-set-faces
- ;; custom-set-faces was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- )
 
