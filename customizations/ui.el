@@ -66,5 +66,8 @@
 ;; don't pop up font menu
 (global-set-key (kbd "s-t") '(lambda () (interactive)))
 
+;; I know what scratch is for
+(setq initial-scratch-message ";;FUGALFUNKSTER WAS HERE")
+
 ;; no bell
 (setq ring-bell-function 'ignore)
