@@ -3,6 +3,10 @@
 (add-hook 'js-mode-hook 'subword-mode)
 (add-hook 'html-mode-hook 'subword-mode)
 
+;;;;
+;; FUGALFUNKSTER
+;;;;
+
 (setq js-indent-level 2)
 (setq-default js2-basic-indent 2
                 js2-basic-offset 2
@@ -22,9 +26,7 @@
      (tagedit-add-paredit-like-keybindings)
      (add-hook 'html-mode-hook (lambda () (tagedit-mode 1)))))
 
-;;;;
-;; FUGALFUNKSTER
-;;;;
+(global-set-key (kbd "C-c j") 'js2-mode)
 
 ;; flycheck hook
 (add-hook 'after-init-hook #'global-flycheck-mode)

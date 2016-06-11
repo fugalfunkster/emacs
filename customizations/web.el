@@ -26,5 +26,6 @@
         ad-do-it)
     ad-do-it))
 
-;; chord for switch to JSX
+;; chord for switch to web-mode
+(global-set-key (kbd "C-c w") 'web-mode)
 
