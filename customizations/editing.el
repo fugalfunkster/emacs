@@ -80,8 +80,11 @@
 ;;;;
 
 ;; Org Mode
+(require 'org)
 (require 'org-bullets)
 (add-hook 'org-mode-hook (lambda () (org-bullets-mode 1)))
+(add-hook 'org-mode-hook (lambda () (visual-line-mode)))
+(add-hook 'org-mode-hook (lambda () (org-indent-mode)))
 (deftheme org-beautify-theme "Sub-theme to beautify org mode")
 
 ;; yasnippets
@@ -94,4 +97,3 @@
 ;; avy chords
 (require 'avy)
 (global-set-key (kbd "C-c a") 'avy-goto-char-2)
-
