@@ -88,3 +88,8 @@
 (require 'ob-clojure)
 (setq org-babel-clojure-backend 'cider)
 (require 'cider)
+
+(setq org-babel-clojure-nrepl-timeout nil)
+
+
+
