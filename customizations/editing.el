@@ -46,11 +46,6 @@
 ;; yay rainbows!
 (add-hook 'prog-mode-hook 'rainbow-delimiters-mode)
 
-;; emmet-mode setup
-(add-hook 'sgml-mode-hook 'emmet-mode) ;; Auto-start on any markup modes
-(add-hook 'css-mode-hook  'emmet-mode) ;; enable Emmet's css abbreviation.
-
-
 ;; use 2 spaces for tabs
 (defun die-tabs ()
   (interactive)

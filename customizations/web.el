@@ -12,6 +12,10 @@
 ;; FUGALFUNKSTER
 ;;;;
 
+;; emmet-mode setup
+(add-hook 'sgml-mode-hook 'emmet-mode) ;; Auto-start on any markup modes
+(add-hook 'css-mode-hook  'emmet-mode) ;; enable Emmet's css abbreviation.
+
 ;; setup webmode for JSX/React
 (setq web-mode-content-types-alist
   '(("jsx" . "\\.js[x]?\\'")))
