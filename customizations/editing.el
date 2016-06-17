@@ -18,13 +18,6 @@
 ;; Highlight current line
 (global-hl-line-mode 1)
 
-;; Interactive search key bindings. By default, C-s runs
-;; isearch-forward, so this swaps the bindings.
-(global-set-key (kbd "C-s") 'isearch-forward-regexp)
-(global-set-key (kbd "C-r") 'isearch-backward-regexp)
-(global-set-key (kbd "C-M-s") 'isearch-forward)
-(global-set-key (kbd "C-M-r") 'isearch-backward)
-
 ;; Don't use hard tabs
 (setq-default indent-tabs-mode nil)
 
@@ -93,7 +86,23 @@
 (require 'yasnippet)
 (yas-global-mode 1)
 
+;;JUMPing around
 
-;; avy chords
+;; ace-window - move between windows easier
+(global-set-key [remap other-window] 'ace-window)
+(custom-set-faces
+  '(aw-leading-char-face
+      ((t (:inherit ace-jump-face-foreground :height 3.0)))))
+
+;; avy - place the cursor where you want to see it
+;; TODO - how to use it
 (require 'avy)
-(global-set-key (kbd "C-c a") 'avy-goto-char-2)
+(global-set-key (kbd "C-s") 'avy-goto-char-timer)
+
+;; Interactive search key bindings. By default, C-s runs
+;; isearch-forward, so this swaps the bindings.
+(global-set-key (kbd "C-r") nil)
+(global-set-key (kbd "C-r f") 'isearch-forward-regexp)
+(global-set-key (kbd "C-r b") 'isearch-backward-regexp)
+(global-set-key (kbd "C-M-s") 'isearch-forward)
+(global-set-key (kbd "C-M-r") 'isearch-backward)

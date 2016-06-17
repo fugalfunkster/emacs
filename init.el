@@ -95,6 +95,7 @@
 
     ;; tricks
     avy
+    ace-window
     emmet-mode
     expand-region
     multiple-cursors
