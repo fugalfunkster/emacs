@@ -83,6 +83,7 @@
     js-comint
     nodejs-repl
     tern
+    web-mode
     
     ;; syntax and style
     flycheck
