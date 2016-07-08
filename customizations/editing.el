@@ -73,6 +73,7 @@
 (add-hook 'org-mode-hook (lambda () (org-bullets-mode 1)))
 (add-hook 'org-mode-hook (lambda () (visual-line-mode)))
 (add-hook 'org-mode-hook (lambda () (org-indent-mode)))
+(setq org-src-fontify-natively t)
 (deftheme org-beautify-theme "Sub-theme to beautify org mode")
 
 ;; yasnippets
