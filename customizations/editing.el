@@ -76,6 +76,10 @@
 (setq org-src-fontify-natively t)
 (deftheme org-beautify-theme "Sub-theme to beautify org mode")
 
+;; fonts
+
+(set-frame-font "CamingoCode 14")
+
 ;; yasnippets
 (add-to-list 'load-path
               "~/.emacs.d/plugins/yasnippet")
