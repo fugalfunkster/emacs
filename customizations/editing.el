@@ -78,7 +78,7 @@
 
 ;; fonts
 
-(set-frame-font "CamingoCode 14")
+(set-frame-font "CamingoCode 16")
 
 ;; yasnippets
 (add-to-list 'load-path

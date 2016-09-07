@@ -67,7 +67,7 @@
 (global-set-key (kbd "s-t") '(lambda () (interactive)))
 
 ;; I know what scratch is for
-(setq initial-scratch-message ";;FUGALFUNKSTER WAS HERE")
+(setq initial-scratch-message ";; Perfection is achieved not when there is nothing more to add,                             \n;; but when there is nothing left to take away. - Antoine de Saint-Exupery")
 
 ;; no bell
 (setq ring-bell-function 'ignore)

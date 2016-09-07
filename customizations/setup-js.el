@@ -29,5 +29,7 @@
 (global-set-key (kbd "C-c j") 'js2-mode)
 
 ;; flycheck hook
+(require 'flycheck)
 (add-hook 'after-init-hook #'global-flycheck-mode)
 (setq-default flycheck-disabled-checkers '(javascript-jscs))
+(flycheck-add-mode 'javascript-eslint 'web-mode)
