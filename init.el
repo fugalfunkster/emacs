@@ -84,11 +84,16 @@
     nodejs-repl
     tern
     web-mode
+
+    ;; TypeScript
+    typescript-mode
+    tide
     
     ;; syntax and style
     flycheck
     yasnippet
     auto-complete
+    company
 
     ;; shell and dir nav
     multi-eshell
