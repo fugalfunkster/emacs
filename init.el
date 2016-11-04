@@ -140,9 +140,9 @@
 (add-to-list 'load-path "~/.emacs.d/vendor")
 
 
-;;;;
+;;;;;
 ;; Customization
-;;;;
+;;;;;
 
 ;; Add a directory to our load path so that when you `load` things
 ;; below, Emacs knows where to look for the corresponding file.
@@ -175,5 +175,6 @@
 
 ;; Web stuff
 (load "web.el")
+
 
 
