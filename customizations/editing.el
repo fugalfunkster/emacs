@@ -69,6 +69,15 @@
 
 ;; Org Mode
 (require 'org)
+(org-babel-do-load-languages
+ 'org-babel-load-languages
+ '((typescript . t)
+   (emacs-lisp . t)
+   (sh . t)
+   (elixir . t)
+   (org . t)
+   (ditaa . t)))
+
 (require 'org-bullets)
 (add-hook 'org-mode-hook (lambda () (org-bullets-mode 1)))
 (add-hook 'org-mode-hook (lambda () (visual-line-mode)))
