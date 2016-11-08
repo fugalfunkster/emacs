@@ -176,5 +176,7 @@
 ;; Web stuff
 (load "web.el")
 
+(setq gc-cons-threshold 50000000)
+
 
 
