@@ -52,9 +52,18 @@
 ;; formats the buffer before saving
 (add-hook 'before-save-hook 'tide-format-before-save)
 
-(add-hook 'typescript-mode-hook #'setup-tide-mode)
-
 ;; format options
 (setq tide-format-options '(:insertSpaceAfterFunctionKeywordForAnonymousFunctions t :placeOpenBraceOnNewLineForFunctions nil))
+
+;; init typescript-mode
+
+(add-to-list 'auto-mode-alist '("\\.tsx\\'" . typescript-mode))
+(add-hook 'typescript-mode-hook #'setup-tide-mode)
+
+;; should start tide when moving to web-mode
+(add-hook 'web-mode-hook
+          (lambda ()
+            (when (string-equal "tsx" (file-name-extension buffer-file-name))
+              (setup-tide-mode))))
 
 ;;
