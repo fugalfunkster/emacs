@@ -74,7 +74,7 @@
  '((typescript . t)
    (emacs-lisp . t)
    (sh . t)
-   (elixir . t)
+   ;;(elixir . t)
    (org . t)
    (ditaa . t)))
 

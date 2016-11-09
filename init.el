@@ -76,6 +76,8 @@
     org
     org-beautify-theme
     org-bullets
+    ob-typescript
+    ob-elixir
   
     ;; JavaScript modes
     js2-mode
