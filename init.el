@@ -182,3 +182,17 @@
 
 
 
+(custom-set-variables
+ ;; custom-set-variables was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ '(package-selected-packages
+   (quote
+    (web-mode undo-tree tide tern tagedit smex rainbow-delimiters projectile paredit org-bullets org-beautify-theme ob-typescript ob-elixir nodejs-repl neotree multi-eshell magit js2-refactor js-comint ido-ubiquitous expand-region exec-path-from-shell emmet-mode company clojure-mode-extra-font-locking cider auto-complete ace-window))))
+(custom-set-faces
+ ;; custom-set-faces was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ '(aw-leading-char-face ((t (:inherit ace-jump-face-foreground :height 3.0)))))
