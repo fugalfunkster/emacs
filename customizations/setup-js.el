@@ -32,6 +32,7 @@
 (require 'flycheck)
 (add-hook 'after-init-hook #'global-flycheck-mode)
 (setq-default flycheck-disabled-checkers '(javascript-jscs))
+(setq-default flycheck-disabled-checkers '(sass/scss-sass-lint))
 (flycheck-add-mode 'javascript-eslint 'web-mode)
 
 ;; typescript
