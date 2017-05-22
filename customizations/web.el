@@ -2,12 +2,18 @@
 ;; FUGALFUNKSTER
 ;;;;
 
-(require 'web-mode)
-(add-to-list 'auto-mode-alist '("\\.jsx$" . web-mode))
 
 ;; emmet-mode setup
 (add-hook 'sgml-mode-hook 'emmet-mode) ;; Auto-start on any markup modes
 (add-hook 'css-mode-hook  'emmet-mode) ;; enable Emmet's css abbreviation.
+(add-hook 'typescript-mode-hook 'emmet-mode) ;; let's try emmet in ts-mode for TSX
+(setq emmet-move-cursor-between-quotes t)
+(setq emmet-expand-jsx-className? t)
+(setq emmet-self-closing-tag-style " /")
+
+(require 'web-mode)
+(add-to-list 'auto-mode-alist '("\\.jsx$" . web-mode))
+
 
 ;; setup webmode for JSX/React
 (setq web-mode-content-types-alist
