@@ -5,10 +5,20 @@
 ;;;;
 
 ;; Recognize camelCaseWords as compositions of subwords
+(add-hook 'typescript-mode-hook 'subword-mode)
 (add-hook 'js-mode-hook 'subword-mode)
 (add-hook 'html-mode-hook 'subword-mode)
-(add-hook 'typescript-mode-hook 'subword-mode)
+(add-hook 'web-mode-hook 'subword-mode)
 
+;; prettier - long may it live
+(require 'prettier-js)
+(add-hook 'typescript-mode-hook 'prettier-js-mode)
+(add-hook 'typescript-mode-hook 'prettier-js-mode)
+(add-hook 'typescript-mode-hook 'prettier-js-mode)
+(setq prettier-js-args '(
+     "--tab-width" "4"
+     "--use-tabs" "true"
+     "--single-quote" "true"))
 
 ;; Indent JS Modes
 (setq js-indent-level 1)
@@ -51,17 +61,9 @@
   (company-mode +1)
   ;; group backends to provide file completion, as well as completion from tide
   (setq-default company-backends '(company-files company-tide))
+  ;; aligns annotation to the right hand side
+  (setq company-tooltip-align-annotations t)
 )
-
-;; aligns annotation to the right hand side
-(setq company-tooltip-align-annotations t)
-
-;; formats the buffer before saving
-(add-hook 'before-save-hook 'tide-format-before-save)
-
-;; format options
-(setq-default tab-width 4)
-(setq tide-format-options '(:insertSpaceAfterFunctionKeywordForAnonymousFunctions t :placeOpenBraceOnNewLineForFunctions nil :convertTabsToSpaces nil :tabSize 4))
 
 ;; init typescript-mode
 (add-to-list 'auto-mode-alist '("\\.tsx\\'" . typescript-mode))
@@ -73,4 +75,4 @@
             (when (string-equal "tsx" (file-name-extension buffer-file-name))
               (setup-tide-mode))))
 
-;;
+
