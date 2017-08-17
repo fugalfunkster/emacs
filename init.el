@@ -31,7 +31,9 @@
 ;; manually with M-x package-install
 ;; Add in your own as you wish:
 (defvar my-packages
-  '(;; makes handling lisp expressions much, much easier
+  '(use-package
+
+    ;; makes handling lisp expressions much, much easier
     ;; Cheatsheet: http://www.emacswiki.org/emacs/PareditCheatsheet
     paredit
 
@@ -192,7 +194,7 @@
     (company-tide company-files company-nxml company-css company-eclim company-semantic company-clang company-xcode company-cmake company-capf company-abbrev company-files company-abbrev company-oddmuse company-dabbrev)))
  '(package-selected-packages
    (quote
-    (web-mode undo-tree tide tern tagedit smex rainbow-delimiters projectile paredit org-bullets org-beautify-theme ob-typescript ob-elixir nodejs-repl neotree multi-eshell magit js2-refactor js-comint ido-ubiquitous expand-region exec-path-from-shell emmet-mode company clojure-mode-extra-font-locking cider auto-complete ace-window))))
+    (rainbow-mode base16-theme web-mode undo-tree tide tern tagedit smex rainbow-delimiters projectile paredit org-bullets org-beautify-theme ob-typescript ob-elixir nodejs-repl neotree multi-eshell magit js2-refactor js-comint ido-ubiquitous expand-region exec-path-from-shell emmet-mode company clojure-mode-extra-font-locking cider auto-complete ace-window))))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.

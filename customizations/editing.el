@@ -1,3 +1,4 @@
+
 ;; Customizations relating to editing a buffer.
 
 ;; Key binding to use "hippie expand" for text autocompletion
@@ -110,7 +111,7 @@ With argument, do this that many times."
 (deftheme org-beautify-theme "Sub-theme to beautify org mode")
 
 ;; fonts
-(set-frame-font "CamingoCode 15")
+(set-frame-font "CamingoCode 16")
 
 ;; yasnippets
 (add-to-list 'load-path
@@ -137,3 +138,15 @@ With argument, do this that many times."
 (global-set-key (kbd "C-r b") 'isearch-backward-regexp)
 (global-set-key (kbd "C-M-s") 'isearch-forward)
 (global-set-key (kbd "C-M-r") 'isearch-backward)
+
+;; change default behavior for C-a to M-m
+(global-set-key (kbd "C-a") 'back-to-indentation)
+
+;; multiple cursors
+(use-package multiple-cursors
+  :ensure t
+  :bind (("C-c m c" . mc/edit-lines)
+         ("C-." . mc/mark-next-like-this)
+         ("C-," . mc/unmark-next-like-this)
+         ("C-<mouse-1>" . mc/add-cursor-on-click)))
+

@@ -25,6 +25,12 @@
 ;; for a great explanation of emacs color themes.
 ;; https://www.gnu.org/software/emacs/manual/html_node/emacs/Custom-Themes.html
 ;; for a more technical explanation.
+
+;; (use-package base16-theme
+  ;; :ensure t
+  ;; :config
+  ;; (load-theme 'base16-tomorrow-night t))
+
 (add-to-list 'custom-theme-load-path "~/.emacs.d/themes")
 (add-to-list 'load-path "~/.emacs.d/themes")
 (load-theme 'tomorrow-night-bright t)

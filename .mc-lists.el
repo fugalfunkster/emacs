@@ -3,10 +3,13 @@
 
 (setq mc/cmds-to-run-for-all
       '(
+        indent-for-tab-command
         ))
 
 (setq mc/cmds-to-run-once
       '(
+        mouse-buffer-menu
+        mouse-set-region
         smex
         typescript-insert-and-indent
         ))
