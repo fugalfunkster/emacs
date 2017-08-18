@@ -44,8 +44,6 @@
 ;; yay rainbows!
 (add-hook 'prog-mode-hook 'rainbow-delimiters-mode)
 
-
-
 ;; I don't always use tabs, but when I do they are 4 spaces long
 (setq-default indent-tabs-mode nil)
 (setq-default tab-width 4)
@@ -70,21 +68,6 @@
 ;;;;
 ;; FUGALFUNKSTER
 ;;;;
-
-;; replace backward-kill-word with backward-delete-word
-(defun delete-word (arg)
-  "Delete characters forward until encountering the end of a word.
-With argument, do this that many times."
-  (interactive "p")
-  (delete-region (point) (progn (forward-word arg) (point))))
-
-(defun backward-delete-word (arg)
-  "Delete characters backward until encountering the end of a word.
-With argument, do this that many times."
-  (interactive "p")
-  (delete-word (- arg)))
-
-(global-set-key (read-kbd-macro "<M-DEL>") 'backward-delete-word)
 
 ;; automatically update buffers when a file changes on disk
 (global-auto-revert-mode 1)
@@ -118,6 +101,8 @@ With argument, do this that many times."
               "~/.emacs.d/plugins/yasnippet")
 (require 'yasnippet)
 (yas-global-mode 1)
+(setq yas-snippet-dirs
+      '("~/.emacs.d/snippets"))
 
 ;;JUMPing around
 
@@ -141,6 +126,36 @@ With argument, do this that many times."
 
 ;; change default behavior for C-a to M-m
 (global-set-key (kbd "C-a") 'back-to-indentation)
+
+;; replace backward-kill-word with backward-delete-word
+(defun delete-word (arg)
+  "Delete characters forward until encountering the end of a word.
+With argument, do this that many times."
+  (interactive "p")
+  (delete-region (point) (progn (forward-word arg) (point))))
+
+(defun backward-delete-word (arg)
+  "Delete characters backward until encountering the end of a word.
+With argument, do this that many times."
+  (interactive "p")
+  (delete-word (- arg)))
+
+(global-set-key (kbd "<M-DEL>") 'backward-delete-word)
+;; note paredit overwrites this macro to backward-kill-word :(
+
+;; now that I can't easily "C-a C-SPACE C-e DEL" lets...
+;; delete or kill a whole line
+(defun delete-whole-line ()
+  "Delete (not kill) the current line."
+  (interactive)
+  (save-excursion
+    (delete-region
+     (progn (forward-visible-line 0) (point))
+     (progn (forward-visible-line 1) (point)))))
+(global-set-key (kbd "M-k") 'delete-whole-line)
+
+;; and, kill a whole line
+(global-set-key (kbd "C-k") 'kill-whole-line)
 
 ;; multiple cursors
 (use-package multiple-cursors

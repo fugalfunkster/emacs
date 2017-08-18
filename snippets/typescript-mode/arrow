@@ -1,0 +1,5 @@
+# -*- mode: snippet; require-final-newline: nil -*-
+# name: function ES6
+# key: f
+# --
+(${1:arg}) => $0
