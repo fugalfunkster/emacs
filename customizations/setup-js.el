@@ -63,6 +63,7 @@
   (setq-default company-backends '(company-files company-tide))
   ;; aligns annotation to the right hand side
   (setq company-tooltip-align-annotations t)
+  (setq tide-jump-to-definition-reuse-window nil)
 )
 
 ;; init typescript-mode
