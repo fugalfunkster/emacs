@@ -13,7 +13,6 @@
 ;; prettier - long may it live
 (require 'prettier-js)
 (add-hook 'typescript-mode-hook 'prettier-js-mode)
-(add-hook 'web-mode-hook 'prettier-js-mode)
 (add-hook 'scss-mode-hook 'prettier-js-mode)
 (add-hook 'js-mode-hook 'prettier-js-mode)
 (setq prettier-js-args '(

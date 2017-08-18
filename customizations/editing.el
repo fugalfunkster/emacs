@@ -165,3 +165,7 @@ With argument, do this that many times."
          ("C-," . mc/unmark-next-like-this)
          ("C-<mouse-1>" . mc/add-cursor-on-click)))
 
+;; expand region
+(use-package expand-region
+  :ensure t
+  :bind (("C-=" . er/expand-region)))
