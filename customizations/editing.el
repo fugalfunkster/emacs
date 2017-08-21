@@ -69,6 +69,10 @@
 ;; FUGALFUNKSTER
 ;;;;
 
+(require 'company)
+(add-hook 'after-init-hook 'global-company-mode)
+(setq company-idle-delay 0.3)
+
 ;; automatically update buffers when a file changes on disk
 (global-auto-revert-mode 1)
 

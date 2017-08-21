@@ -32,10 +32,6 @@
         ad-do-it)
     ad-do-it))
 
-;; web company mode
-(add-hook 'web-mode-hook  'company-mode)
-(add-hook 'scss-mode-hook 'company-mode)
-
 ;; chord for switch to web-mode
 (global-set-key (kbd "C-c w") 'web-mode)
 

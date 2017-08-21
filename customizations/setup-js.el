@@ -14,6 +14,7 @@
 (require 'prettier-js)
 (add-hook 'typescript-mode-hook 'prettier-js-mode)
 (add-hook 'scss-mode-hook 'prettier-js-mode)
+(add-hook 'css-mode-hook 'prettier-js-mode)
 (add-hook 'js-mode-hook 'prettier-js-mode)
 (setq prettier-js-args '(
      "--tab-width" "4"
