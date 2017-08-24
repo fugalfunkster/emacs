@@ -60,8 +60,6 @@
   (flycheck-add-next-checker 'typescript-tide '(t . typescript-tslint) 'append)
   (eldoc-mode +1)
   (company-mode +1)
-  ;; group backends to provide file completion, as well as completion from tide
-  (setq-default company-backends '(company-files company-tide))
   ;; aligns annotation to the right hand side
   (setq company-tooltip-align-annotations t)
   (setq tide-jump-to-definition-reuse-window nil)
