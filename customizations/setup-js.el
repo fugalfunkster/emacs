@@ -60,8 +60,6 @@
   (flycheck-add-next-checker 'typescript-tide '(t . typescript-tslint) 'append)
   (eldoc-mode +1)
   (company-mode +1)
-  ;; aligns annotation to the right hand side
-  (setq company-tooltip-align-annotations t)
   (setq tide-jump-to-definition-reuse-window nil)
 )
 

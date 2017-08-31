@@ -71,7 +71,9 @@
 
 (require 'company)
 (add-hook 'after-init-hook 'global-company-mode)
-(setq company-idle-delay 0.3)
+(setq company-idle-delay 0.2)
+;; aligns annotation to the right hand side
+(setq company-tooltip-align-annotations t)
 
 ;; automatically update buffers when a file changes on disk
 (global-auto-revert-mode 1)
