@@ -187,7 +187,7 @@
  ;; If there is more than one, they won't work right.
  '(company-backends
    (quote
-    (company-files company-tide company-nxml company-css company-eclim company-semantic company-clang company-xcode company-cmake company-capf company-abbrev company-abbrev company-oddmuse company-dabbrev)))
+    (company-files company-tide company-nxml company-css company-eclim company-semantic company-clang company-xcode company-cmake company-capf company-abbrev company-oddmuse company-dabbrev)))
  '(package-selected-packages
    (quote
     (scss-mode rainbow-mode base16-theme web-mode undo-tree tide tern tagedit smex rainbow-delimiters projectile paredit org-bullets org-beautify-theme ob-typescript ob-elixir nodejs-repl neotree multi-eshell magit js2-refactor js-comint ido-ubiquitous expand-region exec-path-from-shell emmet-mode company clojure-mode-extra-font-locking cider auto-complete ace-window))))
