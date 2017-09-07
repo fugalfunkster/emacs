@@ -67,6 +67,9 @@
 ;; FUGALFUNKSTER
 ;;;;
 
+;; automatically update buffers when a file changes on disk
+(global-auto-revert-mode 1)
+
 ;; Org Mode
 (require 'org)
 (org-babel-do-load-languages
@@ -74,9 +77,12 @@
  '((typescript . t)
    (emacs-lisp . t)
    (sh . t)
-   (elixir . t)
+   ;;(elixir . t)
    (org . t)
    (ditaa . t)))
+
+;; add support for exporting org docs as markdown
+(require 'ox-md)
 
 (require 'org-bullets)
 (add-hook 'org-mode-hook (lambda () (org-bullets-mode 1)))
