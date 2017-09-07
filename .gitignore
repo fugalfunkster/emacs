@@ -5,7 +5,6 @@
 auto-save-list
 backups
 cider-history
-elpa
 eshell
 ido.last
 places
@@ -14,3 +13,4 @@ projectile.cache
 tutorial
 url
 customizations/local.el
+network-security.data

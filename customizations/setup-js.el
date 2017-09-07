@@ -1,19 +1,34 @@
-;; javascript / html
-
-(add-hook 'js-mode-hook 'subword-mode)
-(add-hook 'html-mode-hook 'subword-mode)
+;; javascript / web
 
 ;;;;
 ;; FUGALFUNKSTER
 ;;;;
 
-(setq js-indent-level 2)
-(setq-default js2-basic-indent 2
-                js2-basic-offset 2
-                js2-auto-indent-p t
-                js2-cleanup-whitespace t
-                js2-enter-indents-newline t
-                js2-indent-on-enter-key t)
+;; Recognize camelCaseWords as compositions of subwords
+(add-hook 'typescript-mode-hook 'subword-mode)
+(add-hook 'js-mode-hook 'subword-mode)
+(add-hook 'html-mode-hook 'subword-mode)
+(add-hook 'web-mode-hook 'subword-mode)
+
+;; prettier - long may it live
+(require 'prettier-js)
+(add-hook 'typescript-mode-hook 'prettier-js-mode)
+(add-hook 'scss-mode-hook 'prettier-js-mode)
+(add-hook 'css-mode-hook 'prettier-js-mode)
+(add-hook 'js-mode-hook 'prettier-js-mode)
+(setq prettier-js-args '(
+     "--tab-width" "4"
+     "--use-tabs" "true"
+     "--single-quote" "true"))
+
+;; Indent JS Modes
+(setq js-indent-level 1)
+(setq-default js2-basic-indent 1
+	      js2-basic-offset 1
+	      js2-auto-indent-p t
+	      js2-cleanup-whitespace t
+	      js2-enter-indents-newline t
+	      js2-indent-on-enter-key t)
 
 (add-to-list 'auto-mode-alist '("\\.js$" . js2-mode))
 
@@ -36,7 +51,6 @@
 (flycheck-add-mode 'javascript-eslint 'web-mode)
 
 ;; typescript
-
 (require 'tide)
 (defun setup-tide-mode ()
   (interactive)
@@ -45,19 +59,11 @@
   (setq flycheck-check-syntax-automatically '(save mode-enabled))
   (flycheck-add-next-checker 'typescript-tide '(t . typescript-tslint) 'append)
   (eldoc-mode +1)
-  (company-mode +1))
-
-;; aligns annotation to the right hand side
-(setq company-tooltip-align-annotations t)
-
-;; formats the buffer before saving
-(add-hook 'before-save-hook 'tide-format-before-save)
-
-;; format options
-(setq tide-format-options '(:insertSpaceAfterFunctionKeywordForAnonymousFunctions t :placeOpenBraceOnNewLineForFunctions nil))
+  (company-mode +1)
+  (setq tide-jump-to-definition-reuse-window nil)
+)
 
 ;; init typescript-mode
-
 (add-to-list 'auto-mode-alist '("\\.tsx\\'" . typescript-mode))
 (add-hook 'typescript-mode-hook #'setup-tide-mode)
 
@@ -67,4 +73,4 @@
             (when (string-equal "tsx" (file-name-extension buffer-file-name))
               (setup-tide-mode))))
 
-;;
+

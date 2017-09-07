@@ -31,7 +31,9 @@
 ;; manually with M-x package-install
 ;; Add in your own as you wish:
 (defvar my-packages
-  '(;; makes handling lisp expressions much, much easier
+  '(use-package
+
+    ;; makes handling lisp expressions much, much easier
     ;; Cheatsheet: http://www.emacswiki.org/emacs/PareditCheatsheet
     paredit
 
@@ -178,18 +180,17 @@
 ;; Web stuff
 (load "web.el")
 
-(setq gc-cons-threshold 50000000)
-
-
-
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
+ '(company-backends
+   (quote
+    (company-files company-tide company-nxml company-css company-eclim company-semantic company-clang company-xcode company-cmake company-capf company-abbrev company-oddmuse company-dabbrev)))
  '(package-selected-packages
    (quote
-    (web-mode undo-tree tide tern tagedit smex rainbow-delimiters projectile paredit org-bullets org-beautify-theme ob-typescript ob-elixir nodejs-repl neotree multi-eshell magit js2-refactor js-comint ido-ubiquitous expand-region exec-path-from-shell emmet-mode company clojure-mode-extra-font-locking cider auto-complete ace-window))))
+    (scss-mode rainbow-mode base16-theme web-mode undo-tree tide tern tagedit smex rainbow-delimiters projectile paredit org-bullets org-beautify-theme ob-typescript ob-elixir nodejs-repl neotree multi-eshell magit js2-refactor js-comint ido-ubiquitous expand-region exec-path-from-shell emmet-mode company clojure-mode-extra-font-locking cider auto-complete ace-window))))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
