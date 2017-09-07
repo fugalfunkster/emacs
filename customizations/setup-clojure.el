@@ -85,9 +85,10 @@
 
 (add-to-list 'load-path "/full-path-to/org-mode/lisp")
 (require 'org)
+(require 'cider)
 (require 'ob-clojure)
 (setq org-babel-clojure-backend 'cider)
-(require 'cider)
+
 
 (setq org-babel-clojure-nrepl-timeout nil)
 
