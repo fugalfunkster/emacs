@@ -8,8 +8,10 @@
 
 (setq mc/cmds-to-run-once
       '(
+        ido-switch-buffer
         mouse-buffer-menu
         mouse-set-region
         smex
+        tide-jump-to-definition
         typescript-insert-and-indent
         ))
