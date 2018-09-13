@@ -174,8 +174,9 @@
 (load "elisp-editing.el")
 
 ;; Langauage-specific
-(load "setup-clojure.el")
-(load "setup-js.el")
+(load "clojure.el")
+(load "jsts.el")
+(load "elixir.el")
 
 ;; Web stuff
 (load "web.el")
