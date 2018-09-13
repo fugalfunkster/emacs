@@ -8,9 +8,12 @@
 
 (setq mc/cmds-to-run-once
       '(
+        ace-window
+        delete-horizontal-space
         ido-switch-buffer
         mouse-buffer-menu
         mouse-set-region
+        ns-copy-including-secondary
         smex
         tide-jump-to-definition
         typescript-insert-and-indent

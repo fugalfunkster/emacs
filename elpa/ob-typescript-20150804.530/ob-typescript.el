@@ -74,7 +74,7 @@ called by `org-babel-execute-src-block'"
                    (concat " ; node " (org-babel-process-file-name tmp-out-file))
                    )))
     (with-temp-file tmp-src-file (insert body))
-    (let ((results (org-babel-eval (format "tsc %s -out %s %s %s"
+    (let ((results (org-babel-eval (format "ts-node %s -out %s %s %s"
                                            cmdline
                                            (org-babel-process-file-name tmp-out-file)
                                            (org-babel-process-file-name tmp-src-file)

@@ -10,3 +10,7 @@
 
 ;; Go straight to scratch buffer on startup
 (setq inhibit-startup-message t)
+
+
+;; ORG JIRA
+(setq jiralib-url "https://periscopic.atlassian.net")

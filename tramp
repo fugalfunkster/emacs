@@ -1,0 +1,48 @@
+;; -*- emacs-lisp -*- <18/08/20 15:02:02 /Users/matthewhoselton/.emacs.d/tramp>
+;; Tramp connection history.  Don't change this file.
+;; You can delete it, forcing Tramp to reapply the checks.
+
+((["ssh" "periscopicclientsite" "clients.periscopic.com" nil nil]
+  ("uname" "Linux 4.4.0-109-generic")
+  ("locale" "LC_ALL=en_US.utf8")
+  ("test" "test")
+  ("remote-path"
+   ("/bin" "/usr/bin" "/sbin" "/usr/sbin" "/usr/local/bin" "/usr/local/sbin"))
+  ("remote-shell" "/bin/sh")
+  ("~" "/home/periscopicclientsite")
+  ("ls" "/bin/ls --color=never")
+  ("ls-dired" t)
+  ("stat" nil)
+  ("perl-file-spec" t)
+  ("perl-cwd-realpath" t)
+  ("perl" "\\perl")
+  ("id" "/usr/bin/id")
+  ("gid-integer" 1000)
+  ("readlink" "\\readlink")
+  ("file-exists" "test -e")
+  ("gid-string" "periscopicclientsite")
+  ("git" "\\git")
+  ("uid-integer" 1000)
+  ("trash" nil))
+ (["scp" nil "ssh" nil nil]
+  nil)
+ (["ssh" "root" "clients.periscopic.com" nil nil]
+  ("uname" "Linux 4.4.0-109-generic")
+  ("locale" "LC_ALL=en_US.utf8")
+  ("test" "test")
+  ("remote-path"
+   ("/bin" "/usr/bin" "/sbin" "/usr/sbin" "/usr/local/bin" "/usr/local/sbin"))
+  ("remote-shell" "/bin/sh")
+  ("~" "/root")
+  ("ls" "/bin/ls --color=never")
+  ("ls-dired" t)
+  ("stat" nil)
+  ("perl-file-spec" t)
+  ("perl-cwd-realpath" t)
+  ("perl" "\\perl")
+  ("id" "/usr/bin/id")
+  ("gid-integer" 0)
+  ("readlink" "\\readlink")
+  ("file-exists" "test -e")
+  ("gid-string" "root")
+  ("uid-integer" 0)))

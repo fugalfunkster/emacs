@@ -1,4 +1,3 @@
-
 ;; Customizations relating to editing a buffer.
 
 ;; Key binding to use "hippie expand" for text autocompletion
@@ -84,7 +83,6 @@
  'org-babel-load-languages
  '((typescript . t)
    (emacs-lisp . t)
-   (sh . t)
    ;;(elixir . t)
    (org . t)
    (ditaa . t)))

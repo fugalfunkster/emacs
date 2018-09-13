@@ -1,3 +1,4 @@
+
 ;;;;
 ;; Packages
 ;;;;
@@ -5,16 +6,9 @@
 ;; Define package repositories
 (require 'package)
 (add-to-list 'package-archives
-             '("marmalade" . "http://marmalade-repo.org/packages/") t)
-(add-to-list 'package-archives
              '("tromey" . "http://tromey.com/elpa/") t)
 (add-to-list 'package-archives
              '("melpa" . "http://melpa.milkbox.net/packages/") t)
-
-;; (setq package-archives '(("gnu" . "http://elpa.gnu.org/packages/")
-;;                          ("marmalade" . "http://marmalade-repo.org/packages/")
-;;                          ("melpa" . "http://melpa-stable.milkbox.net/packages/")))
-
 
 ;; Load and activate emacs packages. Do this first so that the
 ;; packages are loaded before you start trying to modify them.
@@ -27,26 +21,12 @@
 (when (not package-archive-contents)
   (package-refresh-contents))
 
+(eval-when-compile (require 'use-package))
+
 ;; The packages you want installed. You can also install these
 ;; manually with M-x package-install
-;; Add in your own as you wish:
 (defvar my-packages
   '(use-package
-
-    ;; makes handling lisp expressions much, much easier
-    ;; Cheatsheet: http://www.emacswiki.org/emacs/PareditCheatsheet
-    paredit
-
-    ;; key bindings and code colorization for Clojure
-    ;; https://github.com/clojure-emacs/clojure-mode
-    clojure-mode
-
-    ;; extra syntax highlighting for clojure
-    clojure-mode-extra-font-locking
-
-    ;; integration with a Clojure REPL
-    ;; https://github.com/clojure-emacs/cider
-    cider
 
     ;; allow ido usage in as many contexts as possible. see
     ;; customizations/navigation.el line 23 for a description
@@ -64,24 +44,18 @@
     ;; colorful parenthesis matching
     rainbow-delimiters
 
-    ;; edit html tags like sexps
-    tagedit
-
     ;; git integration
     magit
-    
-    ;;;;
-    ;; FUGALFUNKSTER
-    ;;;;
-
+  
     ;; org mode
     org
     org-beautify-theme
     org-bullets
     ob-typescript
     ob-elixir
-  
-    ;; JavaScript modes
+    ob-clojurescript
+
+    ;; JavaScript
     js2-mode
     js2-refactor
     js-comint
@@ -92,6 +66,19 @@
     ;; TypeScript
     typescript-mode
     tide
+
+    ;; Clojure
+    clojure-mode
+    paredit
+    clojure-mode-extra-font-locking
+    cider
+
+    ;; Elixir
+    elixir-mode
+    
+    ;; Web
+    tagedit
+    emmet-mode
     
     ;; syntax and style
     flycheck
@@ -103,15 +90,13 @@
     multi-eshell
     neotree
 
-    ;; tricks
+    ;; buffer nav
     avy
     ace-window
-    emmet-mode
     expand-region
     multiple-cursors
     undo-tree
-    
-))
+    ))
 
 ;; On OS X, an Emacs instance started from the graphical user
 ;; interface will have a different environment than a shell in a
@@ -167,18 +152,19 @@
 ;; These customizations make editing a bit nicer.
 (load "editing.el")
 
-;; Hard-to-categorize customizations
-(load "misc.el")
-
 ;; For editing lisps
 (load "elisp-editing.el")
 
 ;; Langauage-specific
-(load "setup-clojure.el")
-(load "setup-js.el")
+(load "clojure.el")
+(load "jsts.el")
+(load "elixir.el")
 
 ;; Web stuff
 (load "web.el")
+
+;; Hard-to-categorize customizations
+(load "misc.el")
 
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
@@ -190,7 +176,7 @@
     (company-files company-tide company-nxml company-css company-eclim company-semantic company-clang company-xcode company-cmake company-capf company-abbrev company-oddmuse company-dabbrev)))
  '(package-selected-packages
    (quote
-    (ts-comint scss-mode rainbow-mode base16-theme web-mode undo-tree tide tern tagedit smex rainbow-delimiters projectile paredit org-bullets org-beautify-theme ob-typescript ob-elixir nodejs-repl neotree multi-eshell magit js2-refactor js-comint ido-ubiquitous expand-region exec-path-from-shell emmet-mode company clojure-mode-extra-font-locking cider auto-complete ace-window))))
+    (use-package elixir-mode php-mode org-jira ts-comint scss-mode rainbow-mode base16-theme web-mode undo-tree tide tern tagedit smex rainbow-delimiters projectile paredit org-bullets org-beautify-theme ob-typescript ob-elixir nodejs-repl neotree multi-eshell magit js2-refactor js-comint ido-ubiquitous expand-region exec-path-from-shell emmet-mode company clojure-mode-extra-font-locking cider auto-complete ace-window))))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.

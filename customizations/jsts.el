@@ -65,6 +65,8 @@
 
 (add-hook 'typescript-mode-hook
           (lambda ()
+            (local-set-key (kbd "C-x r") 'ts-send-region)
+            (local-set-key (kbd "C-x C-r") 'ts-send-region-and-go)
             (local-set-key (kbd "C-x C-e") 'ts-send-last-sexp)
             (local-set-key (kbd "C-M-x") 'ts-send-last-sexp-and-go)
             (local-set-key (kbd "C-c b") 'ts-send-buffer)
