@@ -57,7 +57,6 @@
   (tide-setup)
   (flycheck-mode +1)
   (setq flycheck-check-syntax-automatically '(save mode-enabled))
-  (flycheck-add-next-checker 'typescript-tide '(t . typescript-tslint) 'append)
   (eldoc-mode +1)
   (company-mode +1)
   (setq tide-jump-to-definition-reuse-window nil)
@@ -76,6 +75,7 @@
 ;; init typescript-mode
 (add-to-list 'auto-mode-alist '("\\.tsx\\'" . typescript-mode))
 (add-hook 'typescript-mode-hook #'setup-tide-mode)
+(add-hook 'typescript-mode-hook 'prettier-js-mode)
 
 ;; should start tide when moving to web-mode
 (add-hook 'web-mode-hook
