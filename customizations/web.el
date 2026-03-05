@@ -1,23 +1,16 @@
-;;;;
-;; FUGALFUNKSTER
-;;;;
+;; Web / Vue
 
-;; emmet-mode setup
-(add-hook 'sgml-mode-hook 'emmet-mode) ;; Auto-start on any markup modes
-(add-hook 'web-mode-hook  'emmet-mode) ;; enable Emmet's css abbreviation.
-(add-hook 'typescript-mode-hook 'emmet-mode) ;; let's try emmet in ts-mode for TSX
+
+(add-hook 'sgml-mode-hook 'emmet-mode)
+(add-hook 'web-mode-hook  'emmet-mode)
+(add-hook 'typescript-mode-hook 'emmet-mode)
 (setq emmet-move-cursor-between-quotes t)
 (setq emmet-expand-jsx-className? t)
 (setq emmet-self-closing-tag-style " /")
 
-;; web mode
 (require 'web-mode)
 (add-to-list 'auto-mode-alist '("\\.html$" . web-mode))
 (add-to-list 'auto-mode-alist '("\\.hbs$" . web-mode))
-
-;; (setq web-mode-markup-indent-offset 2)
-;; (setq web-mode-css-indent-offset 2)
-;; (setq web-mode-code-indent-offset 2)
 
 (setq web-mode-enable-css-colorization t)
 
@@ -27,8 +20,5 @@
         ad-do-it)
     ad-do-it))
 
-;; chord for switch to web-mode
 (global-set-key (kbd "C-c w") 'web-mode)
-
-
 (setq web-mode-markup-indent-offset 2)

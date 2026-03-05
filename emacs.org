@@ -12,95 +12,582 @@ This file is both the plan and the implementation. Sections below become literat
 source blocks that tangle to their respective =.el= files. Build it incrementally:
 fill in prose, add code blocks, tangle, verify against originals.
 
-** TODO Phase 0 — Backup
-   Commit and push untracked chant files before any migration.
-   - [ ] =lisp/chant-dashboard.el= — never committed
-   - [ ] =lisp/chant-docker.el= — never committed
-   - [ ] Fix staging area (remove elpa/, .extension/, runtime files)
-   - [ ] Push to =https://github.com/fugalfunkster/emacs=
+** DONE Phase 0 — Backup
+   - [X] =lisp/chant-dashboard.el= — committed
+   - [X] =lisp/chant-docker.el= — committed
+   - [X] Fix staging area (remove elpa/, .extension/, runtime files)
+   - [X] Push to =https://github.com/fugalfunkster/emacs=
 
-** TODO Phase 1 — Scaffold emacs.org
+** DONE Phase 1 — Scaffold emacs.org
    - [X] Create this file
-   - [ ] Fill in Chant section (highest value, most docs to preserve)
-   - [ ] Verify tangle output matches originals before replacing files
+   - [X] Fill in Chant section (highest value, most docs to preserve)
+   - [X] Verify tangle output matches originals before replacing files
 
-** TODO Phase 2 — Migrate Chant
-   Merge =chant.org= narrative + =lisp/*.el= code into the Chant section below.
-   Retire =~/Code/org/chant.org= when done.
+** DONE Phase 2 — Migrate Chant
+   All four modules migrated and verified. =chant.org= retired.
 
-** TODO Phase 3 — Migrate customizations
-   Fill in each language/tool section incrementally.
+** DONE Phase 3 — Migrate customizations
+   All customization files migrated and verified.
 
-** TODO Phase 4 — Replace init.el (optional)
-   init.el can keep loading generated files as-is, or be replaced by a tangle
-   target in a dedicated section here. Decide later.
+** DONE Phase 4 — Replace init.el
+   =init.el= now tangled from =* Init= section. =custom-set-variables= moved to
+   =custom.el= so =M-x customize= output doesn't pollute the tangle target.
 
 * Packages
+  :PROPERTIES:
+  :VISIBILITY: folded
+  :END:
 
-#+begin_src emacs-lisp :tangle no
-
-#+end_src
-
-* Environment
-
-#+begin_src emacs-lisp :tangle no
-
-#+end_src
+Package list is managed in the [[* Init][Init]] section. See =my-packages= there.
 
 * Navigation
 
-#+begin_src emacs-lisp :tangle no
+#+begin_src emacs-lisp :tangle customizations/navigation.el
+(require 'uniquify)
+(setq uniquify-buffer-name-style 'forward)
 
+(setq recentf-save-file (concat user-emacs-directory ".recentf"))
+(require 'recentf)
+(recentf-mode 1)
+(setq recentf-max-menu-items 40)
+
+(ido-mode t)
+(setq ido-enable-flex-matching t)
+(setq ido-use-filename-at-point nil)
+(setq ido-auto-merge-work-directories-length -1)
+(setq ido-use-virtual-buffers t)
+(ido-ubiquitous-mode 1)
+
+(global-set-key (kbd "C-x C-b") 'ibuffer)
+
+(setq smex-save-file (concat user-emacs-directory ".smex-items"))
+(smex-initialize)
+(global-set-key (kbd "M-x") 'smex)
+
+(projectile-global-mode)
 #+end_src
 
 * UI
 
-#+begin_src emacs-lisp :tangle no
+#+begin_src emacs-lisp :tangle customizations/ui.el
+(menu-bar-mode -1)
+(tool-bar-mode -1)
 
+(when (fboundp 'global-display-line-numbers-mode)
+  (global-display-line-numbers-mode 1))
+
+(when (fboundp 'scroll-bar-mode)
+  (scroll-bar-mode -1))
+
+(add-to-list 'custom-theme-load-path "~/.emacs.d/themes")
+(add-to-list 'load-path "~/.emacs.d/themes")
+(load-theme 'tomorrow-night-bright t)
+
+(set-face-attribute 'default nil :height 130)
+
+(setq initial-frame-alist '((top . 0) (left . 0) (width . 80) (height . 48)))
+
+(setq x-select-enable-clipboard t
+      x-select-enable-primary nil
+      save-interprogram-paste-before-kill t
+      apropos-do-all t
+      mouse-yank-at-point t)
+
+(blink-cursor-mode 0)
+(setq-default frame-title-format "%b (%f)")
+(global-set-key (kbd "s-t") '(lambda () (interactive)))
+
+;; I know what scratch is for
+(setq initial-scratch-message ";; Perfection is achieved not when there is nothing more to add,\n;; but when there is nothing left to take away. - Antoine de Saint-Exupery")
+
+(setq ring-bell-function 'ignore)
+#+end_src
+
+* Misc
+
+#+begin_src emacs-lisp :tangle customizations/misc.el
+(fset 'yes-or-no-p 'y-or-n-p)
+
+(setq-default sh-basic-offset 2)
+(setq-default sh-indentation 2)
+
+(setq create-lockfiles nil)
+
+(setq inhibit-startup-message t)
 #+end_src
 
 * Editing
 
-#+begin_src emacs-lisp :tangle no
+#+begin_src emacs-lisp :tangle customizations/editing.el
+(global-set-key (kbd "M-/") 'hippie-expand)
 
+(setq hippie-expand-try-functions-list
+      '(try-expand-dabbrev
+        try-expand-dabbrev-all-buffers
+        try-expand-dabbrev-from-kill
+        try-complete-lisp-symbol-partially
+        try-complete-lisp-symbol))
+
+(show-paren-mode 1)
+(global-hl-line-mode 1)
+
+(require 'saveplace)
+(setq-default save-place t)
+(setq save-place-file (concat user-emacs-directory "places"))
+
+(setq backup-directory-alist `(("." . ,(concat user-emacs-directory "backups"))))
+(setq auto-save-default nil)
+
+(defun toggle-comment-on-line ()
+  "comment or uncomment current line"
+  (interactive)
+  (comment-or-uncomment-region (line-beginning-position) (line-end-position)))
+(global-set-key (kbd "C-;") 'toggle-comment-on-line)
+
+(add-hook 'prog-mode-hook 'rainbow-delimiters-mode)
+
+(setq-default indent-tabs-mode nil)
+(setq-default tab-width 4)
+
+(defun ns-get-pasteboard ()
+  "Returns the value of the pasteboard, or nil for unsupported formats."
+  (condition-case nil
+      (ns-get-selection-internal 'CLIPBOARD)
+    (quit nil)))
+
+(setq electric-indent-mode nil)
+
+(require 'company)
+(add-hook 'after-init-hook 'global-company-mode)
+(setq company-idle-delay 0.2)
+(setq company-tooltip-align-annotations t)
+
+(global-auto-revert-mode 1)
+
+(require 'org)
+(org-babel-do-load-languages
+ 'org-babel-load-languages
+ '((typescript . t)
+   (emacs-lisp . t)
+   (elixir . t)
+   (C . t)
+   (org . t)
+   (ditaa . t)))
+
+(require 'ox-md)
+
+(require 'org-bullets)
+(add-hook 'org-mode-hook (lambda () (org-bullets-mode 1)))
+(add-hook 'org-mode-hook (lambda () (visual-line-mode)))
+(add-hook 'org-mode-hook (lambda () (org-indent-mode)))
+(setq org-src-fontify-natively t)
+(deftheme org-beautify-theme "Sub-theme to beautify org mode")
+
+(set-frame-font "CamingoCode 16")
+
+(add-to-list 'load-path "~/.emacs.d/plugins/yasnippet")
+(require 'yasnippet)
+(yas-global-mode 1)
+(setq yas-snippet-dirs '("~/.emacs.d/snippets"))
+
+(global-set-key [remap other-window] 'ace-window)
+
+(require 'avy)
+(global-set-key (kbd "C-s") 'avy-goto-char-timer)
+
+(global-set-key (kbd "C-r") nil)
+(global-set-key (kbd "C-r f") 'isearch-forward-regexp)
+(global-set-key (kbd "C-r b") 'isearch-backward-regexp)
+(global-set-key (kbd "C-M-s") 'isearch-forward)
+(global-set-key (kbd "C-M-r") 'isearch-backward)
+
+(global-set-key (kbd "C-a") 'back-to-indentation)
+
+(defun delete-word (arg)
+  "Delete characters forward until encountering the end of a word.
+With argument, do this that many times."
+  (interactive "p")
+  (delete-region (point) (progn (forward-word arg) (point))))
+
+(defun backward-delete-word (arg)
+  "Delete characters backward until encountering the end of a word.
+With argument, do this that many times."
+  (interactive "p")
+  (delete-word (- arg)))
+
+(global-set-key (kbd "<M-DEL>") 'backward-delete-word)
+
+(defun delete-whole-line ()
+  "Delete (not kill) the current line."
+  (interactive)
+  (save-excursion
+    (delete-region
+     (progn (forward-visible-line 0) (point))
+     (progn (forward-visible-line 1) (point)))))
+(global-set-key (kbd "M-k") 'delete-whole-line)
+
+(global-set-key (kbd "C-k") 'kill-whole-line)
+
+(use-package multiple-cursors
+  :ensure t
+  :bind (("C-c m c" . mc/edit-lines)
+         ("C-." . mc/mark-next-like-this)
+         ("C-," . mc/unmark-next-like-this)
+         ("C-M-<mouse-1>" . mc/add-cursor-on-click)))
+
+(use-package expand-region
+  :ensure t
+  :bind (("C-=" . er/expand-region)))
 #+end_src
 
 * Languages
 
 ** Emacs Lisp
 
-#+begin_src emacs-lisp :tangle no
+#+begin_src emacs-lisp :tangle customizations/elisp-editing.el
+(autoload 'enable-paredit-mode "paredit" "Turn on pseudo-structural editing of Lisp code." t)
+(add-hook 'emacs-lisp-mode-hook       #'enable-paredit-mode)
+(add-hook 'eval-expression-minibuffer-setup-hook #'enable-paredit-mode)
+(add-hook 'ielm-mode-hook             #'enable-paredit-mode)
+(add-hook 'lisp-mode-hook             #'enable-paredit-mode)
+(add-hook 'lisp-interaction-mode-hook #'enable-paredit-mode)
+(add-hook 'scheme-mode-hook           #'enable-paredit-mode)
 
+(add-hook 'emacs-lisp-mode-hook 'turn-on-eldoc-mode)
+(add-hook 'lisp-interaction-mode-hook 'turn-on-eldoc-mode)
+(add-hook 'ielm-mode-hook 'turn-on-eldoc-mode)
 #+end_src
 
 ** Clojure
 
-#+begin_src emacs-lisp :tangle no
+#+begin_src emacs-lisp :tangle customizations/clojure.el
+(add-hook 'clojure-mode-hook 'enable-paredit-mode)
+(add-hook 'clojure-mode-hook 'subword-mode)
 
+(require 'clojure-mode-extra-font-locking)
+
+(add-hook 'clojure-mode-hook
+          (lambda ()
+            (setq inferior-lisp-program "lein repl")
+            (font-lock-add-keywords
+             nil
+             '(("(\\(facts?\\)"
+                (1 font-lock-keyword-face))
+               ("(\\(background?\\)"
+                (1 font-lock-keyword-face))))
+            (define-clojure-indent (fact 1))
+            (define-clojure-indent (facts 1))))
+
+(add-hook 'cider-mode-hook 'eldoc-mode)
+(setq cider-repl-pop-to-buffer-on-connect t)
+(setq cider-show-error-buffer t)
+(setq cider-auto-select-error-buffer t)
+(setq cider-repl-history-file "~/.emacs.d/cider-history")
+(setq cider-repl-wrap-history t)
+(add-hook 'cider-repl-mode-hook 'paredit-mode)
+
+(add-to-list 'auto-mode-alist '("\\.edn$" . clojure-mode))
+(add-to-list 'auto-mode-alist '("\\.boot$" . clojure-mode))
+(add-to-list 'auto-mode-alist '("\\.cljs.*$" . clojure-mode))
+(add-to-list 'auto-mode-alist '("lein-env" . enh-ruby-mode))
+
+(defun cider-start-http-server ()
+  (interactive)
+  (cider-load-current-buffer)
+  (let ((ns (cider-current-ns)))
+    (cider-repl-set-ns ns)
+    (cider-interactive-eval (format "(println '(def server (%s/start))) (println 'server)" ns))
+    (cider-interactive-eval (format "(def server (%s/start)) (println server)" ns))))
+
+(defun cider-refresh ()
+  (interactive)
+  (cider-interactive-eval (format "(user/reset)")))
+
+(defun cider-user-ns ()
+  (interactive)
+  (cider-repl-set-ns "user"))
+
+(eval-after-load 'cider
+  '(progn
+     (define-key clojure-mode-map (kbd "C-c C-v") 'cider-start-http-server)
+     (define-key clojure-mode-map (kbd "C-M-r") 'cider-refresh)
+     (define-key clojure-mode-map (kbd "C-c u") 'cider-user-ns)
+     (define-key cider-mode-map (kbd "C-c u") 'cider-user-ns)))
+
+(add-to-list 'load-path "/full-path-to/org-mode/lisp")
+(require 'org)
+(require 'cider)
+(require 'ob-clojure)
+(setq org-babel-clojure-backend 'cider)
+(setq org-babel-clojure-nrepl-timeout nil)
 #+end_src
 
 ** JavaScript / TypeScript
 
-#+begin_src emacs-lisp :tangle no
+#+begin_src emacs-lisp :tangle customizations/jsts.el
+(require 'eldoc)
+;; eldoc-documentation-functions was added in Emacs 28; shim it on 27.
+(unless (boundp 'eldoc-documentation-functions)
+  (defvar eldoc-documentation-functions nil
+    "Compat shim for Emacs 27 — real variable added in Emacs 28."))
 
+(add-hook 'typescript-mode-hook 'subword-mode)
+(add-hook 'js-mode-hook 'subword-mode)
+(add-hook 'html-mode-hook 'subword-mode)
+(add-hook 'web-mode-hook 'subword-mode)
+
+(add-hook 'js-mode-hook #'add-node-modules-path)
+(add-hook 'js2-mode-hook #'add-node-modules-path)
+(add-hook 'rjsx-mode-hook #'add-node-modules-path)
+(add-hook 'typescript-mode-hook #'add-node-modules-path)
+(add-hook 'web-mode-hook #'add-node-modules-path)
+
+(setq js-indent-level 1)
+(setq-default js2-basic-indent 1
+	      js2-basic-offset 1
+	      js2-auto-indent-p t
+	      js2-cleanup-whitespace t
+	      js2-enter-indents-newline t
+	      js2-indent-on-enter-key t)
+
+(add-to-list 'auto-mode-alist '("\\.js\\'" . js-mode))
+
+(eval-after-load 'js2-mode
+  '(define-key js2-mode-map (kbd "RET") 'js2-line-break))
+
+(eval-after-load "sgml-mode"
+  '(progn
+     (require 'tagedit)
+     (tagedit-add-paredit-like-keybindings)
+     (add-hook 'html-mode-hook (lambda () (tagedit-mode 1)))))
+
+(global-set-key (kbd "C-c j") 'js2-mode)
+
+(require 'flycheck)
+(setq-default flycheck-disabled-checkers '(typescript-tslint javascript-jscs sass/scss-sass-lint))
+(flycheck-add-mode 'javascript-eslint 'web-mode)
+(flycheck-add-mode 'javascript-eslint 'rjsx-mode)
+
+(require 'prettier-js)
+(remove-hook 'js-mode-hook #'prettier-js)
+(remove-hook 'js2-mode-hook #'prettier-js)
+(remove-hook 'rjsx-mode-hook #'prettier-js)
+(remove-hook 'typescript-mode-hook #'prettier-js)
+(remove-hook 'before-save-hook #'jsts--prettier-format-buffer)
+(dolist (buf (buffer-list))
+  (with-current-buffer buf
+    (remove-hook 'before-save-hook #'jsts--prettier-format-buffer t)))
+
+(defun jsts--prettier-js-before-save ()
+  "Format the current buffer with prettier-js."
+  (when (derived-mode-p 'js-mode 'js2-mode 'rjsx-mode 'typescript-mode)
+    (prettier-js)))
+
+(defun jsts--setup-prettier-js-on-save ()
+  "Enable prettier-js formatting before save in this buffer."
+  (remove-hook 'before-save-hook #'jsts--prettier-format-buffer t)
+  (add-hook 'before-save-hook #'jsts--prettier-js-before-save nil t))
+
+(defun jsts--maybe-setup-prettier-js-for-current-buffer ()
+  "Enable prettier-js for JS/TS buffers."
+  (when (derived-mode-p 'js-mode 'js2-mode 'rjsx-mode 'typescript-mode)
+    (jsts--setup-prettier-js-on-save)))
+
+(add-hook 'js-mode-hook #'jsts--setup-prettier-js-on-save)
+(add-hook 'js2-mode-hook #'jsts--setup-prettier-js-on-save)
+(add-hook 'rjsx-mode-hook #'jsts--setup-prettier-js-on-save)
+(add-hook 'typescript-mode-hook #'jsts--setup-prettier-js-on-save)
+(add-hook 'after-change-major-mode-hook #'jsts--maybe-setup-prettier-js-for-current-buffer)
+(add-hook 'find-file-hook #'jsts--maybe-setup-prettier-js-for-current-buffer)
+
+(require 'tide)
+(defun jsts--tide-should-enable-p ()
+  "Return non-nil when a JS/TS project config exists."
+  (when buffer-file-name
+    (let ((root (or (locate-dominating-file buffer-file-name "tsconfig.json")
+                    (locate-dominating-file buffer-file-name "jsconfig.json"))))
+      (and root t))))
+
+(defun jsts--maybe-setup-tide ()
+  "Enable tide when this buffer is part of a JS/TS project."
+  (when (jsts--tide-should-enable-p)
+    (setup-tide-mode)))
+
+(defun jsts--maybe-setup-tide-for-current-buffer ()
+  "Enable tide for JS/TS buffers when appropriate."
+  (when (derived-mode-p 'js-mode 'js2-mode 'rjsx-mode 'typescript-mode)
+    (jsts--maybe-setup-tide)))
+
+(defun setup-tide-mode ()
+  (interactive)
+  (tide-setup)
+  (jsts--disable-eldoc)
+  (flycheck-mode +1)
+  (setq flycheck-check-syntax-automatically '(save mode-enabled))
+  (company-mode +1)
+  (setq tide-jump-to-definition-reuse-window nil))
+
+(add-hook 'typescript-mode-hook
+          (lambda ()
+            (local-set-key (kbd "C-x r") 'ts-send-region)
+            (local-set-key (kbd "C-x C-r") 'ts-send-region-and-go)
+            (local-set-key (kbd "C-x C-e") 'ts-send-last-sexp)
+            (local-set-key (kbd "C-M-x") 'ts-send-last-sexp-and-go)
+            (local-set-key (kbd "C-c b") 'ts-send-buffer)
+            (local-set-key (kbd "C-c C-b") 'ts-send-buffer-and-go)
+            (local-set-key (kbd "C-c l") 'ts-load-file-and-go)))
+
+(add-to-list 'auto-mode-alist '("\\.tsx\\'" . typescript-mode))
+(add-hook 'typescript-mode-hook #'setup-tide-mode)
+(add-hook 'typescript-mode-hook 'prettier-js-mode)
+
+(add-hook 'js2-mode-hook #'jsts--maybe-setup-tide)
+(add-hook 'rjsx-mode-hook #'jsts--maybe-setup-tide)
+(add-hook 'js-mode-hook #'jsts--maybe-setup-tide)
+(add-hook 'after-change-major-mode-hook #'jsts--maybe-setup-tide-for-current-buffer)
+(add-hook 'find-file-hook #'jsts--maybe-setup-tide-for-current-buffer)
+
+(defvar-local jsts--saved-eldoc-documentation-functions nil
+  "Buffer-local storage for eldoc documentation functions.")
+
+(defun jsts--capture-eldoc-functions ()
+  "Capture eldoc documentation functions for later use."
+  (setq-local jsts--saved-eldoc-documentation-functions
+              (or eldoc-documentation-functions
+                  (and (fboundp 'tide-eldoc-function)
+                       (list #'tide-eldoc-function)))))
+
+(defun jsts--disable-eldoc ()
+  "Disable eldoc in the current buffer."
+  (unless jsts--saved-eldoc-documentation-functions
+    (setq jsts--saved-eldoc-documentation-functions
+          (or eldoc-documentation-functions
+              (and (fboundp 'tide-eldoc-function)
+                   (list #'tide-eldoc-function))
+              (default-value 'eldoc-documentation-functions))))
+  (setq-local eldoc-documentation-functions nil)
+  (eldoc-mode -1))
+
+(defun jsts--eldoc-show-once ()
+  "Show eldoc buffer for symbol at point without enabling auto popups."
+  (setq jsts--saved-eldoc-documentation-functions
+        (or eldoc-documentation-functions
+            (and (fboundp 'tide-eldoc-function)
+                 (list #'tide-eldoc-function))
+            jsts--saved-eldoc-documentation-functions
+            (default-value 'eldoc-documentation-functions)))
+  (when jsts--saved-eldoc-documentation-functions
+    (setq-local eldoc-documentation-functions
+                jsts--saved-eldoc-documentation-functions)
+    (eldoc-mode 1)
+    (when (fboundp 'eldoc-print-current-symbol-info)
+      (eldoc-print-current-symbol-info))
+    (eldoc-doc-buffer)
+    (jsts--disable-eldoc)
+    (setq jsts--saved-eldoc-documentation-functions
+          (or (and (fboundp 'tide-eldoc-function)
+                   (list #'tide-eldoc-function))
+              jsts--saved-eldoc-documentation-functions))))
+
+(add-hook 'tide-mode-hook #'jsts--capture-eldoc-functions)
+(add-hook 'tide-mode-hook #'jsts--disable-eldoc)
+(add-hook 'js-mode-hook #'jsts--disable-eldoc)
+(add-hook 'js2-mode-hook #'jsts--disable-eldoc)
+(add-hook 'rjsx-mode-hook #'jsts--disable-eldoc)
+(add-hook 'typescript-mode-hook #'jsts--disable-eldoc)
+
+(add-hook 'web-mode-hook
+          (lambda ()
+            (when (and (member (file-name-extension buffer-file-name) '("tsx" "jsx"))
+                       (jsts--tide-should-enable-p))
+              (setup-tide-mode))))
+
+(global-set-key (kbd "C-c d") 'xref-find-definitions)
+(global-set-key (kbd "C-c b") 'xref-pop-marker-stack)
 #+end_src
 
 ** Elixir
 
-#+begin_src emacs-lisp :tangle no
-
-#+end_src
+No configuration needed — =ob-elixir= is loaded via the package list.
 
 ** Dart / Flutter
 
-#+begin_src emacs-lisp :tangle no
+#+begin_src emacs-lisp :tangle customizations/dart.el
+(condition-case nil
+    (require 'use-package)
+  (file-error
+   (require 'package)
+   (add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/"))
+   (package-initialize)
+   (package-refresh-contents)
+   (package-install 'use-package)
+   (require 'use-package)))
 
+(use-package use-package-ensure-system-package :ensure t)
+(use-package projectile :ensure t)
+(use-package yasnippet :ensure t :config (yas-global-mode))
+
+(require 'package)
+(add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t)
+
+(setq package-selected-packages
+  '(dart-mode lsp-mode lsp-dart lsp-treemacs flycheck company
+    lsp-ui company hover))
+
+(when (cl-find-if-not #'package-installed-p package-selected-packages)
+  (package-refresh-contents)
+  (mapc #'package-install package-selected-packages))
+
+(setq gc-cons-threshold (* 100 1024 1024)
+      read-process-output-max (* 1024 1024)
+      company-minimum-prefix-length 1
+      lsp-lens-enable t
+      lsp-signature-auto-activate nil)
+
+(use-package dart-mode
+  :ensure t
+  :hook ((dart-mode . flutter-test-mode)
+         (dart-mode . format-all-mode)
+         (dart-mode . lsp))
+  :ensure-system-package (dart . dart-sdk))
+
+(use-package flutter
+  :after dart-mode
+  :bind (:map dart-mode-map ("C-M-x" . #'flutter-run-or-hot-reload))
+  :hook (dart-mode . (lambda ()
+                       (add-hook 'after-save-hook #'flutter-hot-reload nil t))))
 #+end_src
 
 ** Web / Vue
 
-#+begin_src emacs-lisp :tangle no
+#+begin_src emacs-lisp :tangle customizations/web.el
+(add-hook 'sgml-mode-hook 'emmet-mode)
+(add-hook 'web-mode-hook  'emmet-mode)
+(add-hook 'typescript-mode-hook 'emmet-mode)
+(setq emmet-move-cursor-between-quotes t)
+(setq emmet-expand-jsx-className? t)
+(setq emmet-self-closing-tag-style " /")
 
+(require 'web-mode)
+(add-to-list 'auto-mode-alist '("\\.html$" . web-mode))
+(add-to-list 'auto-mode-alist '("\\.hbs$" . web-mode))
+
+(setq web-mode-enable-css-colorization t)
+
+(defadvice web-mode-highlight-part (around tweak-jsx activate)
+  (if (equal web-mode-content-type "jsx")
+      (let ((web-mode-enable-part-face nil))
+        ad-do-it)
+    ad-do-it))
+
+(global-set-key (kbd "C-c w") 'web-mode)
+(setq web-mode-markup-indent-offset 2)
+#+end_src
+
+#+begin_src emacs-lisp :tangle customizations/vue.el
+(add-hook 'vue-mode
+          (lambda ()
+            (set-face-background 'mmm-default-submode-face "unspecified")))
 #+end_src
 
 * Chant — Multi-Agent Claude Dashboard
@@ -1397,4 +1884,206 @@ every agent runs inside an isolated Docker sandbox."
 (provide 'chant-docker)
 
 ;;; chant-docker.el ends here
+#+end_src
+
+* Init
+  :PROPERTIES:
+  :header-args:emacs-lisp: :tangle init.el
+  :END:
+
+Orchestrates everything: packages, load paths, key bindings, chant, and the
+customization files. =custom-set-variables= is redirected to =custom.el= so
+that Emacs Custom doesn't write into this tangle target.
+
+*** Packages
+
+#+begin_src emacs-lisp
+;;;;
+;; Packages
+;;;;
+
+(require 'package)
+(setq package-archives
+      '(("gnu" . "https://elpa.gnu.org/packages/")
+        ("melpa" . "https://melpa.org/packages/")))
+
+(package-initialize)
+
+(when (memq window-system '(mac ns x))
+  (exec-path-from-shell-initialize))
+
+(when (not package-archive-contents)
+  (package-refresh-contents))
+
+(defvar my-packages
+  '(use-package
+    paredit
+    clojure-mode
+    clojure-mode-extra-font-locking
+    cider
+    ido-ubiquitous
+    smex
+    projectile
+    rainbow-delimiters
+    tagedit
+    magit
+    org
+    org-beautify-theme
+    org-bullets
+    ob-typescript
+    ob-elixir
+    js2-mode
+    js2-refactor
+    js-comint
+    nodejs-repl
+    tern
+    web-mode
+    typescript-mode
+    tide
+    lsp-mode
+    lsp-dart
+    lsp-ui
+    hover
+    flycheck
+    yasnippet
+    auto-complete
+    company
+    direnv
+    multi-eshell
+    neotree
+    avy
+    ace-window
+    emmet-mode
+    expand-region
+    multiple-cursors
+    undo-tree))
+
+(dolist (p my-packages)
+  (when (not (package-installed-p p))
+    (package-install p)))
+#+end_src
+
+*** Load paths
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "~/.emacs.d/vendor")
+(add-to-list 'load-path "~/.emacs.d/customizations")
+(add-to-list 'load-path "~/.emacs.d/lisp")
+#+end_src
+
+*** Key bindings
+
+Xref and eldoc helpers for JS/TS navigation. =C-d= / =M-.= toggle to definition
+and back; =C-c i= toggles the doc buffer.
+
+#+begin_src emacs-lisp
+(defun mh/xref-find-definitions-buffer ()
+  "Show xref results for symbol at point in a separate buffer."
+  (interactive)
+  (let ((xref-show-xrefs-function #'xref-show-definitions-buffer)
+        (xref-show-definitions-function #'xref-show-definitions-buffer))
+    (call-interactively #'xref-find-definitions)))
+
+(defun mh/tide-doc-toggle-buffer ()
+  "Toggle a Tide documentation buffer for symbol at point."
+  (interactive)
+  (let* ((buf (get-buffer "*tide-doc*"))
+         (win (and buf (get-buffer-window buf))))
+    (if win
+        (quit-window nil win)
+      (when (and (bound-and-true-p tide-mode)
+                 (fboundp 'tide-eldoc-function))
+        (let ((doc (tide-eldoc-function)))
+          (when (and doc (stringp doc) (not (string-empty-p doc)))
+            (with-current-buffer (get-buffer-create "*tide-doc*")
+              (setq buffer-read-only nil)
+              (erase-buffer)
+              (insert doc)
+              (setq buffer-read-only t))
+            (display-buffer (get-buffer "*tide-doc*"))))))))
+
+(defun mh/eldoc-toggle-buffer ()
+  "Toggle the documentation buffer for symbol at point."
+  (interactive)
+  (if (bound-and-true-p tide-mode)
+      (mh/tide-doc-toggle-buffer)
+    (let* ((buf (eldoc-doc-buffer))
+           (win (and buf (get-buffer-window buf))))
+      (if win
+          (quit-window nil win)
+        (progn
+          (unless (bound-and-true-p eldoc-mode)
+            (eldoc-mode 1))
+          (eldoc-doc-buffer))))))
+
+(global-set-key (kbd "C-c C-.") #'mh/xref-find-definitions-buffer)
+
+(defvar mh/xref-last-marker nil
+  "Marker for the last location before jumping to a definition.")
+
+(defun mh/xref-toggle-definitions ()
+  "Go to definition, or jump back to the last location."
+  (interactive)
+  (if (and (markerp mh/xref-last-marker)
+           (marker-buffer mh/xref-last-marker)
+           (or (not (eq (current-buffer) (marker-buffer mh/xref-last-marker)))
+               (/= (point) (marker-position mh/xref-last-marker))))
+      (progn
+        (switch-to-buffer (marker-buffer mh/xref-last-marker))
+        (goto-char (marker-position mh/xref-last-marker))
+        (setq mh/xref-last-marker nil))
+    (setq mh/xref-last-marker (copy-marker (point) t))
+    (xref-find-definitions (thing-at-point 'symbol t))))
+
+(defun mh/xref-clear-marker-on-command ()
+  "Clear the xref toggle marker after any non-toggle command."
+  (when (and mh/xref-last-marker
+             (not (eq this-command 'mh/xref-toggle-definitions)))
+    (setq mh/xref-last-marker nil)))
+
+(add-hook 'post-command-hook #'mh/xref-clear-marker-on-command)
+
+(global-set-key (kbd "C-c i") #'mh/eldoc-toggle-buffer)
+(global-set-key (kbd "C-d") #'mh/xref-toggle-definitions)
+(global-set-key (kbd "M-.") #'mh/xref-toggle-definitions)
+
+(with-eval-after-load 'tide
+  (define-key tide-mode-map (kbd "M-.") #'mh/xref-toggle-definitions)
+  (define-key tide-mode-map (kbd "C-d") #'mh/xref-toggle-definitions))
+#+end_src
+
+*** Chant
+
+#+begin_src emacs-lisp
+(require 'claude-chant)
+(require 'chant-abeyance)
+(require 'chant-dashboard)
+;; (require 'chant-docker)
+#+end_src
+
+*** Load customizations
+
+#+begin_src emacs-lisp
+(load "local.el")
+(load "navigation.el")
+(load "ui.el")
+(load "editing.el")
+(load "misc.el")
+(load "elisp-editing.el")
+(load "clojure.el")
+(load "jsts.el")
+(load "elixir.el")
+(load "dart.el")
+(load "vue.el")
+(load "web.el")
+#+end_src
+
+*** Custom file
+
+Redirect =M-x customize= output to =custom.el= so it doesn't append to this
+tangle target.
+
+#+begin_src emacs-lisp
+(setq custom-file (expand-file-name "custom.el" user-emacs-directory))
+(load custom-file 'noerror)
 #+end_src
