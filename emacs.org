@@ -12,6 +12,9 @@ Literate Emacs config — all =.el= files are generated from this file via
 =org-babel-tangle=. Edit here, not in the =.el= files directly.
 
 Tangle with =C-c C-v t= (or =M-x org-babel-tangle=) after making changes.
+From anywhere, =C-c e r= tangles and restarts Emacs in one step.
+
+See =emacsHelp.org= in this directory for a full keybindings reference.
 
 To add a new section: create a heading with a PROPERTIES drawer setting
 =:header-args:emacs-lisp: :tangle PATH=, then add src blocks under it.
@@ -575,6 +578,54 @@ No configuration needed — =ob-elixir= is loaded via the package list.
           (lambda ()
             (set-face-background 'mmm-default-submode-face "unspecified")))
 #+end_src
+
+* External Services
+
+Packages that connect Emacs to external services (Jira, GitLab, etc.). Each
+uses =use-package :ensure t= so installation and configuration are co-located.
+Auth credentials live in =~/.authinfo.gpg= — no plaintext tokens in config.
+
+** Jira — org-jira
+
+Syncs Jira tickets into org-mode files via =org-jira-get-issues-from-custom-jql=.
+Tickets land in =org-jira-working-dir= (=~/Code/Org/=).
+
+#+begin_src emacs-lisp :tangle customizations/external-services.el
+(use-package org-jira
+  :ensure t
+  :config
+  (setq jiralib2-url "https://rentable.atlassian.net"
+        jiralib2-auth 'token
+        jiralib2-user-login-name "matthew@joinroost.com"
+        jiralib2-token (auth-source-pick-first-password
+                        :host "rentable.atlassian.net"
+                        :user "matthew@joinroost.com")
+        org-jira-working-dir "~/Code/Org/"
+        org-jira-default-jql "project = ROOST AND sprint in openSprints()"))
+#+end_src
+
+Verify with =M-x org-jira-get-issues-from-custom-jql=. Should populate
+=~/Code/Org/jira.org= with tickets grouped by status.
+
+** GitLab — forge
+
+Magit extension with native GitLab (and GitHub) support. Surfaces MRs, issues,
+and review comments as Magit sections; supports commenting, approving, and
+merging from within Emacs.
+
+Add an entry to =~/.authinfo.gpg= (the =^forge= suffix is required):
+
+: machine gitlab.com login YOUR_USERNAME^forge password YOUR_PERSONAL_ACCESS_TOKEN
+
+Token needs at minimum =api= scope.
+
+#+begin_src emacs-lisp :tangle customizations/external-services.el
+(use-package forge
+  :ensure t
+  :after magit)
+#+end_src
+
+Verify with =M-x forge-pull= in a Magit buffer for a GitLab repo.
 
 * Chant — Multi-Agent Claude Dashboard
 
@@ -1942,7 +1993,8 @@ that Emacs Custom doesn't write into this tangle target.
     emmet-mode
     expand-region
     multiple-cursors
-    undo-tree))
+    undo-tree
+    restart-emacs))
 
 (dolist (p my-packages)
   (when (not (package-installed-p p))
@@ -2036,6 +2088,14 @@ and back; =C-c i= toggles the doc buffer.
 (with-eval-after-load 'tide
   (define-key tide-mode-map (kbd "M-.") #'mh/xref-toggle-definitions)
   (define-key tide-mode-map (kbd "C-d") #'mh/xref-toggle-definitions))
+
+(defun mh/tangle-and-restart ()
+  "Tangle emacs.org and restart Emacs."
+  (interactive)
+  (org-babel-tangle-file (expand-file-name "emacs.org" user-emacs-directory))
+  (restart-emacs))
+
+(global-set-key (kbd "C-c e r") #'mh/tangle-and-restart)
 #+end_src
 
 *** Chant
@@ -2062,6 +2122,7 @@ and back; =C-c i= toggles the doc buffer.
 (load "dart.el")
 (load "vue.el")
 (load "web.el")
+(load "external-services.el")
 #+end_src
 
 *** Custom file

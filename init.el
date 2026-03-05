@@ -56,7 +56,8 @@
     emmet-mode
     expand-region
     multiple-cursors
-    undo-tree))
+    undo-tree
+    restart-emacs))
 
 (dolist (p my-packages)
   (when (not (package-installed-p p))
@@ -140,6 +141,14 @@
   (define-key tide-mode-map (kbd "M-.") #'mh/xref-toggle-definitions)
   (define-key tide-mode-map (kbd "C-d") #'mh/xref-toggle-definitions))
 
+(defun mh/tangle-and-restart ()
+  "Tangle emacs.org and restart Emacs."
+  (interactive)
+  (org-babel-tangle-file (expand-file-name "emacs.org" user-emacs-directory))
+  (restart-emacs))
+
+(global-set-key (kbd "C-c e r") #'mh/tangle-and-restart)
+
 (require 'claude-chant)
 (require 'chant-abeyance)
 (require 'chant-dashboard)
@@ -157,6 +166,7 @@
 (load "dart.el")
 (load "vue.el")
 (load "web.el")
+(load "external-services.el")
 
 (setq custom-file (expand-file-name "custom.el" user-emacs-directory))
 (load custom-file 'noerror)

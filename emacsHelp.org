@@ -1,0 +1,50 @@
+#+TITLE: Emacs Key Bindings Reference
+#+AUTHOR: Matthew Hoselton
+
+* Config
+
+| Binding   | Command                           | Description                          |
+|-----------+-----------------------------------+--------------------------------------|
+| =C-c e r= | =mh/tangle-and-restart=           | Tangle =emacs.org= and restart Emacs |
+
+* Navigation
+
+| Binding     | Command                              | Description                       |
+|-------------+--------------------------------------+-----------------------------------|
+| =C-d=       | =mh/xref-toggle-definitions=        | Jump to definition / jump back    |
+| =M-.=       | =mh/xref-toggle-definitions=        | Jump to definition / jump back    |
+| =C-c C-.=   | =mh/xref-find-definitions-buffer=   | Show xref results in buffer       |
+| =C-c i=     | =mh/eldoc-toggle-buffer=            | Toggle documentation buffer       |
+| =C-s=       | =avy-goto-char-timer=               | Jump to character                 |
+| =C-x C-b=   | =ibuffer=                           | Buffer list                       |
+| =M-x=       | =smex=                              | Enhanced command palette          |
+
+* Editing
+
+| Binding       | Command                    | Description                    |
+|---------------+----------------------------+--------------------------------|
+| =M-/=         | =hippie-expand=            | Text autocompletion            |
+| =C-;=         | =toggle-comment-on-line=   | Comment / uncomment line       |
+| =C-a=         | =back-to-indentation=      | Move to first non-whitespace   |
+| =M-k=         | =delete-whole-line=        | Delete line (no kill ring)     |
+| =C-k=         | =kill-whole-line=          | Kill whole line                |
+| =<M-DEL>=     | =backward-delete-word=     | Delete word backwards          |
+| =C-c m c=     | =mc/edit-lines=            | Multiple cursors on lines      |
+| =C->=         | =mc/mark-next-like-this=   | Mark next occurrence           |
+| =C-,=         | =mc/unmark-next-like-this= | Unmark next occurrence         |
+| =C-==         | =er/expand-region=         | Expand selection               |
+
+* Windows
+
+| Binding   | Command       | Description               |
+|-----------+---------------+---------------------------|
+| =C-x o=   | =ace-window=  | Jump to window by letter  |
+
+* Web / JS / TS
+
+| Binding | Command                    | Description        |
+|---------+----------------------------+--------------------|
+| =C-c w= | =web-mode=                 | Switch to web-mode |
+| =C-c d= | =xref-find-definitions=    | Jump to definition |
+| =C-c b= | =xref-pop-marker-stack=    | Jump back          |
+| =C-c j= | =js2-mode=                 | Switch to js2-mode |
