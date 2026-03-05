@@ -1,0 +1,174 @@
+#+TITLE: Emacs Configuration
+#+AUTHOR: Matthew Hoselton
+#+DESCRIPTION: Literate Emacs config — source of truth for all .el files
+#+PROPERTY: header-args:emacs-lisp :comments org :mkdirp yes
+
+* Migration Plan
+  :PROPERTIES:
+  :VISIBILITY: folded
+  :END:
+
+This file is both the plan and the implementation. Sections below become literate
+source blocks that tangle to their respective =.el= files. Build it incrementally:
+fill in prose, add code blocks, tangle, verify against originals.
+
+** TODO Phase 0 — Backup
+   Commit and push untracked chant files before any migration.
+   - [ ] =lisp/chant-dashboard.el= — never committed
+   - [ ] =lisp/chant-docker.el= — never committed
+   - [ ] Fix staging area (remove elpa/, .extension/, runtime files)
+   - [ ] Push to =https://github.com/fugalfunkster/emacs=
+
+** TODO Phase 1 — Scaffold emacs.org
+   - [X] Create this file
+   - [ ] Fill in Chant section (highest value, most docs to preserve)
+   - [ ] Verify tangle output matches originals before replacing files
+
+** TODO Phase 2 — Migrate Chant
+   Merge =chant.org= narrative + =lisp/*.el= code into the Chant section below.
+   Retire =~/Code/org/chant.org= when done.
+
+** TODO Phase 3 — Migrate customizations
+   Fill in each language/tool section incrementally.
+
+** TODO Phase 4 — Replace init.el (optional)
+   init.el can keep loading generated files as-is, or be replaced by a tangle
+   target in a dedicated section here. Decide later.
+
+* Packages
+
+#+begin_src emacs-lisp :tangle customizations/packages.el
+
+#+end_src
+
+* Environment
+
+#+begin_src emacs-lisp :tangle customizations/local.el
+
+#+end_src
+
+* Navigation
+
+#+begin_src emacs-lisp :tangle customizations/navigation.el
+
+#+end_src
+
+* UI
+
+#+begin_src emacs-lisp :tangle customizations/ui.el
+
+#+end_src
+
+* Editing
+
+#+begin_src emacs-lisp :tangle customizations/editing.el
+
+#+end_src
+
+* Languages
+
+** Emacs Lisp
+
+#+begin_src emacs-lisp :tangle customizations/elisp-editing.el
+
+#+end_src
+
+** Clojure
+
+#+begin_src emacs-lisp :tangle customizations/clojure.el
+
+#+end_src
+
+** JavaScript / TypeScript
+
+#+begin_src emacs-lisp :tangle customizations/jsts.el
+
+#+end_src
+
+** Elixir
+
+#+begin_src emacs-lisp :tangle customizations/elixir.el
+
+#+end_src
+
+** Dart / Flutter
+
+#+begin_src emacs-lisp :tangle customizations/dart.el
+
+#+end_src
+
+** Web / Vue
+
+#+begin_src emacs-lisp :tangle customizations/web.el
+
+#+end_src
+
+* Chant — Multi-Agent Claude Dashboard
+
+Chant is a workflow layer for controlling one or more Claude Code sessions from
+Emacs. It composes three things:
+
+- *Emacs* — composition buffer, dashboard, abeyance passthrough
+- *tmux* — persistent terminal session bridging Emacs (Lisp) to Claude CLI (TTY)
+
+The canonical usage pattern:
+
+1. Run =chant= in a terminal → creates (or attaches to) a tmux session named =claude=
+2. Run =chant= in Eshell → opens the dashboard + composition split
+3. Press =n= in the dashboard → spawns a named agent pair (tmux window + Claude session)
+4. Write a prompt in =*chant*= → =C-c C-c= sends it to the active agent
+5. Press =M-a= (abeyance) to forward keystrokes for TUI prompts without leaving Emacs
+
+** Core (claude-chant.el)
+   :PROPERTIES:
+   :header-args:emacs-lisp: :tangle lisp/claude-chant.el
+   :END:
+
+Buffer, header overlay, and tmux send layer.
+
+*** TODO Migrate code from lisp/claude-chant.el
+
+#+begin_src emacs-lisp
+
+#+end_src
+
+** Abeyance Mode (chant-abeyance.el)
+   :PROPERTIES:
+   :header-args:emacs-lisp: :tangle lisp/chant-abeyance.el
+   :END:
+
+Minor mode that forwards all keystrokes to the active Claude pane via tmux.
+Press =M-a= in =*chant*= to toggle.
+
+*** TODO Migrate code from lisp/chant-abeyance.el
+
+#+begin_src emacs-lisp
+
+#+end_src
+
+** Dashboard (chant-dashboard.el)
+   :PROPERTIES:
+   :header-args:emacs-lisp: :tangle lisp/chant-dashboard.el
+   :END:
+
+Major mode managing agent pair lifecycle and status polling.
+
+*** TODO Migrate code from lisp/chant-dashboard.el
+
+#+begin_src emacs-lisp
+
+#+end_src
+
+** Docker Sandboxing (chant-docker.el)
+   :PROPERTIES:
+   :header-args:emacs-lisp: :tangle lisp/chant-docker.el
+   :END:
+
+Optional overlay that runs each agent in an isolated Docker container.
+Currently disabled — add =(require 'chant-docker)= to init.el to activate.
+
+*** TODO Migrate code from lisp/chant-docker.el
+
+#+begin_src emacs-lisp
+
+#+end_src

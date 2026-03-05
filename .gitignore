@@ -15,3 +15,10 @@ url
 customizations/local.el
 network-security.data
 elpa/
+.extension/
+.lsp-session-v1
+ido.last~
+tramp
+transient/
+*conflicted*
+*conflicted copy*

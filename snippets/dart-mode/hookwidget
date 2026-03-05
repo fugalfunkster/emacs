@@ -1,0 +1,11 @@
+# -*- mode: snippet -*-
+# name: HookWidget
+# key: HookWidget
+# group: flutter
+# --
+class $1 extends HookWidget<$1> {
+  @override
+  Widget build(BuildContext context) {
+    return Container($0);
+  }
+}

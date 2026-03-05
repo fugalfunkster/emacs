@@ -83,7 +83,8 @@
  'org-babel-load-languages
  '((typescript . t)
    (emacs-lisp . t)
-   ;;(elixir . t)
+   (elixir . t)
+   (C . t)
    (org . t)
    (ditaa . t)))
 
@@ -167,7 +168,7 @@ With argument, do this that many times."
   :bind (("C-c m c" . mc/edit-lines)
          ("C-." . mc/mark-next-like-this)
          ("C-," . mc/unmark-next-like-this)
-         ("C-<mouse-1>" . mc/add-cursor-on-click)))
+         ("C-M-<mouse-1>" . mc/add-cursor-on-click)))
 
 ;; expand region
 (use-package expand-region

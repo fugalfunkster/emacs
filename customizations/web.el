@@ -12,13 +12,8 @@
 
 ;; web mode
 (require 'web-mode)
-(add-to-list 'auto-mode-alist '("\\.jsx$" . web-mode))
 (add-to-list 'auto-mode-alist '("\\.html$" . web-mode))
 (add-to-list 'auto-mode-alist '("\\.hbs$" . web-mode))
-
-;; setup webmode for JSX/React
-(setq web-mode-content-types-alist
-  '(("jsx" . "\\.js[x]?\\'")))
 
 ;; (setq web-mode-markup-indent-offset 2)
 ;; (setq web-mode-css-indent-offset 2)
@@ -36,3 +31,4 @@
 (global-set-key (kbd "C-c w") 'web-mode)
 
 
+(setq web-mode-markup-indent-offset 2)

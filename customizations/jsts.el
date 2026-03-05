@@ -1,25 +1,25 @@
 ;; javascript / web
 
-;;;;
-;; FUGALFUNKSTER
-;;;;
-
 ;; Recognize camelCaseWords as compositions of subwords
 (add-hook 'typescript-mode-hook 'subword-mode)
 (add-hook 'js-mode-hook 'subword-mode)
 (add-hook 'html-mode-hook 'subword-mode)
 (add-hook 'web-mode-hook 'subword-mode)
 
-;; prettier - long may it live
-(require 'prettier-js)
-(add-hook 'typescript-mode-hook 'prettier-js-mode)
-(add-hook 'scss-mode-hook 'prettier-js-mode)
-(add-hook 'css-mode-hook 'prettier-js-mode)
-(add-hook 'js-mode-hook 'prettier-js-mode)
-(setq prettier-js-args '(
-     "--tab-width" "4"
-     "--use-tabs" "true"
-     "--single-quote" "true"))
+;; Legacy prettier-js snippets (kept for reference)
+;; (require 'prettier-js)
+;; (add-hook 'typescript-mode-hook 'prettier-js-mode)
+;; (add-hook 'scss-mode-hook 'prettier-js-mode)
+;; (add-hook 'css-mode-hook 'prettier-js-mode)
+;; (add-hook 'js-mode-hook 'prettier-js-mode)
+;; (setq prettier-js-args '("--tab-width" "2" "--use-tabs" "false" "--single-quote" "true"))
+
+;; help emacs find eslint / tsserver
+(add-hook 'js-mode-hook #'add-node-modules-path)
+(add-hook 'js2-mode-hook #'add-node-modules-path)
+(add-hook 'rjsx-mode-hook #'add-node-modules-path)
+(add-hook 'typescript-mode-hook #'add-node-modules-path)
+(add-hook 'web-mode-hook #'add-node-modules-path)
 
 ;; Indent JS Modes
 (setq js-indent-level 1)
@@ -30,7 +30,7 @@
 	      js2-enter-indents-newline t
 	      js2-indent-on-enter-key t)
 
-(add-to-list 'auto-mode-alist '("\\.js$" . js2-mode))
+(add-to-list 'auto-mode-alist '("\\.js\\'" . js-mode))
 
 (eval-after-load 'js2-mode
   '(define-key js2-mode-map (kbd "RET") 'js2-line-break))
@@ -43,21 +43,71 @@
 
 (global-set-key (kbd "C-c j") 'js2-mode)
 
-;; flycheck hook
+;; Flycheck
 (require 'flycheck)
-(add-hook 'after-init-hook #'global-flycheck-mode)
-(setq-default flycheck-disabled-checkers '(javascript-jscs))
-(setq-default flycheck-disabled-checkers '(sass/scss-sass-lint))
+;;(add-hook 'after-init-hook #'global-flycheck-mode)
+(setq-default flycheck-disabled-checkers '(typescript-tslint javascript-jscs sass/scss-sass-lint))
 (flycheck-add-mode 'javascript-eslint 'web-mode)
+(flycheck-add-mode 'javascript-eslint 'rjsx-mode)
 
-;; typescript
+;; Formatting: use prettier-js on save
+(require 'prettier-js)
+;; cleanup old hooks from prior config (format-all and custom prettier runner)
+(remove-hook 'js-mode-hook #'prettier-js)
+(remove-hook 'js2-mode-hook #'prettier-js)
+(remove-hook 'rjsx-mode-hook #'prettier-js)
+(remove-hook 'typescript-mode-hook #'prettier-js)
+(remove-hook 'before-save-hook #'jsts--prettier-format-buffer)
+(dolist (buf (buffer-list))
+  (with-current-buffer buf
+    (remove-hook 'before-save-hook #'jsts--prettier-format-buffer t)))
+
+(defun jsts--prettier-js-before-save ()
+  "Format the current buffer with prettier-js."
+  (when (derived-mode-p 'js-mode 'js2-mode 'rjsx-mode 'typescript-mode)
+    (prettier-js)))
+
+(defun jsts--setup-prettier-js-on-save ()
+  "Enable prettier-js formatting before save in this buffer."
+  (remove-hook 'before-save-hook #'jsts--prettier-format-buffer t)
+  (add-hook 'before-save-hook #'jsts--prettier-js-before-save nil t))
+
+(defun jsts--maybe-setup-prettier-js-for-current-buffer ()
+  "Enable prettier-js for JS/TS buffers."
+  (when (derived-mode-p 'js-mode 'js2-mode 'rjsx-mode 'typescript-mode)
+    (jsts--setup-prettier-js-on-save)))
+
+(add-hook 'js-mode-hook #'jsts--setup-prettier-js-on-save)
+(add-hook 'js2-mode-hook #'jsts--setup-prettier-js-on-save)
+(add-hook 'rjsx-mode-hook #'jsts--setup-prettier-js-on-save)
+(add-hook 'typescript-mode-hook #'jsts--setup-prettier-js-on-save)
+(add-hook 'after-change-major-mode-hook #'jsts--maybe-setup-prettier-js-for-current-buffer)
+(add-hook 'find-file-hook #'jsts--maybe-setup-prettier-js-for-current-buffer)
+
+;; TypeScript / JavaScript navigation via Tide
 (require 'tide)
+(defun jsts--tide-should-enable-p ()
+  "Return non-nil when a JS/TS project config exists."
+  (when buffer-file-name
+    (let ((root (or (locate-dominating-file buffer-file-name "tsconfig.json")
+                    (locate-dominating-file buffer-file-name "jsconfig.json"))))
+      (and root t))))
+
+(defun jsts--maybe-setup-tide ()
+  "Enable tide when this buffer is part of a JS/TS project."
+  (when (jsts--tide-should-enable-p)
+    (setup-tide-mode)))
+
+(defun jsts--maybe-setup-tide-for-current-buffer ()
+  "Enable tide for JS/TS buffers when appropriate."
+  (when (derived-mode-p 'js-mode 'js2-mode 'rjsx-mode 'typescript-mode)
+    (jsts--maybe-setup-tide)))
 (defun setup-tide-mode ()
   (interactive)
   (tide-setup)
+  (jsts--disable-eldoc)
   (flycheck-mode +1)
   (setq flycheck-check-syntax-automatically '(save mode-enabled))
-  (eldoc-mode +1)
   (company-mode +1)
   (setq tide-jump-to-definition-reuse-window nil)
 )
@@ -77,10 +127,71 @@
 (add-hook 'typescript-mode-hook #'setup-tide-mode)
 (add-hook 'typescript-mode-hook 'prettier-js-mode)
 
-;; should start tide when moving to web-mode
+;; JS/JSX support
+(add-hook 'js2-mode-hook #'jsts--maybe-setup-tide)
+(add-hook 'rjsx-mode-hook #'jsts--maybe-setup-tide)
+(add-hook 'js-mode-hook #'jsts--maybe-setup-tide)
+(add-hook 'after-change-major-mode-hook #'jsts--maybe-setup-tide-for-current-buffer)
+(add-hook 'find-file-hook #'jsts--maybe-setup-tide-for-current-buffer)
+;; Disable eldoc auto popups in JS/TS buffers (can be toggled via C-c i)
+(defvar-local jsts--saved-eldoc-documentation-functions nil
+  "Buffer-local storage for eldoc documentation functions.")
+
+(defun jsts--capture-eldoc-functions ()
+  "Capture eldoc documentation functions for later use."
+  (setq-local jsts--saved-eldoc-documentation-functions
+              (or eldoc-documentation-functions
+                  (and (fboundp 'tide-eldoc-function)
+                       (list #'tide-eldoc-function)))))
+
+(defun jsts--disable-eldoc ()
+  "Disable eldoc in the current buffer."
+  (unless jsts--saved-eldoc-documentation-functions
+    (setq jsts--saved-eldoc-documentation-functions
+          (or eldoc-documentation-functions
+              (and (fboundp 'tide-eldoc-function)
+                   (list #'tide-eldoc-function))
+              (default-value 'eldoc-documentation-functions))))
+  (setq-local eldoc-documentation-functions nil)
+  (eldoc-mode -1))
+
+(defun jsts--eldoc-show-once ()
+  "Show eldoc buffer for symbol at point without enabling auto popups."
+  (setq jsts--saved-eldoc-documentation-functions
+        (or eldoc-documentation-functions
+            (and (fboundp 'tide-eldoc-function)
+                 (list #'tide-eldoc-function))
+            jsts--saved-eldoc-documentation-functions
+            (default-value 'eldoc-documentation-functions)))
+  (when jsts--saved-eldoc-documentation-functions
+    (setq-local eldoc-documentation-functions
+                jsts--saved-eldoc-documentation-functions)
+    (eldoc-mode 1)
+    (when (fboundp 'eldoc-print-current-symbol-info)
+      (eldoc-print-current-symbol-info))
+    (eldoc-doc-buffer)
+    (jsts--disable-eldoc)
+    ;; allow re-showing on subsequent calls
+    (setq jsts--saved-eldoc-documentation-functions
+          (or (and (fboundp 'tide-eldoc-function)
+                   (list #'tide-eldoc-function))
+              jsts--saved-eldoc-documentation-functions))))
+
+(add-hook 'tide-mode-hook #'jsts--capture-eldoc-functions)
+(add-hook 'tide-mode-hook #'jsts--disable-eldoc)
+(add-hook 'js-mode-hook #'jsts--disable-eldoc)
+(add-hook 'js2-mode-hook #'jsts--disable-eldoc)
+(add-hook 'rjsx-mode-hook #'jsts--disable-eldoc)
+(add-hook 'typescript-mode-hook #'jsts--disable-eldoc)
+
+;; should start tide when moving to web-mode (tsx/jsx)
 (add-hook 'web-mode-hook
           (lambda ()
-            (when (string-equal "tsx" (file-name-extension buffer-file-name))
+            (when (and (member (file-name-extension buffer-file-name) '("tsx" "jsx"))
+                       (jsts--tide-should-enable-p))
               (setup-tide-mode))))
 
-
+;; jump to definition / back
+(global-set-key (kbd "C-c d") 'xref-find-definitions)
+;; jump back
+(global-set-key (kbd "C-c b") 'xref-pop-marker-stack)
