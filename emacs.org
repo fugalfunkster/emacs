@@ -3,35 +3,21 @@
 #+DESCRIPTION: Literate Emacs config — source of truth for all .el files
 #+PROPERTY: header-args:emacs-lisp :comments org :mkdirp yes
 
-* Migration Plan
+* About
   :PROPERTIES:
   :VISIBILITY: folded
   :END:
 
-This file is both the plan and the implementation. Sections below become literate
-source blocks that tangle to their respective =.el= files. Build it incrementally:
-fill in prose, add code blocks, tangle, verify against originals.
+Literate Emacs config — all =.el= files are generated from this file via
+=org-babel-tangle=. Edit here, not in the =.el= files directly.
 
-** DONE Phase 0 — Backup
-   - [X] =lisp/chant-dashboard.el= — committed
-   - [X] =lisp/chant-docker.el= — committed
-   - [X] Fix staging area (remove elpa/, .extension/, runtime files)
-   - [X] Push to =https://github.com/fugalfunkster/emacs=
+Tangle with =C-c C-v t= (or =M-x org-babel-tangle=) after making changes.
 
-** DONE Phase 1 — Scaffold emacs.org
-   - [X] Create this file
-   - [X] Fill in Chant section (highest value, most docs to preserve)
-   - [X] Verify tangle output matches originals before replacing files
+To add a new section: create a heading with a PROPERTIES drawer setting
+=:header-args:emacs-lisp: :tangle PATH=, then add src blocks under it.
 
-** DONE Phase 2 — Migrate Chant
-   All four modules migrated and verified. =chant.org= retired.
-
-** DONE Phase 3 — Migrate customizations
-   All customization files migrated and verified.
-
-** DONE Phase 4 — Replace init.el
-   =init.el= now tangled from =* Init= section. =custom-set-variables= moved to
-   =custom.el= so =M-x customize= output doesn't pollute the tangle target.
+=custom.el= holds =M-x customize= output and is intentionally excluded —
+Emacs writes to it directly.
 
 * Packages
   :PROPERTIES:
