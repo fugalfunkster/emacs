@@ -10,10 +10,6 @@
 
 (require 'claude-chant)
 
-;;
-;; Customization
-;;
-
 (defcustom chant-dashboard-poll-interval 3
   "Seconds between tmux pane status polls."
   :type 'integer
@@ -59,10 +55,6 @@ directory to determine the working directory for Claude."
   :type 'string
   :group 'claude-chant)
 
-;;
-;; Faces
-;;
-
 (defface chant-dashboard-header-face
   '((t :height 3.0 :weight bold))
   "Face for the dashboard buffer header text."
@@ -88,11 +80,6 @@ directory to determine the working directory for Claude."
   "Face for the status dot when Claude is active or responding."
   :group 'claude-chant)
 
-;;
-;; State
-;;
-;; Rebuilt on every load so reloading the file resets state cleanly.
-
 (defvar chant-dashboard--pairs nil
   "Alist of (NAME . PINFO) for all known agent pairs.
 PINFO is a plist with keys :window :status :pane-id.")
@@ -108,20 +95,12 @@ PINFO is a plist with keys :window :status :pane-id.")
 (defvar-local chant-dashboard--header-overlay nil
   "Overlay used for the dashboard buffer header.")
 
-;;
-;; Helpers
-;;
-
 (defun chant-dashboard--tmux-window-name (pair-name)
   "Return the tmux window name for PAIR-NAME.
 If PAIR-NAME starts with /, the window name is everything after the /."
   (if (string-prefix-p "/" pair-name)
       (substring pair-name 1)
     pair-name))
-
-;;
-;; tmux layer
-;;
 
 (defun chant-dashboard--tmux (&rest args)
   "Run tmux with ARGS via call-process. Return exit code."
@@ -205,10 +184,6 @@ Returns nil if the window does not exist or the pane id is invalid."
      ((cl-some (lambda (l) (string-match-p "❯" l)) tail)
       'waiting)
      (t 'active))))
-
-;;
-;; Pair lifecycle
-;;
 
 (defun chant-dashboard-new-pair (name)
   "Create a new agent pair named NAME.
@@ -333,10 +308,6 @@ Called once on first `chant-dashboard-open'."
     (setq chant-dashboard--active-pair (caar chant-dashboard--pairs))
     (chant-dashboard--apply-active-pair)))
 
-;;
-;; Rendering
-;;
-
 (defun chant-dashboard--render ()
   "Redraw the dashboard buffer with current pair state."
   (let ((buf (get-buffer-create chant-dashboard-buffer-name)))
@@ -393,10 +364,6 @@ Called once on first `chant-dashboard-open'."
   "Return the pair name at point, or nil."
   (get-text-property (point) 'chant-pair-name))
 
-;;
-;; Navigation commands
-;;
-
 (defun chant-dashboard-next-pair ()
   "Move point to the next pair line."
   (interactive)
@@ -448,10 +415,6 @@ Called once on first `chant-dashboard-open'."
   (interactive)
   (call-interactively #'chant-dashboard-new-pair))
 
-;;
-;; Major mode
-;;
-
 (defvar chant-dashboard-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "n")      #'chant-dashboard-spawn-interactive)
@@ -477,10 +440,6 @@ Called once on first `chant-dashboard-open'."
   (when (fboundp 'hl-line-mode)
     (hl-line-mode -1))
   (add-hook 'kill-buffer-hook #'chant-dashboard--stop-poll nil t))
-
-;;
-;; Polling
-;;
 
 (defun chant-dashboard--notify-waiting (name)
   "Alert the user that agent pair NAME has finished and is waiting for input."
@@ -579,10 +538,6 @@ Also restarts the poll timer if it stopped."
               (insert "  (no pane output)\n"))
             (insert "\n")))))
     (display-buffer buf)))
-
-;;
-;; Layout entry point
-;;
 
 (defun chant-dashboard-open ()
   "Open the Chant dashboard + chant buffer split layout.

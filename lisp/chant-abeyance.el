@@ -11,10 +11,6 @@
 
 (require 'claude-chant)
 
-;;
-;; Customization
-;;
-
 (defcustom chant-abeyance-header-text "Abeyance"
   "Header text shown in the chant buffer when abeyance mode is active."
   :type 'string
@@ -24,11 +20,6 @@
   "Header color when abeyance mode is active (amber)."
   :type 'string
   :group 'claude-chant)
-
-;;
-;; Key translation table
-;; Maps Emacs key descriptions to tmux send-keys names.
-;;
 
 (defvar chant-abeyance--key-table
   '(;; Arrow keys
@@ -74,10 +65,6 @@
     ("C-z"  . "C-z"))
   "Alist mapping Emacs key descriptions to tmux send-keys names.")
 
-;;
-;; Core send function
-;;
-
 (defun chant-abeyance--send (key-desc)
   "Send KEY-DESC to the Claude tmux pane."
   (let ((tmux-key (or (cdr (assoc key-desc chant-abeyance--key-table))
@@ -92,10 +79,6 @@
   (interactive)
   (chant-abeyance--send (key-description (this-command-keys))))
 
-;;
-;; Header management
-;;
-
 (defun chant-abeyance--activate-header ()
   "Switch the chant buffer header to abeyance style."
   (with-current-buffer (get-buffer-create claude-chant-buffer-name)
@@ -109,10 +92,6 @@
     (setq claude-chant--header-mode "Chant")
     (claude-chant--set-header)))
 
-;;
-;; Minor mode
-;;
-
 (defun chant-abeyance--send-return-and-exit ()
   "Send Return to the Claude pane and exit abeyance mode."
   (interactive)
@@ -121,13 +100,9 @@
 
 (defvar chant-abeyance-mode-map
   (let ((map (make-sparse-keymap)))
-    ;; Bind every self-inserting key and all keys to the forwarder.
-    ;; The [t] binding is a catch-all for any key not otherwise bound.
     (define-key map [t] #'chant-abeyance--forward-key)
-    ;; RET sends Enter to the pane then drops back to composition mode.
     (define-key map (kbd "RET") #'chant-abeyance--send-return-and-exit)
     (define-key map (kbd "<return>") #'chant-abeyance--send-return-and-exit)
-    ;; M-a exits abeyance mode. Explicitly bound so [t] doesn't swallow it.
     (define-key map (kbd "M-a") #'abeyance)
     map)
   "Keymap active in `chant-abeyance-mode'.")
@@ -146,10 +121,6 @@ interactions. Toggle with M-x abeyance."
       (chant-abeyance--restore-header)
       (message "Abeyance off — composition mode restored"))))
 
-;;
-;; Public command
-;;
-
 (defun abeyance ()
   "Toggle abeyance mode in the *chant* buffer.
 When active, all keystrokes are forwarded directly to the Claude tmux pane."
@@ -159,7 +130,6 @@ When active, all keystrokes are forwarded directly to the Claude tmux pane."
       (switch-to-buffer buf))
     (chant-abeyance-mode (if chant-abeyance-mode -1 1))))
 
-;; Bind M-a locally in the chant buffer so it's not global.
 (advice-add 'claude-chant-open-buffer :after
             (lambda (&rest _)
               (local-set-key (kbd "M-a") #'abeyance)))

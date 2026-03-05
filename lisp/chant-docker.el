@@ -12,10 +12,6 @@
 
 (require 'chant-dashboard)
 
-;;
-;; Customization
-;;
-
 (defcustom chant-docker-image "chant:latest"
   "Docker image tag to use for agent containers."
   :type 'string
@@ -27,10 +23,6 @@ Must be on PATH. Accepts a single argument: the agent pair name."
   :type 'string
   :group 'claude-chant)
 
-;;
-;; Internal helpers
-;;
-
 (defun chant-docker--image-exists-p ()
   "Return non-nil if `chant-docker-image' is available locally."
   (eq 0 (call-process "docker" nil nil nil
@@ -39,10 +31,6 @@ Must be on PATH. Accepts a single argument: the agent pair name."
 (defun chant-docker--agent-command (name)
   "Return the shell command string that launches a Docker agent named NAME."
   (format "%s %s" chant-docker-agent-script (shell-quote-argument name)))
-
-;;
-;; Docker-aware replacement for chant-dashboard-new-pair
-;;
 
 (defun chant-docker--new-pair (name)
   "Docker-aware version of `chant-dashboard-new-pair'.
@@ -85,10 +73,6 @@ every agent runs inside an isolated Docker sandbox."
       (chant-dashboard-select-pair name))
     (chant-dashboard--render)
     (message "Spawned Docker agent pair: %s (container: chant-%s)" name name)))
-
-;;
-;; Activate the override
-;;
 
 (advice-add 'chant-dashboard-new-pair :override #'chant-docker--new-pair)
 
