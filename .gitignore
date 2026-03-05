@@ -22,3 +22,5 @@ tramp
 transient/
 *conflicted*
 *conflicted copy*
+.dap-breakpoints
+.emacs.d

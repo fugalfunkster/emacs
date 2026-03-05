@@ -3,18 +3,48 @@
 
 (setq mc/cmds-to-run-for-all
       '(
+        exit-recursive-edit
         indent-for-tab-command
+        magit-rebase
+        org-beginning-of-line
+        org-cycle
+        typescript-insert-and-autoconvert-to-template
+        web-mode-whitespaces-show
         ))
 
 (setq mc/cmds-to-run-once
       '(
         ace-window
+        backward-delete-word
+        beginning-of-buffer
         delete-horizontal-space
+        delete-window
+        handle-switch-frame
+        ido-find-file
         ido-switch-buffer
+        ignore
+        js2-jump-to-definition
+        kill-region
+        lsp-mouse-click
+        lsp-ui-doc--handle-mouse-movement
+        magit-next-line
+        magit-previous-line
+        magit-rebase-continue
+        magit-refresh
+        magit-section-toggle
+        mark-whole-buffer
         mouse-buffer-menu
+        mouse-drag-region-rectangle
+        mouse-drag-vertical-line
+        mouse-save-then-kill
         mouse-set-region
         ns-copy-including-secondary
+        org-end-of-line
+        org-self-insert-command
         smex
+        text-scale-adjust
         tide-jump-to-definition
+        toggle-comment-on-line
         typescript-insert-and-indent
+        xref-find-definitions
         ))
