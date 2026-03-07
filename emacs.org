@@ -53,6 +53,9 @@ Keep volatile state off Dropbox to avoid sync churn and conflicted copies.
 (setq smex-save-file (my-local-emacs-file ".smex-items"))
 (setq save-place-file (my-local-emacs-file "places"))
 (setq projectile-known-projects-file (my-local-emacs-file "projectile-bookmarks.eld"))
+(setq package-user-dir (my-local-emacs-file "elpa/"))
+(setq custom-file (my-local-emacs-file "custom.el"))
+(setq forge-database-file (my-local-emacs-file "forge-database.sqlite"))
 
 (setq backup-directory-alist `(("." . ,(my-local-emacs-file "backups"))))
 (setq auto-save-file-name-transforms `((".*" ,(my-local-emacs-file "auto-save/") t)))
@@ -3275,7 +3278,6 @@ Redirect =M-x customize= output to =custom.el= so it doesn't append to this
 tangle target.
 
 #+begin_src emacs-lisp
-(setq custom-file (expand-file-name "custom.el" user-emacs-directory))
 (load custom-file 'noerror)
 #+end_src
 
