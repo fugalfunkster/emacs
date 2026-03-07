@@ -32,3 +32,10 @@
 (setq initial-scratch-message ";; Perfection is achieved not when there is nothing more to add,\n;; but when there is nothing left to take away. - Antoine de Saint-Exupery")
 
 (setq ring-bell-function 'ignore)
+
+;; Org visual tweaks — reduce the "wall of orange headers" effect.
+;; org-hide-leading-stars keeps only the last * visible per heading.
+;; org-indent-mode virtually indents subtrees so nesting is obvious without
+;; relying on heading level alone to convey structure.
+(setq org-hide-leading-stars t)
+(add-hook 'org-mode-hook #'org-indent-mode)

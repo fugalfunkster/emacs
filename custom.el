@@ -11,18 +11,24 @@
  '(mode-require-final-newline nil)
  '(next-line-add-newlines nil)
  '(package-selected-packages
-   '(ace-window add-node-modules-path auto-compile auto-complete
-                back-button base16-theme cider
-                clojure-mode-extra-font-locking company dap-mode
-                dart-server demo-it emmet-mode exec-path-from-shell
-                expand-region flutter flycheck format-all
-                gnu-elpa-keyring-update graphql-mode ido-ubiquitous
-                js-comint js2-refactor lsp-dart magit multi-eshell
-                neotree nodejs-repl ob-elixir ob-typescript
-                org-beautify-theme org-bullets org-tree-slide paredit
-                projectile rainbow-delimiters rainbow-mode rjsx-mode
-                scss-mode smex tagedit tern tide undo-tree use-package
-                vue-mode web-mode))
+   '(add-node-modules-path async auto-compile auto-complete back-button
+                           base16-theme cider
+                           clojure-mode-extra-font-locking company
+                           dart-server dash-functional demo-it
+                           diminish direnv elixir-mode emmet-mode
+                           exec-path-from-shell expand-region flutter
+                           forge format-all graphql-mode hover
+                           ido-ubiquitous js-comint js2-refactor
+                           lsp-dart lsp-ui magit-commit-mark
+                           multi-eshell neotree nodejs-repl
+                           ob-clojurescript ob-elixir ob-typescript
+                           org-beautify-theme org-bullets org-jira
+                           org-tree-slide paredit php-mode prettier-js
+                           projectile rainbow-delimiters rainbow-mode
+                           restart-emacs rjsx-mode scss-mode smex
+                           tagedit tern tide ts-comint undo-tree
+                           use-package-ensure-system-package vue-mode
+                           web-mode))
  '(require-final-newline nil)
  '(safe-local-variable-values
    '((eval let

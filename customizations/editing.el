@@ -54,7 +54,8 @@
    (elixir . t)
    (C . t)
    (org . t)
-   (ditaa . t)))
+   (ditaa . t)
+   (shell . t)))
 
 (require 'ox-md)
 

@@ -5,7 +5,7 @@
 
 | Binding   | Command                           | Description                          |
 |-----------+-----------------------------------+--------------------------------------|
-| =C-c e r= | =mh/tangle-and-restart=           | Tangle =emacs.org= and restart Emacs |
+| =M-x tangle-and-restart= | — | Tangle =emacs.org= and restart Emacs |
 
 * Navigation
 
@@ -39,6 +39,13 @@
 | Binding   | Command       | Description               |
 |-----------+---------------+---------------------------|
 | =C-x o=   | =ace-window=  | Jump to window by letter  |
+
+* Org-mode
+
+| Binding     | Command | Description                          |
+|-------------+---------+--------------------------------------|
+| =C-c C-c=   | —       | Re-align table / execute at point    |
+| =TAB=       | —       | Advance to next cell, re-align table |
 
 * Web / JS / TS
 

@@ -15,6 +15,7 @@
 (setq ido-auto-merge-work-directories-length -1)
 (setq ido-use-virtual-buffers t)
 (ido-ubiquitous-mode 1)
+(setq ido-default-buffer-method 'selected-window)
 
 (global-set-key (kbd "C-x C-b") 'ibuffer)
 

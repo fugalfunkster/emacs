@@ -48,7 +48,7 @@ actively generating or idle. It is a mode indicator, not a blocking condition."
   :type 'integer
   :group 'claude-chant)
 
-(defcustom chant-dashboard-repos-dir "~/repos"
+(defcustom chant-dashboard-repos-dir "~/Code/Repos/"
   "Base directory for path-scoped agents.
 When an agent name starts with /, the portion after / is appended to this
 directory to determine the working directory for Claude."
@@ -78,6 +78,11 @@ directory to determine the working directory for Claude."
 (defface chant-dashboard-dot-active-face
   '((t :foreground "#33AA44"))
   "Face for the status dot when Claude is active or responding."
+  :group 'claude-chant)
+
+(defface chant-dashboard-dot-gathering-face
+  '((t :foreground "#D4A017"))
+  "Face for the status dot when a Bebop session is in gathering mode (pre-first-jam)."
   :group 'claude-chant)
 
 (defvar chant-dashboard--pairs nil
@@ -151,39 +156,52 @@ Returns nil if the window does not exist or the pane id is invalid."
     s))
 
 (defun chant-dashboard--infer-status (pane-id)
-  "Return `blocked', `waiting', or `active' based on the current content of PANE-ID.
-`gone'    means the pane no longer exists (tmux capture-pane failed).
-`blocked' means Claude needs user action (permission prompt or edit acceptance).
-`waiting' means Claude finished its turn and is at the input prompt.
-`active'  means Claude is generating output or thinking."
-  (let* ((raw (chant-dashboard--capture-pane pane-id))
-         (clean (and raw (chant-dashboard--strip-ansi raw)))
-         (lines (and clean
-                     (seq-filter (lambda (l)
-                                   (not (string-empty-p (string-trim l))))
-                                 (split-string clean "\n"))))
-         (tail (and lines (last lines 8))))
-    (cond
-     ;; capture-pane failed — pane/window no longer exists.
-     ((null raw) 'gone)
-     ;; Pane or status bar shows an active-generation indicator → Claude is generating.
-     ;; Checked before blocked-indicators so "accept edits on" + "esc to inter"
-     ;; (auto-accept mode enabled while generating) doesn't trip the blocked check.
-     ((cl-some (lambda (l)
-                 (cl-some (lambda (pat) (string-match-p pat l))
-                          chant-dashboard-active-indicators))
-               tail)
-      'active)
-     ;; Status bar shows a permission or edit-acceptance prompt → needs user action.
-     ((cl-some (lambda (l)
-                 (cl-some (lambda (pat) (string-match-p pat l))
-                          chant-dashboard-blocked-indicators))
-               tail)
-      'blocked)
-     ;; ❯ prompt visible, no active/blocked indicators → waiting for input.
-     ((cl-some (lambda (l) (string-match-p "❯" l)) tail)
-      'waiting)
-     (t 'active))))
+  "Return status symbol for the session owning PANE-ID.
+`gathering' means the session is in Bebop gathering mode (pre-first-jam).
+`gone'      means the pane no longer exists (tmux capture-pane failed).
+`blocked'   means Claude needs user action (permission prompt or edit acceptance).
+`waiting'   means Claude finished its turn and is at the input prompt.
+`active'    means Claude is generating output or thinking."
+  (or
+   ;; Check Bebop gathering state first — no pane read needed.
+   ;; Reverse-look up the session name by matching pane-id in the pairs alist.
+   (let ((name (car (cl-find-if
+                      (lambda (p)
+                        (equal (plist-get (cdr p) :pane-id) pane-id))
+                      chant-dashboard--pairs))))
+     (when (and name
+                (fboundp 'bebop--pair-gathering-p)
+                (bebop--pair-gathering-p name))
+       'gathering))
+   ;; Normal pane-content detection.
+   (let* ((raw (chant-dashboard--capture-pane pane-id))
+          (clean (and raw (chant-dashboard--strip-ansi raw)))
+          (lines (and clean
+                      (seq-filter (lambda (l)
+                                    (not (string-empty-p (string-trim l))))
+                                  (split-string clean "\n"))))
+          (tail (and lines (last lines 8))))
+     (cond
+      ;; capture-pane failed — pane/window no longer exists.
+      ((null raw) 'gone)
+      ;; Pane or status bar shows an active-generation indicator → Claude is generating.
+      ;; Checked before blocked-indicators so "accept edits on" + "esc to inter"
+      ;; (auto-accept mode enabled while generating) doesn't trip the blocked check.
+      ((cl-some (lambda (l)
+                  (cl-some (lambda (pat) (string-match-p pat l))
+                           chant-dashboard-active-indicators))
+                tail)
+       'active)
+      ;; Status bar shows a permission or edit-acceptance prompt → needs user action.
+      ((cl-some (lambda (l)
+                  (cl-some (lambda (pat) (string-match-p pat l))
+                           chant-dashboard-blocked-indicators))
+                tail)
+       'blocked)
+      ;; ❯ prompt visible, no active/blocked indicators → waiting for input.
+      ((cl-some (lambda (l) (string-match-p "❯" l)) tail)
+       'waiting)
+      (t 'active)))))
 
 (defun chant-dashboard-new-pair (name)
   "Create a new agent pair named NAME.
@@ -322,14 +340,6 @@ Called once on first `chant-dashboard-open'."
         (when (overlayp chant-dashboard--header-overlay)
           (delete-overlay chant-dashboard--header-overlay)
           (setq chant-dashboard--header-overlay nil))
-        (let* ((resolved (claude-chant--resolve-font))
-               (header-str (propertize "Mana Pool"
-                                       'face `(:inherit chant-dashboard-header-face
-                                               :foreground "#1a7a45"
-                                               ,@(when resolved (list :family resolved)))
-                                       'read-only t)))
-          (insert header-str)
-          (insert (propertize "\n" 'read-only t)))
         ;; Pair lines
         (if (null chant-dashboard--pairs)
             (insert (propertize "  No agent pairs. Press 'n' to spawn one.\n"
@@ -337,7 +347,7 @@ Called once on first `chant-dashboard-open'."
           (dolist (pair chant-dashboard--pairs)
             (chant-dashboard--insert-pair-line (car pair) (cdr pair))))
         ;; Footer
-        (insert (propertize "\n  n: new  k: kill  RET: select  g: refresh  q: quit\n"
+        (insert (propertize "\n  n: new  k: kill  r: rename  M-↑/↓: move  RET: select  g: refresh  q: quit\n"
                             'face 'shadow))
         ;; Restore point within bounds
         (goto-char (min saved-point (point-max)))))))
@@ -347,7 +357,10 @@ Called once on first `chant-dashboard-open'."
   (let* ((status (plist-get info :status))
          (selected (equal name chant-dashboard--active-pair))
          (line-face (if selected 'chant-dashboard-selected-face 'chant-dashboard-pair-face))
-         (dot-face (if (memq status '(blocked waiting)) 'chant-dashboard-dot-waiting-face 'chant-dashboard-dot-active-face))
+         (dot-face (cond
+                    ((eq status 'gathering) 'chant-dashboard-dot-gathering-face)
+                    ((memq status '(blocked waiting)) 'chant-dashboard-dot-waiting-face)
+                    (t 'chant-dashboard-dot-active-face)))
          (start (point)))
     ;; Insert pieces separately so the dot keeps its color face.
     ;; Propertizing the whole formatted line at once would overwrite
@@ -410,16 +423,88 @@ Called once on first `chant-dashboard-open'."
             (chant-dashboard-kill-pair name)
           (message "Cancelled (name mismatch)."))))))
 
-(defun chant-dashboard-spawn-interactive ()
-  "Prompt for a name and spawn a new agent pair."
+(defun chant-dashboard--move-pair (name direction)
+  "Move pair NAME one step in DIRECTION (:up or :down) in `chant-dashboard--pairs'."
+  (let ((idx (cl-position name chant-dashboard--pairs :key #'car :test #'equal)))
+    (when idx
+      (let* ((len      (length chant-dashboard--pairs))
+             (swap-idx (if (eq direction :up) (1- idx) (1+ idx))))
+        (when (and (>= swap-idx 0) (< swap-idx len))
+          (cl-rotatef (nth idx chant-dashboard--pairs)
+                      (nth swap-idx chant-dashboard--pairs))
+          t)))))
+
+(defun chant-dashboard--goto-pair (name)
+  "Move point to the line for pair NAME in the dashboard buffer."
+  (goto-char (point-min))
+  (while (and (< (point) (point-max))
+              (not (equal (get-text-property (point) 'chant-pair-name) name)))
+    (forward-line 1)))
+
+(defun chant-dashboard-move-pair-up ()
+  "Move the pair under point one position up in the dashboard."
   (interactive)
-  (call-interactively #'chant-dashboard-new-pair))
+  (let ((name (chant-dashboard--pair-at-point)))
+    (if (null name)
+        (message "No pair at point")
+      (when (chant-dashboard--move-pair name :up)
+        (chant-dashboard--render)
+        (chant-dashboard--goto-pair name)))))
+
+(defun chant-dashboard-move-pair-down ()
+  "Move the pair under point one position down in the dashboard."
+  (interactive)
+  (let ((name (chant-dashboard--pair-at-point)))
+    (if (null name)
+        (message "No pair at point")
+      (when (chant-dashboard--move-pair name :down)
+        (chant-dashboard--render)
+        (chant-dashboard--goto-pair name)))))
+
+(defun chant-dashboard-rename-at-point ()
+  "Rename the session under point."
+  (interactive)
+  (let ((name (chant-dashboard--pair-at-point)))
+    (if (null name)
+        (message "No pair at point")
+      (let ((new-name (read-string (format "Rename \"%s\" to: " name))))
+        (when (string-empty-p (string-trim new-name))
+          (user-error "Name cannot be empty"))
+        (if (fboundp 'bebop-rename-session)
+            (bebop-rename-session name new-name)
+          ;; Plain chant pair: update alist and tmux window only
+          (when (assoc new-name chant-dashboard--pairs)
+            (user-error "A session named \"%s\" already exists" new-name))
+          (let* ((old-window (format "%s:%s" chant-dashboard-session name))
+                 (new-window (format "%s:%s" chant-dashboard-session new-name))
+                 (pair (assoc name chant-dashboard--pairs)))
+            (chant-dashboard--tmux "rename-window" "-t" old-window new-name)
+            (when pair
+              (setcar pair new-name)
+              (plist-put (cdr pair) :window new-window))
+            (when (equal chant-dashboard--active-pair name)
+              (setq chant-dashboard--active-pair new-name)
+              (setq claude-chant-target new-window))
+            (chant-dashboard--render)
+            (message "Renamed \"%s\" → \"%s\"" name new-name)))))))
+
+(defun chant-dashboard-spawn-interactive ()
+  "Prompt for a name and spawn a new agent pair.
+Delegates to `bebop-new-session' (3-step flow) when Bebop is loaded,
+falling back to `chant-dashboard-new-pair' otherwise."
+  (interactive)
+  (if (fboundp 'bebop-new-session)
+      (call-interactively #'bebop-new-session)
+    (call-interactively #'chant-dashboard-new-pair)))
 
 (defvar chant-dashboard-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "n")      #'chant-dashboard-spawn-interactive)
-    (define-key map (kbd "k")      #'chant-dashboard-kill-at-point)
-    (define-key map (kbd "RET")    #'chant-dashboard-activate-at-point)
+    (define-key map (kbd "n")        #'chant-dashboard-spawn-interactive)
+    (define-key map (kbd "k")        #'chant-dashboard-kill-at-point)
+    (define-key map (kbd "r")        #'chant-dashboard-rename-at-point)
+    (define-key map (kbd "RET")      #'chant-dashboard-activate-at-point)
+    (define-key map (kbd "M-<up>")   #'chant-dashboard-move-pair-up)
+    (define-key map (kbd "M-<down>") #'chant-dashboard-move-pair-down)
     (define-key map (kbd "<down>") #'chant-dashboard-next-pair)
     (define-key map (kbd "<up>")   #'chant-dashboard-prev-pair)
     (define-key map (kbd "j")      #'chant-dashboard-next-pair)

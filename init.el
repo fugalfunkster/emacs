@@ -141,20 +141,20 @@
   (define-key tide-mode-map (kbd "M-.") #'mh/xref-toggle-definitions)
   (define-key tide-mode-map (kbd "C-d") #'mh/xref-toggle-definitions))
 
-(defun mh/tangle-and-restart ()
+(defun tangle-and-restart ()
   "Tangle emacs.org and restart Emacs."
   (interactive)
   (org-babel-tangle-file (expand-file-name "emacs.org" user-emacs-directory))
   (restart-emacs))
 
-(global-set-key (kbd "C-c e r") #'mh/tangle-and-restart)
-
 (require 'claude-chant)
 (require 'chant-abeyance)
 (require 'chant-dashboard)
 ;; (require 'chant-docker)
+(require 'bebop-session)
+(require 'bebop-cue)
+(require 'bebop-frame)
 
-(load "local.el")
 (load "navigation.el")
 (load "ui.el")
 (load "editing.el")
@@ -162,7 +162,6 @@
 (load "elisp-editing.el")
 (load "clojure.el")
 (load "jsts.el")
-(load "elixir.el")
 (load "dart.el")
 (load "vue.el")
 (load "web.el")
