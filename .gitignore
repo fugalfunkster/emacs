@@ -1,26 +1,40 @@
-*~$
+# OS/editor junk
 .DS_Store
-.recentf
-.smex-items
-auto-save-list
-backups
-cider-history
-eshell
-ido.last
-places
-projectile-bookmarks.eld
-projectile.cache
-tutorial
-url
-customizations/local.el
-network-security.data
-elpa/
-.extension/
-.lsp-session-v1
-ido.last~
-tramp
-transient/
+*~
 *conflicted*
 *conflicted copy*
+
+# Emacs state/caches
+auto-save-list/
+backups/
+eshell/
+url/
+transient/
+request/
+var/
+.cache/
+.extension/
+elpa/
+cider-history
+projectile.cache
+tutorial
+
+# Session/state files
+.recentf*
+.smex-items*
+ido.last*
+projectile-bookmarks*.eld
+.lsp-session-v1
+places
+tramp
+network-security.data
 .dap-breakpoints
+
+# Databases
+forge-database*.sqlite
+
+# Local overrides
+customizations/local.el
+
+# Misc
 .emacs.d
