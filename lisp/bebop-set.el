@@ -1,4 +1,4 @@
-;;; bebop-set.el --- Sets, shelving, and the setlist dashboard tree -*- lexical-binding: t; -*-
+;;; bebop-set.el --- Sets and the setlist dashboard tree -*- lexical-binding: t; -*-
 
 (require 'bebop-core)
 (require 'bebop-dashboard)
@@ -11,7 +11,7 @@
 (declare-function bebop--backline-ports "bebop-backline")
 
 (defcustom bebop-set-state-file (locate-user-emacs-file "bebop-state.json")
-  "File persisting set declarations, set membership, and shelved flags."
+  "File persisting set declarations, set membership, and exile proposals."
   :type 'file
   :group 'bebop)
 
@@ -22,7 +22,7 @@ in later phases; a set is at minimum a name.")
 
 (defvar bebop--session-meta nil
   "Alist of (SESSION-NAME . PLIST) persisting per-session choices.
-PLIST keys: :set (string or nil), :shelved (boolean).
+PLIST keys: :set (string or nil).
 Keyed by name, independent of liveness — applies equally to running
 sessions and on-deck artifacts.")
 
@@ -45,8 +45,6 @@ consumed interactively. Persisted with the other choices.")
       (let ((entry (make-hash-table :test #'equal)))
         (when-let ((s (plist-get (cdr cell) :set)))
           (puthash "set" s entry))
-        (when (plist-get (cdr cell) :shelved)
-          (puthash "shelved" t entry))
         (when (> (hash-table-count entry) 0)
           (puthash (car cell) entry sessions))))
     (puthash "version" 2 doc)
@@ -79,11 +77,8 @@ format was written by a retired implementation and never read)."
             (when-let ((sessions (gethash "sessions" doc)))
               (maphash (lambda (name entry)
                          (push (cons name
-                                     (append
-                                      (when-let ((s (gethash "set" entry)))
-                                        (list :set s))
-                                      (when (eq (gethash "shelved" entry) t)
-                                        (list :shelved t))))
+                                     (when-let ((s (gethash "set" entry)))
+                                       (list :set s)))
                                bebop--session-meta))
                        sessions))
             (setq bebop--sets (nreverse bebop--sets)
@@ -100,10 +95,6 @@ format was written by a retired implementation and never read)."
 (defun bebop-set--session-set (name)
   "Return the set NAME belongs to, or nil if ungrouped."
   (plist-get (bebop-set--session-meta name) :set))
-
-(defun bebop-set--session-shelved-p (name)
-  "Return non-nil if session NAME is shelved."
-  (plist-get (bebop-set--session-meta name) :shelved))
 
 (defun bebop-set--update-session-meta (name &rest props)
   "Merge PROPS into session NAME's choice plist and persist."
@@ -164,59 +155,6 @@ Undeclared SET names are declared on the fly."
     (bebop--render)
     (message "%s → %s" session (or set "Ungrouped"))))
 
-(defun bebop-shelve (name)
-  "Shelve session NAME: hide it from the default dashboard view."
-  (bebop-set--update-session-meta name :shelved t)
-  (bebop--render))
-
-(defun bebop-unshelve (name)
-  "Unshelve session NAME."
-  (bebop-set--update-session-meta name :shelved nil)
-  (bebop--render))
-
-(defun bebop-shelve-toggle-at-point ()
-  "Toggle the shelved flag of the entry at point."
-  (interactive)
-  (let ((name (bebop--entry-name-at-point)))
-    (unless name
-      (user-error "No session at point"))
-    (if (bebop-set--session-shelved-p name)
-        (progn (bebop-unshelve name) (message "%s unshelved" name))
-      (bebop-shelve name)
-      (message "%s shelved" name))))
-
-(defun bebop-set--set-at-point ()
-  "Return the set name of the section at point, or of the entry at point."
-  (or (when-let ((section (magit-current-section)))
-        (let ((s section))
-          (catch 'found
-            (while s
-              (when (eq (oref s type) 'bebop-set)
-                (throw 'found (oref s value)))
-              (setq s (oref s parent))))))
-      (when-let ((name (bebop--entry-name-at-point)))
-        (bebop-set--session-set name))))
-
-(defun bebop-shelve-set-at-point ()
-  "Shelve every session in the set at point (batch-flag).
-If all of them are already shelved, unshelve them all instead."
-  (interactive)
-  (let ((set (bebop-set--set-at-point)))
-    (unless set
-      (user-error "No set at point"))
-    (let* ((members (seq-filter (lambda (r) (equal (plist-get r :set) set))
-                                (bebop-set--rows)))
-           (names (mapcar (lambda (r) (plist-get r :name)) members))
-           (all-shelved (and names
-                             (seq-every-p #'bebop-set--session-shelved-p names))))
-      (unless names
-        (user-error "Set %s has no sessions" set))
-      (dolist (n names)
-        (bebop-set--update-session-meta n :shelved (not all-shelved)))
-      (bebop--render)
-      (message "Set %s: %s (%d sessions)"
-               set (if all-shelved "unshelved" "shelved") (length names)))))
-
 (defun bebop-set--row (name live-info)
   "Build a row plist for NAME. LIVE-INFO is the live-session plist or nil."
   (let* ((sinfo (bebop--session-info name))
@@ -235,8 +173,7 @@ If all of them are already shelved, unshelve them all instead."
           :live live-info
           :chart chart
           :venue venue
-          :set (bebop-set--session-set name)
-          :shelved (bebop-set--session-shelved-p name))))
+          :set (bebop-set--session-set name))))
 
 (defun bebop-set--rows ()
   "Return rows for all running sessions and on-deck artifacts."
@@ -247,8 +184,7 @@ If all of them are already shelved, unshelve them all instead."
            (bebop--on-deck-names))))
 
 (defun bebop-set--group (rows)
-  "Group ROWS into (:sets ALIST :ungrouped ROWS :shelf ALIST).
-A set lands on the shelf when it has members and every one is shelved.
+  "Group ROWS into (:live-ungrouped ROWS :sets ALIST :ungrouped ROWS).
 Declared-but-empty sets render in :sets with no children."
   (let ((by-set (make-hash-table :test #'equal))
         ungrouped)
@@ -257,13 +193,9 @@ Declared-but-empty sets render in :sets with no children."
         (if set
             (puthash set (cons r (gethash set by-set)) by-set)
           (push r ungrouped))))
-    (let (sets shelf)
+    (let (sets)
       (dolist (name (bebop-set--names))
-        (let ((members (nreverse (gethash name by-set))))
-          (if (and members
-                   (seq-every-p (lambda (r) (plist-get r :shelved)) members))
-              (push (cons name members) shelf)
-            (push (cons name members) sets))))
+        (push (cons name (nreverse (gethash name by-set))) sets))
       ;; Sets sort by ticket number descending (newest epics first);
       ;; ticketless sets follow, alphabetical.
       (let ((num (lambda (g)
@@ -282,17 +214,15 @@ Declared-but-empty sets render in :sets with no children."
              ;; than disappearing into the collapsed Ungrouped section.
              ;; The strip is plain-alphabetical.
              (live-un (sort (seq-filter
-                             (lambda (r) (and (plist-get r :live)
-                                              (not (plist-get r :shelved))))
+                             (lambda (r) (plist-get r :live))
                              sorted-un)
                             (lambda (a b)
                               (string< (plist-get a :name)
                                        (plist-get b :name))))))
         (list :live-ungrouped live-un
               :sets sets
-              :ungrouped (seq-remove (lambda (r) (memq r live-un)) sorted-un)
-              :shelf (sort (nreverse shelf)
-                           (lambda (a b) (string< (car a) (car b)))))))))
+              :ungrouped (seq-remove (lambda (r) (memq r live-un))
+                                     sorted-un))))))
 
 (defun bebop-set--sort-ungrouped (rows)
   "Sort ungrouped ROWS: live first, ticket-slug clusters together,
@@ -364,12 +294,10 @@ Dot at column 0, chart glyph at 2, venue glyph at 4, text begins at 7."
   (if (null row)
       (bebop-set--stop 7)
     (let* ((live (plist-get row :live))
-           (shelved (plist-get row :shelved))
-           (dot (cond
-                 (live (bebop-set--prop "●" (bebop-set--dot-face
-                                             (plist-get live :status))))
-                 (shelved (bebop-set--prop "○" '(:inherit shadow :slant italic)))
-                 (t (bebop-set--prop "○" 'shadow))))
+           (dot (if live
+                    (bebop-set--prop "●" (bebop-set--dot-face
+                                          (plist-get live :status)))
+                  (bebop-set--prop "○" 'shadow)))
            (chart (when (plist-get row :chart)
                     (bebop-set--prop "⊞" 'shadow)))
            (venue (when (plist-get row :venue)
@@ -391,9 +319,7 @@ column off screen; over-long names simply overflow their cell."
   "Insert one session line for ROW with name column WIDTH and INDENT."
   (let* ((name (plist-get row :name))
          (live (plist-get row :live))
-         (shelved (plist-get row :shelved))
          (face (cond
-                (shelved '(:inherit shadow :slant italic))
                 ((and live (equal name bebop--active-session))
                  'bebop-selected-face)
                 (live 'bebop-session-face)
@@ -418,13 +344,13 @@ column off screen; over-long names simply overflow their cell."
 
 (defun bebop-set--heading-counts (rows width)
   "Return iconographic, column-aligned rollup counts for a set heading.
-Four fixed columns after the name field: the state icon repeated once
+Three fixed columns after the name field: the state icon repeated once
 per session — ●● for two active (dot-active face), ● waiting
-(dot-waiting face), ○○○ for three on deck, ○ shelved (italic); no
-numerals. Columns sit at absolute stops so every set heading tables
-up regardless of name length; a crowded cell overflows its stop with
-a single space keeping it separated from the next. Counts are
-disjoint — a waiting session is not also counted as running."
+(dot-waiting face), ○○○ for three on deck; no numerals. Columns sit
+at absolute stops so every set heading tables up regardless of name
+length; a crowded cell overflows its stop with a single space keeping
+it separated from the next. Counts are disjoint — a waiting session
+is not also counted as running."
   (if (null rows)
       (concat (bebop-set--stop (+ 7 width))
               (bebop-set--prop "(empty)" 'shadow))
@@ -436,17 +362,13 @@ disjoint — a waiting session is not also counted as running."
                      rows))
            (active (- (seq-count (lambda (r) (plist-get r :live)) rows)
                       waiting))
-           (shelved (seq-count (lambda (r) (plist-get r :shelved)) rows))
-           (deck (seq-count (lambda (r) (and (not (plist-get r :live))
-                                             (not (plist-get r :shelved))))
-                            rows))
+           (deck (seq-count (lambda (r) (not (plist-get r :live))) rows))
            (base (+ 7 width))
            (col 0)
            (parts nil))
       (dolist (cell (list (list active ?● 'bebop-dot-active-face)
                           (list waiting ?● 'bebop-dot-waiting-face)
-                          (list deck ?○ 'shadow)
-                          (list shelved ?○ '(:inherit shadow :slant italic))))
+                          (list deck ?○ 'shadow)))
         (push " " parts)
         (push (bebop-set--stop (+ base (* col 6))) parts)
         (when (> (car cell) 0)
@@ -457,26 +379,14 @@ disjoint — a waiting session is not also counted as running."
       (apply #'concat (nreverse parts)))))
 
 (defun bebop-set--counts (rows)
-  "Return the rollup annotation string for a set's ROWS."
+  "Return the textual rollup annotation for the Ungrouped heading."
   (if (null rows)
       "(empty)"
     (let* ((running (seq-count (lambda (r) (plist-get r :live)) rows))
-           (waiting (seq-count (lambda (r)
-                                 (and (plist-get r :live)
-                                      (memq (plist-get (plist-get r :live) :status)
-                                            '(waiting blocked))))
-                               rows))
-           (shelved (seq-count (lambda (r) (plist-get r :shelved)) rows))
-           ;; Count directly — a row can be live AND shelved, so
-           ;; total − running − shelved would double-subtract it.
-           (deck (seq-count (lambda (r) (and (not (plist-get r :live))
-                                             (not (plist-get r :shelved))))
-                            rows))
+           (deck (seq-count (lambda (r) (not (plist-get r :live))) rows))
            (pieces (delq nil
                          (list (when (> running 0) (format "%d running" running))
-                               (when (> waiting 0) (format "%d waiting" waiting))
-                               (when (> deck 0) (format "%d on deck" deck))
-                               (when (> shelved 0) (format "%d shelved" shelved))))))
+                               (when (> deck 0) (format "%d on deck" deck))))))
       (mapconcat #'identity pieces " · "))))
 
 (defun bebop-set--insert-set (group width &optional hide)
@@ -487,8 +397,6 @@ disjoint — a waiting session is not also counted as running."
          ;; exactly like the set renders as the heading's gutter.
          (own (seq-find (lambda (r) (equal (plist-get r :name) set)) rows))
          (children (if own (remq own rows) rows))
-         (unshelved (seq-remove (lambda (r) (plist-get r :shelved)) children))
-         (shelved (seq-filter (lambda (r) (plist-get r :shelved)) children))
          (start (point)))
     (magit-insert-section (bebop-set set hide)
       (magit-insert-heading
@@ -501,20 +409,12 @@ disjoint — a waiting session is not also counted as running."
          (if (plist-get own :live)
              (list 'bebop-session-name set)
            (list 'bebop-on-deck-name set))))
-      (dolist (r unshelved)
-        (bebop-set--insert-row r width "    "))
-      (when shelved
-        (magit-insert-section (bebop-shelved (concat set "/shelved") t)
-          (magit-insert-heading
-            (concat (bebop-set--stop 7) "    "
-                    (bebop-set--prop (format "… %d shelved" (length shelved))
-                                     '(:inherit shadow :slant italic))))
-          (dolist (r shelved)
-            (bebop-set--insert-row r width "    ")))))))
+      (dolist (r children)
+        (bebop-set--insert-row r width "    ")))))
 
 (defun bebop-set--render-body ()
   "Insert the setlist tree — the dashboard body.
-Order: live ungrouped sessions (flat strip), sets, Ungrouped, Shelf."
+Order: live ungrouped sessions (flat strip), sets, Ungrouped."
   (let* ((rows (bebop-set--rows))
          (groups (bebop-set--group rows))
          (width (bebop-set--name-width rows)))
@@ -538,29 +438,16 @@ Order: live ungrouped sessions (flat strip), sets, Ungrouped, Shelf."
                     (bebop-set--prop (format " (%s)" (bebop-set--counts un))
                                      'shadow)))
           (dolist (r un)
-            (bebop-set--insert-row r width "    "))))
-      (when-let ((shelf (plist-get groups :shelf)))
-        (insert "\n")
-        (magit-insert-section (bebop-shelf "Shelf" t)
-          (magit-insert-heading
-            (concat (bebop-set--stop 7)
-                    (bebop-set--prop "Shelf" '(:inherit shadow :weight bold))
-                    (bebop-set--prop (format " (%d sets)" (length shelf))
-                                     'shadow)))
-          (dolist (g shelf)
-            (bebop-set--insert-set g width t)))))))
+            (bebop-set--insert-row r width "    ")))))))
 
 (setq bebop--render-body-function #'bebop-set--render-body)
 
 (setq bebop-dashboard-footer-lines
       '("n: new  N: new set  m: move to set  RET: select  TAB: fold"
-        "k: kill  e: exile  a: archive  r: resume  C/D: chart  V/W: venue"
-        "z: shelve  Z: shelve set  g: refresh  q: quit"))
+        "k: kill  e: exile  a: archive  r: resume  C/D: chart  V/W: venue  g: refresh  q: quit"))
 
 (define-key bebop-dashboard-mode-map (kbd "N") #'bebop-new-set)
 (define-key bebop-dashboard-mode-map (kbd "m") #'bebop-assign-set)
-(define-key bebop-dashboard-mode-map (kbd "z") #'bebop-shelve-toggle-at-point)
-(define-key bebop-dashboard-mode-map (kbd "Z") #'bebop-shelve-set-at-point)
 
 (bebop-set--load)
 

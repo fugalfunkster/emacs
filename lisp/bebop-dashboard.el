@@ -389,7 +389,7 @@ list when they add keybindings.")
         ;; post-render magit-section-show/hide walk. Without this pass,
         ;; slot-hidden sections render expanded and the first TAB merely
         ;; syncs the slot (the double-TAB symptom), and hide defaults
-        ;; like the collapsed Shelf never took effect visually.
+        ;; like the collapsed Ungrouped never took effect visually.
         (dolist (child (oref magit-root-section children))
           (if (oref child hidden)
               (magit-section-hide child)

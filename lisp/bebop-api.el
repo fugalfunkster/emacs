@@ -9,7 +9,7 @@
 
 (defun bebop-session-info (name)
   "Return a JSON description of session NAME for agent orientation.
-Fields: session, set, shelved, chart, venue, ticket, siblings
+Fields: session, set, chart, venue, ticket, siblings
 \(names sharing the set), backline (live/busy/command/ports, or null)."
   (let* ((row (bebop-set--row name (cdr (assoc name bebop--live-sessions))))
          (set (plist-get row :set))
@@ -36,7 +36,6 @@ Fields: session, set, shelved, chart, venue, ticket, siblings
     (json-serialize
      (list :session name
            :set (or set :null)
-           :shelved (if (plist-get row :shelved) t :false)
            :chart (or (plist-get row :chart) :null)
            :venue (or venue :null)
            :ticket (or (bebop--on-deck-ticket-slug name) :null)
@@ -56,7 +55,6 @@ Fields: session, set, shelved, chart, venue, ticket, siblings
                                    (or (plist-get live :status) 'unknown))
                                 :null)
                       :set (or (plist-get r :set) :null)
-                      :shelved (if (plist-get r :shelved) t :false)
                       :chart (or (plist-get r :chart) :null)
                       :venue (or (plist-get r :venue) :null))))
             (bebop-set--rows)))))
