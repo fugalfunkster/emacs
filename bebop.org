@@ -1527,7 +1527,15 @@ list when they add keybindings.")
             (saved-name (or (get-text-property (point) 'bebop-session-name)
                             (get-text-property (point) 'bebop-on-deck-name))))
         (erase-buffer)
-        (funcall bebop--render-body-function)
+        ;; Inherit each section's fold state from the previous render's
+        ;; tree (magit's oldroot mechanism). With the default
+        ;; magit-section-preserve-visibility=t, only the toggle cache
+        ;; preserves folds — any state not in the cache resets to
+        ;; expanded. Binding it nil makes preservation structural: the
+        ;; on-screen state carries over exactly; hide arguments apply
+        ;; only to sections that did not exist before.
+        (let ((magit-section-preserve-visibility nil))
+          (funcall bebop--render-body-function))
         ;; Footer. font-lock is active in magit-section buffers and strips
         ;; plain face properties — set font-lock-face as well.
         (insert "\n")
