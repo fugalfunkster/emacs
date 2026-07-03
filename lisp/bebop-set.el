@@ -408,6 +408,42 @@ column off screen; over-long names simply overflow their cell."
            (list 'bebop-session-name name)
          (list 'bebop-on-deck-name name))))))
 
+(defun bebop-set--heading-counts (rows width)
+  "Return iconographic, column-aligned rollup counts for a set heading.
+Four fixed columns after the name field, each shown only when nonzero:
+● active (dot-active face), ● waiting (dot-waiting face), ○ on deck,
+○ shelved (italic). Columns sit at absolute stops so every set heading
+tables up regardless of name length. Counts are disjoint — a waiting
+session is not also counted as running."
+  (if (null rows)
+      (concat (bebop-set--stop (+ 7 width))
+              (bebop-set--prop "(empty)" 'shadow))
+    (let* ((waiting (seq-count
+                     (lambda (r)
+                       (and (plist-get r :live)
+                            (memq (plist-get (plist-get r :live) :status)
+                                  '(waiting blocked))))
+                     rows))
+           (active (- (seq-count (lambda (r) (plist-get r :live)) rows)
+                      waiting))
+           (shelved (seq-count (lambda (r) (plist-get r :shelved)) rows))
+           (deck (seq-count (lambda (r) (and (not (plist-get r :live))
+                                             (not (plist-get r :shelved))))
+                            rows))
+           (base (+ 7 width))
+           (col 0)
+           (parts nil))
+      (dolist (cell (list (list active "●" 'bebop-dot-active-face)
+                          (list waiting "●" 'bebop-dot-waiting-face)
+                          (list deck "○" 'shadow)
+                          (list shelved "○" '(:inherit shadow :slant italic))))
+        (push (bebop-set--stop (+ base (* col 6))) parts)
+        (when (> (car cell) 0)
+          (push (bebop-set--prop (cadr cell) (nth 2 cell)) parts)
+          (push (bebop-set--prop (format " %d" (car cell)) 'shadow) parts))
+        (setq col (1+ col)))
+      (apply #'concat (nreverse parts)))))
+
 (defun bebop-set--counts (rows)
   "Return the rollup annotation string for a set's ROWS."
   (if (null rows)
@@ -446,8 +482,7 @@ column off screen; over-long names simply overflow their cell."
       (magit-insert-heading
         (concat (bebop-set--gutter own)
                 (bebop-set--prop set '(:weight bold))
-                (make-string (max 2 (- width (length set))) ?\s)
-                (bebop-set--prop (bebop-set--counts rows) 'shadow)))
+                (bebop-set--heading-counts rows width)))
       (when own
         (add-text-properties
          start (point)
