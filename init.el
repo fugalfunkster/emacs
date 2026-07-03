@@ -2,6 +2,21 @@
 ;; Packages
 ;;;;
 
+;; Suppress GC and remote-file handlers during startup for faster load.
+;; Both are restored after init completes.
+(setq gc-cons-threshold most-positive-fixnum)
+(defvar my--saved-file-name-handler-alist file-name-handler-alist)
+(setq file-name-handler-alist nil)
+(add-hook 'emacs-startup-hook
+          (lambda ()
+            (setq gc-cons-threshold (* 100 1024 1024))
+            (setq file-name-handler-alist my--saved-file-name-handler-alist)))
+
+(defconst my-local-emacs-dir (expand-file-name "~/.emacs.d-local/"))
+(unless (file-directory-p my-local-emacs-dir)
+  (make-directory my-local-emacs-dir t))
+(setq package-user-dir (expand-file-name "elpa/" my-local-emacs-dir))
+
 (require 'package)
 (setq package-archives
       '(("gnu" . "https://elpa.gnu.org/packages/")
@@ -21,7 +36,6 @@
     clojure-mode
     clojure-mode-extra-font-locking
     cider
-    ido-ubiquitous
     smex
     projectile
     rainbow-delimiters
@@ -33,23 +47,20 @@
     ob-typescript
     ob-elixir
     js2-mode
-    js2-refactor
-    js-comint
-    nodejs-repl
-    tern
     web-mode
     typescript-mode
-    tide
     lsp-mode
     lsp-dart
+    lsp-treemacs
     lsp-ui
     hover
     flycheck
+    flycheck-eglot
+    keyfreq
     yasnippet
     auto-complete
     company
     direnv
-    multi-eshell
     neotree
     avy
     ace-window
@@ -57,7 +68,8 @@
     expand-region
     multiple-cursors
     undo-tree
-    restart-emacs))
+    restart-emacs
+    ox-pandoc))
 
 (dolist (p my-packages)
   (when (not (package-installed-p p))
@@ -74,37 +86,18 @@
         (xref-show-definitions-function #'xref-show-definitions-buffer))
     (call-interactively #'xref-find-definitions)))
 
-(defun mh/tide-doc-toggle-buffer ()
-  "Toggle a Tide documentation buffer for symbol at point."
-  (interactive)
-  (let* ((buf (get-buffer "*tide-doc*"))
-         (win (and buf (get-buffer-window buf))))
-    (if win
-        (quit-window nil win)
-      (when (and (bound-and-true-p tide-mode)
-                 (fboundp 'tide-eldoc-function))
-        (let ((doc (tide-eldoc-function)))
-          (when (and doc (stringp doc) (not (string-empty-p doc)))
-            (with-current-buffer (get-buffer-create "*tide-doc*")
-              (setq buffer-read-only nil)
-              (erase-buffer)
-              (insert doc)
-              (setq buffer-read-only t))
-            (display-buffer (get-buffer "*tide-doc*"))))))))
-
 (defun mh/eldoc-toggle-buffer ()
   "Toggle the documentation buffer for symbol at point."
   (interactive)
-  (if (bound-and-true-p tide-mode)
-      (mh/tide-doc-toggle-buffer)
-    (let* ((buf (eldoc-doc-buffer))
-           (win (and buf (get-buffer-window buf))))
-      (if win
-          (quit-window nil win)
-        (progn
-          (unless (bound-and-true-p eldoc-mode)
-            (eldoc-mode 1))
-          (eldoc-doc-buffer))))))
+  (let* ((buf (get-buffer "*lsp-help*"))
+         (win (and buf (get-buffer-window buf))))
+    (cond
+     (win (quit-window nil win))
+     ((bound-and-true-p lsp-mode)
+      (lsp-describe-thing-at-point))
+     (t
+      (unless (bound-and-true-p eldoc-mode) (eldoc-mode 1))
+      (eldoc-doc-buffer)))))
 
 (global-set-key (kbd "C-c C-.") #'mh/xref-find-definitions-buffer)
 
@@ -137,35 +130,78 @@
 (global-set-key (kbd "C-d") #'mh/xref-toggle-definitions)
 (global-set-key (kbd "M-.") #'mh/xref-toggle-definitions)
 
-(with-eval-after-load 'tide
-  (define-key tide-mode-map (kbd "M-.") #'mh/xref-toggle-definitions)
-  (define-key tide-mode-map (kbd "C-d") #'mh/xref-toggle-definitions))
+(with-eval-after-load 'lsp-mode
+  (define-key lsp-mode-map (kbd "M-.") #'mh/xref-toggle-definitions)
+  (define-key lsp-mode-map (kbd "C-d") #'mh/xref-toggle-definitions))
 
 (defun tangle-and-restart ()
-  "Tangle emacs.org and restart Emacs."
+  "Tangle all .org files in user-emacs-directory and restart Emacs.
+Deletes stale .elc files in lisp/ before tangling so the freshly
+tangled .el files are always loaded on restart."
   (interactive)
-  (org-babel-tangle-file (expand-file-name "emacs.org" user-emacs-directory))
+  (dolist (elc (directory-files
+                (expand-file-name "lisp/" user-emacs-directory) t "\\.elc$"))
+    (delete-file elc))
+  (dolist (file (directory-files user-emacs-directory t "\\.org$"))
+    (org-babel-tangle-file file))
   (restart-emacs))
 
-(require 'claude-chant)
-(require 'chant-abeyance)
-(require 'chant-dashboard)
-;; (require 'chant-docker)
+(defun tangle-and-reload ()
+  "Tangle all .org files and hot-reload everything without restarting.
+Deletes stale .elc files first so the freshly tangled .el files are loaded.
+Reloads both customizations/ modules and lisp/ bebop modules in dependency order.
+Callable via emacsclient: emacsclient --eval \"(tangle-and-reload)\""
+  (interactive)
+  (dolist (dir (list (expand-file-name "lisp/" user-emacs-directory)
+                     (expand-file-name "customizations/" user-emacs-directory)))
+    (when (file-directory-p dir)
+      (dolist (elc (directory-files dir t "\\.elc$"))
+        (delete-file elc))))
+  (dolist (file (directory-files user-emacs-directory t "\\.org$"))
+    (org-babel-tangle-file file))
+  ;; Reload customizations/ modules
+  (dolist (f '("local-state.el" "navigation.el" "ui.el" "editing.el"
+               "misc.el" "elisp-editing.el" "clojure.el" "lsp-common.el"
+               "jsts.el" "dart.el" "vue.el" "web.el" "external-services.el"))
+    (load f 'noerror 'nomessage))
+  ;; Reload lisp/ bebop modules in dependency order
+  (let ((lisp-dir (expand-file-name "lisp/" user-emacs-directory)))
+    (dolist (f '("bebop-core.el" "bebop-passthrough.el" "bebop-dashboard.el"
+                 "bebop-session.el" "bebop-cue.el" "bebop-frame.el" "bebop-gitlab.el"))
+      (load (expand-file-name f lisp-dir) 'noerror 'nomessage)))
+  ;; Re-apply Conductor frame-local face settings (fringe, borders, dividers)
+  ;; since module reloads reset them.
+  (when (fboundp 'bebop-frame--setup-conductor)
+    (let ((conductor (cl-find-if (lambda (f) (frame-parameter f 'bebop-conductor))
+                                 (frame-list))))
+      (when conductor
+        (bebop-frame--setup-conductor conductor))))
+  (message "tangle-and-reload complete"))
+
+(require 'server)
+(unless (server-running-p)
+  (server-start))
+
+(require 'bebop-core)
+(require 'bebop-passthrough)
+(require 'bebop-dashboard)
 (require 'bebop-session)
 (require 'bebop-cue)
 (require 'bebop-frame)
+(require 'bebop-gitlab)
 
+(load "local-state.el")
 (load "navigation.el")
 (load "ui.el")
 (load "editing.el")
 (load "misc.el")
 (load "elisp-editing.el")
 (load "clojure.el")
+(load "lsp-common.el")
 (load "jsts.el")
 (load "dart.el")
 (load "vue.el")
 (load "web.el")
 (load "external-services.el")
 
-(setq custom-file (expand-file-name "custom.el" user-emacs-directory))
 (load custom-file 'noerror)

@@ -1,8 +1,4 @@
-;; Local State
-
-;; Keep volatile state off Dropbox to avoid sync churn and conflicted copies.
-
-
+;;; local-state.el --- Customizations -*- lexical-binding: t; -*-
 (defconst my-local-emacs-dir (expand-file-name "~/.emacs.d-local/"))
 (unless (file-directory-p my-local-emacs-dir)
   (make-directory my-local-emacs-dir t))
@@ -19,12 +15,15 @@
     (make-directory dir t)))
 
 (setq recentf-save-file (my-local-emacs-file ".recentf"))
+(setq ido-save-directory-list-file (my-local-emacs-file "ido.last"))
 (setq smex-save-file (my-local-emacs-file ".smex-items"))
 (setq save-place-file (my-local-emacs-file "places"))
 (setq projectile-known-projects-file (my-local-emacs-file "projectile-bookmarks.eld"))
 (setq package-user-dir (my-local-emacs-file "elpa/"))
 (setq custom-file (my-local-emacs-file "custom.el"))
 (setq forge-database-file (my-local-emacs-file "forge-database.sqlite"))
+(setq keyfreq-file (my-local-emacs-file "keyfreq"))
+(setq keyfreq-file-lock (my-local-emacs-file "keyfreq.lock"))
 
 (setq backup-directory-alist `(("." . ,(my-local-emacs-file "backups"))))
 (setq auto-save-file-name-transforms `((".*" ,(my-local-emacs-file "auto-save/") t)))

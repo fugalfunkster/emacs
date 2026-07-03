@@ -144,7 +144,6 @@ magit
 magit-popup
 -  https://github.com/magit/magit
 
-multi-eshell
 - http://cims.nyu.edu/~stucchio
 
 multiple-cursors
@@ -195,4 +194,3 @@ with-editor
 yasnippet
 - https://www.youtube.com/watch?v=-4O-ZYjQxks
 - http://github.com/capitaomorte/yasnippet
-

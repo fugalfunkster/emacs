@@ -1,9 +1,19 @@
-;; Jira — org-jira
+#+TITLE: External Services
+#+DESCRIPTION: Jira and GitLab integrations
+#+PROPERTY: header-args:emacs-lisp :comments org :mkdirp yes
 
-;; Syncs Jira tickets into org-mode files via =org-jira-get-issues-from-custom-jql=.
-;; Tickets land in =org-jira-working-dir= (=~/Code/Org/=).
+* External Services
 
+Packages that connect Emacs to external services (Jira, GitLab, etc.). Each
+uses =use-package :ensure t= so installation and configuration are co-located.
+Auth credentials live in =~/.authinfo.gpg= — no plaintext tokens in config.
 
+** Jira — org-jira
+
+Syncs Jira tickets into org-mode files via =org-jira-get-issues-from-custom-jql=.
+Tickets land in =org-jira-working-dir= (=~/Code/Org/=).
+
+#+begin_src emacs-lisp :tangle customizations/external-services.el
 ;;; external-services.el --- Customizations -*- lexical-binding: t; -*-
 ;; org 9.1.x (org-20171225) does not define org-show-all; shim for org-jira compatibility.
 ;; Always define — no guard — so hot-reloads pick up the correct target (outline-show-all).
@@ -137,20 +147,27 @@ Re-collapses ticket subtrees after sorting so descriptions stay hidden."
 
   (with-eval-after-load 'org
     (define-key org-mode-map (kbd "C-c S") #'jira-sort)))
+#+end_src
 
-;; GitLab — forge
+Use =M-x jira-sync= to fetch tickets. =C-c s= sorts the =* Tickets= section
+with DONE/CLOSED at the top and TODO at the bottom.
 
-;; Magit extension with native GitLab (and GitHub) support. Surfaces MRs, issues,
-;; and review comments as Magit sections; supports commenting, approving, and
-;; merging from within Emacs.
+** GitLab — forge
 
-;; Add an entry to =~/.authinfo.gpg= (the =^forge= suffix is required):
+Magit extension with native GitLab (and GitHub) support. Surfaces MRs, issues,
+and review comments as Magit sections; supports commenting, approving, and
+merging from within Emacs.
 
-;; : machine gitlab.com login YOUR_USERNAME^forge password YOUR_PERSONAL_ACCESS_TOKEN
+Add an entry to =~/.authinfo.gpg= (the =^forge= suffix is required):
 
-;; Token needs at minimum =api= scope.
+: machine gitlab.com login YOUR_USERNAME^forge password YOUR_PERSONAL_ACCESS_TOKEN
 
+Token needs at minimum =api= scope.
 
+#+begin_src emacs-lisp :tangle customizations/external-services.el
 (use-package forge
   :ensure t
   :after magit)
+#+end_src
+
+Verify with =M-x forge-pull= in a Magit buffer for a GitLab repo.

@@ -33,6 +33,12 @@ network-security.data
 # Databases
 forge-database*.sqlite
 
+# State files
+.mc-lists.el
+bebop-state.json
+code-review-db-file.sqlite
+code-review-error.log
+
 # Local overrides
 customizations/local.el
 

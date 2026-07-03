@@ -1,10 +1,7 @@
-;; Navigation
-
-
+;;; navigation.el --- Customizations -*- lexical-binding: t; -*-
 (require 'uniquify)
 (setq uniquify-buffer-name-style 'forward)
 
-(setq recentf-save-file (concat user-emacs-directory ".recentf"))
 (require 'recentf)
 (recentf-mode 1)
 (setq recentf-max-menu-items 40)
@@ -19,8 +16,14 @@
 
 (global-set-key (kbd "C-x C-b") 'ibuffer)
 
-(setq smex-save-file (concat user-emacs-directory ".smex-items"))
-(smex-initialize)
-(global-set-key (kbd "M-x") 'smex)
+(setq smex-save-file (my-local-emacs-file ".smex-items"))
+(use-package smex
+  :defer t
+  :commands (smex)
+  :bind (("M-x" . smex))
+  :config
+  (smex-initialize))
 
-(projectile-global-mode)
+(use-package projectile
+  :defer t
+  :hook (after-init . projectile-mode))

@@ -1,6 +1,4 @@
-;; Emacs Lisp
-
-
+;;; elisp-editing.el --- Customizations -*- lexical-binding: t; -*-
 (autoload 'enable-paredit-mode "paredit" "Turn on pseudo-structural editing of Lisp code." t)
 (add-hook 'emacs-lisp-mode-hook       #'enable-paredit-mode)
 (add-hook 'eval-expression-minibuffer-setup-hook #'enable-paredit-mode)

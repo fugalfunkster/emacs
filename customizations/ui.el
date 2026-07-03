@@ -1,11 +1,13 @@
-;; UI
-
-
+;;; ui.el --- Customizations -*- lexical-binding: t; -*-
 (menu-bar-mode -1)
 (tool-bar-mode -1)
 
-(when (fboundp 'global-display-line-numbers-mode)
-  (global-display-line-numbers-mode 1))
+;; Guard against hot-reload: calling this when already active iterates all
+;; buffers and re-enables line numbers, stomping buffer-local overrides in
+;; bebop and eshell buffers that disable them via their mode bodies.
+(unless global-display-line-numbers-mode
+  (when (fboundp 'global-display-line-numbers-mode)
+    (global-display-line-numbers-mode 1)))
 
 (when (fboundp 'scroll-bar-mode)
   (scroll-bar-mode -1))
@@ -16,7 +18,48 @@
 
 (set-face-attribute 'default nil :height 130)
 
+(let ((fringe-color (face-background 'fringe nil t)))
+  (setq window-divider-default-places t
+        window-divider-default-right-width 5
+        window-divider-default-bottom-width 5)
+  (set-face-attribute 'window-divider nil :foreground "white")
+  (set-face-attribute 'window-divider-first-pixel nil :foreground fringe-color)
+  (set-face-attribute 'window-divider-last-pixel nil :foreground fringe-color)
+  (window-divider-mode 1))
+
 (setq initial-frame-alist '((top . 0) (left . 0) (width . 80) (height . 48)))
+
+;; Avoid native macOS fullscreen Spaces for Emacs frames.
+;; Native fullscreen + aggressive focus hooks can trigger Space-switch loops.
+(when (eq window-system 'ns)
+  (setq ns-use-native-fullscreen nil))
+
+(global-set-key (kbd "C-<return>") 'toggle-frame-fullscreen)
+
+;; Keep input and selected window aligned with the currently active frame.
+(setq minibuffer-follows-selected-frame t)
+
+(defun my-activate-frame (frame)
+  "Select FRAME, focus it, and sync selected window for minibuffer commands."
+  (when (display-graphic-p frame)
+    (select-frame-set-input-focus frame)
+    (select-frame frame)
+    (let ((win (frame-selected-window frame)))
+      (when (window-live-p win)
+        (select-window win)))))
+
+(defun my-focus-new-frame (&optional frame)
+  "Focus and activate FRAME after it is created.
+When called from hooks that pass no args, fall back to `selected-frame'."
+  (my-activate-frame (or frame (selected-frame))))
+
+(defun my-focus-selected-frame ()
+  "Re-sync selected frame/window when GUI focus changes."
+  (my-activate-frame (selected-frame)))
+
+(add-hook 'after-make-frame-functions #'my-focus-new-frame)
+(with-eval-after-load 'server
+  (add-hook 'server-after-make-frame-hook #'my-focus-new-frame))
 
 (setq x-select-enable-clipboard t
       x-select-enable-primary nil

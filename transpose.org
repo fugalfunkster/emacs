@@ -1,0 +1,367 @@
+#+TITLE: Transpose
+#+DESCRIPTION: Cross-system context orchestration for Jira, GitLab, Org, and agentic workflows
+#+PROPERTY: header-args:emacs-lisp :comments org :mkdirp yes
+
+* Transpose
+
+** Purpose
+Transpose is the orchestration layer for reducing context switching across Jira,
+GitLab, and Org while preserving operator transparency.
+
+It is not just an integration layer. It is a control surface for:
+- pulling external state into a coherent local model,
+- composing that state into actionable context,
+- serving context to agents in a traceable way,
+- and enabling fast human intervention ("take a solo") without losing continuity.
+
+** Goals
+- Minimize browser dependence for routine Jira/GitLab tasks.
+- Minimize memory burden by preserving familiar tool-native commands.
+- Make data lineage explicit: source, freshness, and transformation path.
+- Unify chart-centric context into a stable schema consumable by both humans and agents.
+- Close the loop by supporting both read and write operations from Emacs.
+- Preserve operator agency: inspect, approve, intervene, and resume orchestration.
+
+** Non-Goals
+- Replacing Jira/GitLab as systems of record.
+- Full offline mirror of all external data.
+- Autonomous writes without explicit operator visibility.
+
+** Decisions Captured (2026-03-09)
+- Persistent organizing artifact is the session chart, not a reified scope object.
+- Jira and chart are independent; Jira items are cued manually into charts.
+- Inclusion/refresh model is manual curation (no scheduled auto-sync into charts).
+- GitLab writes are fully logged to chart, including full posted text/payload.
+- Safety model: confirm only high-impact actions; comments/reactions are quick-send.
+- Request-changes should use formal semantics when available, fallback when needed.
+- Approve should warn on unresolved threads/non-green pipeline, not hard-block.
+- Pipeline context for now is latest status + link only.
+- Initial UX surface should be `M-x` commands (no keymap/transient integration yet).
+- Confluence integration is explicitly out-of-scope for v1.
+- Jira write loop in v1 includes: comment, assign, and transition status.
+- Jira writes follow same policy as GitLab writes (full payload logging, failure logs).
+- Jira transitions should allow any available transition.
+- Jira transition logs should include from/to, transition id/name, actor, and timestamp.
+- Transpose uses explicit markers/properties with prompt fallback when missing.
+- Marker strategy is marker-first + interactive fallback; successful prompted actions auto-add markers.
+- Auto-added markers should be written to a dedicated `** External Metadata` heading.
+- GitLab headings should allow multiple MR markers.
+- Existing tool-native commands remain primary (`jira-sync`, `forge-*`, Bebop commands).
+- Transpose wrappers are optional ergonomics, not mandatory command vocabulary.
+- Write logs should use both inline short notes and canonical `Write Log` entries.
+- Canonical write entries store full payload in collapsed drawers/properties.
+- Thread replies require explicit target selection before submit.
+- v1 reaction set is fixed: `thumbsup`, `sweatsmile`, `shrug`, `facepalm`, `tada`, `thinking`.
+- Jira transition logging should verify and log resulting status after transition.
+- Marker property names use short canonical keys:
+  - `:JIRA_KEY:`
+  - `:GITLAB_MR:` (multi-value supported)
+  - `:GITLAB_MR_ACTIVE:`
+- Canonical write log entries use one heading per write with properties drawer and
+  collapsed payload drawer.
+- Failure classification for v1:
+  - Retryable: network errors only.
+  - Terminal: all non-network failures.
+- Operator-facing model is native commands composed by Transpose conventions.
+- Three phases remain conceptual only (pull/act/update), not required command names.
+- Acceptance test form for v1 is manual checklist only.
+
+* Design Principles
+
+** Transparency First
+Every derived context item should answer:
+- Where did this come from?
+- When was it fetched?
+- Which command generated it?
+- What was transformed vs copied?
+
+** Local-First Orchestration
+Org files are the orchestration substrate. External systems remain authoritative for
+workflow state and collaboration state.
+
+** Explicit Writes
+External mutations should be command-driven, inspectable, and loggable.
+
+** Composable Context
+Context must be assembled from reusable typed components, not one-off text dumps.
+
+** Fast Solo Path
+Operator can jump from orchestration to direct execution (code/review/comment), then
+return with minimal re-orientation cost.
+
+** Familiar UX
+Transpose should preserve existing command muscle memory.
+It coordinates native commands into a consistent loop instead of forcing
+a replacement command vocabulary.
+
+* Domain Model
+
+** Canonical Entities
+- Session Chart
+- Chart Context View
+- Jira Issue
+- GitLab Merge Request
+- GitLab Review Thread
+- GitLab Note
+- GitLab Pipeline Snapshot
+- Decision
+- Action Item
+- Write Log Entry
+
+** Authority Boundaries
+- Jira Issue state: Jira authoritative.
+- MR/thread/reviewer/pipeline state: GitLab authoritative.
+- Composition, prompts, decisions, operator intent, and write audit trail: Org authoritative.
+
+** Session Chart and Context View (MVP)
+The session chart is the persistent organizing artifact. "Scope" is a derived
+view over independently cued Jira/GitLab artifacts and local notes.
+
+Chart identity:
+- `chart_path`
+- `chart_title`
+- `chart_created_at`
+- `chart_updated_at`
+
+Linked entities:
+- `jira_keys[]` (independent; no required primary link)
+- `gitlab_mrs[]` (host/project/iid/url)
+
+Marker model:
+- Explicit org markers/properties are preferred.
+- Commands are marker-first with interactive fallback.
+- On successful prompted actions, missing markers are auto-added under a dedicated
+  `** External Metadata` heading.
+- GitLab marker model supports multiple MRs per heading.
+- Marker properties are:
+  - `:JIRA_KEY:`
+  - `:GITLAB_MR:` (may appear multiple times)
+  - `:GITLAB_MR_ACTIVE:` (optional override)
+
+Context sections:
+- `facts` (source-attributed)
+- `open_questions`
+- `decisions`
+- `next_actions`
+- `risks`
+
+Operational metadata:
+- `freshness` per source block
+- `lineage` records
+- `write_log` records
+
+Mode policy:
+- Inclusion is manual curation.
+- Refresh is manual only.
+- No background auto-sync into chart.
+
+* Data Lineage Standard
+
+Each imported or mutated block should carry properties (or adjacent metadata):
+- `:SOURCE_SYSTEM:` (`jira|gitlab|local`)
+- `:SOURCE_TYPE:` (`issue|mr|discussion|note|pipeline`)
+- `:SOURCE_ID:` canonical external id
+- `:SOURCE_URL:` direct URL
+- `:FETCHED_AT:` ISO-8601
+- `:FETCH_COMMAND:` command/function used
+- `:TRANSFORM:` short note (`raw`, `normalized`, `summarized`)
+
+For writes add:
+- `:WRITE_ACTION:` (`comment`, `reply`, `approve`, `request_changes`, ...)
+- `:WRITE_TARGET_ID:`
+- `:WRITE_AT:`
+- `:WRITE_RESULT:` (`ok|failed` + status code/message)
+- `:WRITE_PAYLOAD:` exact submitted text/payload (or canonical representation)
+- `:WRITE_ACTOR:` operator identity
+
+Write log rendering policy:
+- `Write Log` stores canonical entries with full payload in collapsed drawers/properties.
+- Source heading gets an inline one-line note: action + target + permalink + one-line preview.
+- Canonical log entry format is one heading per write event.
+
+* Command Strategy
+
+** Mental Model
+Treat external tool operations like a metadata VCS:
+- `pull` gathers remote truth.
+- `act` executes discrete workflow operations.
+- `update` records local orchestration truth in the chart.
+
+** Primary Commands (Operator-Facing)
+- Jira-native commands (e.g., `jira-sync`, transitions, comments, assign).
+- Forge-native commands (e.g., `forge-pull`, topic/review actions).
+- Existing Bebop chart commands (cue/jam/chart editing).
+- Optional Transpose wrappers where they reduce friction.
+
+** Transpose Responsibilities
+- Define marker conventions and metadata layout.
+- Enforce logging and safety conventions across tools.
+- Compose native commands into repeatable pull/act/update flows.
+
+Examples:
+- pull phase -> `jira-sync` + `forge-pull` + chart-context refresh composition.
+- act phase -> cue/jam, Forge review actions, Jira comment/assign/transition.
+- update phase -> append canonical write log entry, add inline parseable note,
+  normalize metadata markers.
+
+* Pull Flows (Inbound)
+
+** Jira
+- Sync assigned/relevant issues into an org surface.
+- Normalize issue state + key metadata for chart linking.
+- Preserve direct links to Jira as canonical drill-down.
+
+** GitLab
+- Pull MR summary, reviewers, unresolved discussions, and pipeline state.
+- Keep discussion/thread ids available for targeted write-back.
+- Map MR and thread state into chart-context review status.
+
+** Chart Context Refresh (Pull Phase)
+- A chart refresh flow composes Jira + GitLab into one current
+  chart context view.
+- Composition is deterministic and re-runnable.
+- Refresh is always explicit/manual.
+
+* Act Flows (Execution)
+
+** Must-Have (Act Phase)
+- cue/jam against chart sections
+- GitLab:
+  - MR-level comment
+  - thread reply (direct feedback response)
+  - emoji reaction on note/thread
+  - approve / unapprove / request changes
+  - set/update reviewers
+- Jira:
+  - comment
+  - assign (default assign-to-me with optional assignee override)
+  - transition status (allow any available transition)
+
+** Should-Have
+- Re-request review (reviewer re-assignment/update semantics)
+- Resolve/unresolve thread
+- Pipeline retrigger (where policy allows)
+- Pipeline snapshot insert (latest status + URL)
+
+** Action Safety Contract
+- Confirm only for high-impact actions (`approve`, `request_changes`, `merge`).
+- Comment/reaction flows should be quick-send.
+- Thread replies require explicit target selection before submit.
+- Failure handling classification in v1:
+  - Retryable: network errors.
+  - Terminal: all non-network errors.
+
+* Update Flows (Local State)
+
+** Canonical Update Operations (Update Phase)
+- Append canonical write-log entries (`Write Log`) with properties + collapsed payload.
+- Append machine-parseable inline one-line note on source heading.
+- Ensure/normalize `** External Metadata` markers after prompted actions.
+- Persist result status (`ok|failed`) and retryability classification.
+- For Jira transitions, verify and log resulting status after transition.
+
+* Agent Context Contract
+
+** What Agents Receive
+- Chart objective and current status.
+- Linked Jira/MR ids + URLs.
+- Normalized facts with provenance.
+- Open review threads requiring response.
+- Pipeline summary (latest status + URL).
+- Explicit operator constraints and acceptance criteria.
+
+** Format Constraints
+- Stable section order to reduce prompt drift.
+- Mark inferred content explicitly.
+- Include freshness windows (`stale_if_older_than`).
+- Include unresolved ambiguities as first-class items.
+
+** Operator Controls
+- Cue only selected subtrees/sections.
+- Optional redaction filters.
+- Explicit mode switch between orchestrate and solo.
+
+* UX Model
+
+** Orchestrate Mode
+- Dashboard view of active charts and agent sessions.
+- At-a-glance staleness and blockers.
+- One-keystroke transitions to review/action commands.
+
+** Solo Mode
+- Fast jump into code/review context for one chart.
+- Return path auto-updates chart notes and decision log.
+
+* Observability and Health
+
+Track:
+- stale source blocks by age,
+- failed syncs/writes,
+- orphaned links (e.g., MR closed/moved),
+- unresolved thread count per chart,
+- pipeline degradation by chart.
+
+Health commands should answer:
+- Which charts are stale?
+- Which writes failed and need retry?
+- Which chart has pending human action?
+
+* Implementation Roadmap
+
+** Phase 1: Composition Foundation (MVP)
+- Create `transpose` chart-context schema in org.
+- Add lineage metadata conventions.
+- Implement deterministic pull/update compositions using native commands.
+- Implement canonical logging and metadata normalization.
+
+Exit criteria:
+- One chart can run pull -> act -> update with source traceability.
+
+** Phase 2: Act Loop Closure
+- Ensure required GitLab and Jira act operations are available from Emacs.
+- For request-changes: prefer formal API semantics; fallback to quick-action note.
+- Ensure all act operations flow through update conventions for logging outcomes.
+
+Exit criteria:
+- Operator can complete review-response cycle without browser.
+
+** Phase 3: Pipeline and Review Intelligence
+- Add latest pipeline snapshot surfacing per MR (status + URL).
+- Add reviewer/request status normalization in chart context view.
+- Add warning (not block) on approve when threads are unresolved or pipeline is non-green.
+
+Exit criteria:
+- Chart context view exposes review readiness and CI readiness clearly.
+
+** Phase 4: Agent Contract Hardening
+- Standardize cue payload sections and freshness policy.
+- Add lint/check command for chart context completeness before cue/jam.
+
+Exit criteria:
+- Agent handoff quality is predictable and auditable.
+
+** Phase 5: Operator Ergonomics
+- Add orchestration dashboard shortcuts for common composed flows.
+- Optimize solo round-trip workflow and resume context.
+
+Exit criteria:
+- Reduced command friction and shorter intervention loops.
+
+* Open Questions
+- What is the default stale threshold per source type?
+- What retention policy should apply to write logs and snapshots?
+- Should write payload logs redact secrets/tokens automatically before persistence?
+- Should we add per-command dry-run for comments/replies, or keep quick-send only?
+
+* Initial Success Metrics
+- Browser-based review actions reduced by >= 70% for active charts.
+- Time from "feedback received" to "feedback responded" reduced.
+- Percentage of cues with complete provenance metadata >= 95%.
+- Operator-reported context switching friction trending down over 2-4 weeks.
+- Median command lookup count per session trends down while using mostly native commands.
+
+* Next Planning Slice
+1. Define `** External Metadata` heading template and insertion rules.
+2. Finalize provenance and write-log property names (required vs optional).
+3. Define composed pull/act/update flows using existing native commands.
+4. Create a manual acceptance checklist for one real chart and one real ticket+MR pair.

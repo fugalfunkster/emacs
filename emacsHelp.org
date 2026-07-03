@@ -6,6 +6,7 @@
 | Binding   | Command                           | Description                          |
 |-----------+-----------------------------------+--------------------------------------|
 | =M-x tangle-and-restart= | — | Tangle =emacs.org= and restart Emacs |
+| =M-x keyfreq-show=       | — | Show top command usage               |
 
 * Navigation
 
@@ -18,6 +19,10 @@
 | =C-s=       | =avy-goto-char-timer=               | Jump to character                 |
 | =C-x C-b=   | =ibuffer=                           | Buffer list                       |
 | =M-x=       | =smex=                              | Enhanced command palette          |
+| =C-M-s=     | =isearch-forward=                   | Forward search                    |
+| =C-M-r=     | =isearch-backward=                  | Backward search                   |
+| =C-r f=     | =isearch-forward-regexp=            | Forward regex search              |
+| =C-r b=     | =isearch-backward-regexp=           | Backward regex search             |
 
 * Editing
 
@@ -30,7 +35,7 @@
 | =C-k=         | =kill-whole-line=          | Kill whole line                |
 | =<M-DEL>=     | =backward-delete-word=     | Delete word backwards          |
 | =C-c m c=     | =mc/edit-lines=            | Multiple cursors on lines      |
-| =C->=         | =mc/mark-next-like-this=   | Mark next occurrence           |
+| =C-.=         | =mc/mark-next-like-this=   | Mark next occurrence           |
 | =C-,=         | =mc/unmark-next-like-this= | Unmark next occurrence         |
 | =C-==         | =er/expand-region=         | Expand selection               |
 
@@ -53,5 +58,16 @@
 |---------+----------------------------+--------------------|
 | =C-c w= | =web-mode=                 | Switch to web-mode |
 | =C-c d= | =xref-find-definitions=    | Jump to definition |
-| =C-c b= | =xref-pop-marker-stack=    | Jump back          |
+| =C-c b= | =xref-pop-marker-stack=    | Jump back (global; TS overrides) |
 | =C-c j= | =js2-mode=                 | Switch to js2-mode |
+
+* Chant / Bebop
+
+| Binding   | Command                         | Description                              |
+|-----------+---------------------------------+------------------------------------------|
+| =M-a=     | =abeyance=                      | Toggle chant passthrough mode            |
+| =C-c C-c= | =claude-chant-send-buffer=      | Send buffer to active chant pane         |
+| =C-c C-p= | =bebop-cue-to-active=           | Cue subtree to active Bebop session      |
+| =C-c C-P= | =bebop-cue-to-session=          | Cue subtree to selected Bebop session    |
+| =C-c C-j= | =bebop-jam-to-active=           | Jam subtree to active Bebop session      |
+| =C-c C-J= | =bebop-jam-to-session=          | Jam subtree to selected Bebop session    |

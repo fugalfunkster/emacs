@@ -1,9 +1,8 @@
 ;;; bebop-session.el --- Session lifecycle for Bebop agent orchestration -*- lexical-binding: t; -*-
 
 (require 'cl-lib)
-(require 'claude-chant)
-(require 'chant-dashboard)
-(require 'chant-abeyance)
+(require 'bebop-core)
+(require 'bebop-dashboard)
 
 (defgroup bebop nil
   "Session-based AI agent orchestration built on Chant."
@@ -24,78 +23,369 @@
   :type 'string
   :group 'bebop)
 
-(defcustom bebop-header-color "#CC0000"
-  "Color for Bebop header overlays in dashboard and composition buffers."
+(defcustom bebop-org-dir (expand-file-name "~/Code/org/")
+  "Root directory searched recursively for .org files when picking a chart
+via the \"org\" option."
+  :type 'directory
+  :group 'bebop)
+
+(defcustom bebop-docker-script "~/Code/repos/my-claude/start.sh"
+  "Path to the Docker Claude launcher script (my-claude/start.sh).
+When `bebop-use-docker' is non-nil, new sessions run this instead of `claude'."
   :type 'string
   :group 'bebop)
 
-(defcustom bebop-abeyance-header-color "#D4A017"
-  "Header color for composition buffers when abeyance mode is active."
-  :type 'string
-  :group 'bebop)
+(defvar bebop-use-docker nil
+  "When non-nil, new sessions and resumes launch Claude inside the Docker sandbox.
+Toggle with `bebop-toggle-docker' (bound to ! in the dashboard).")
+
+(defun bebop-toggle-docker ()
+  "Toggle Docker sandbox mode for new Bebop sessions.
+When active, `bebop-new-session' and `bebop-resume' launch Claude inside
+the container defined by `bebop-docker-script' instead of running it directly.
+The git airgap (deny git push) is enforced by the container's settings."
+  (interactive)
+  (setq bebop-use-docker (not bebop-use-docker))
+  (bebop--render)
+  (message "Bebop: Docker sandbox %s" (if bebop-use-docker "ON" "OFF")))
 
 (defvar bebop--sessions nil
   "Alist of (NAME . SINFO) for all known Bebop sessions.
 SINFO is a plist with keys:
-  :chart     — path to the session's chart .org file (string or nil)
-  :venue     — path to the git worktree (string or nil)
-  :gathering — non-nil while in gathering mode (pre-first-jam)")
-(setq bebop--sessions nil)
+  :chart      — path to the session's chart .org file (string or nil)
+  :venue      — path to the git worktree (string or nil)
+  :created-at — timestamp string
+  :last-active — timestamp string")
 
-(defvar-local bebop--header-overlay nil
-  "Overlay used to display the Bebop header in a buffer.")
+(defun bebop--on-deck-names ()
+  "Return list of session names derivable from charts and venues on disk,
+minus any currently running session names."
+  (let* ((charts-dir (expand-file-name bebop-charts-dir))
+         (venues-dir (expand-file-name bebop-venues-dir))
+         (chart-names
+          (when (file-directory-p charts-dir)
+            (mapcar (lambda (f) (file-name-sans-extension f))
+                    (directory-files charts-dir nil "\\.org$" t))))
+         (venue-names
+          (when (file-directory-p venues-dir)
+            (seq-filter
+             (lambda (f) (not (string-prefix-p "." f)))
+             (seq-filter
+              (lambda (f) (file-directory-p (expand-file-name f venues-dir)))
+              (directory-files venues-dir nil nil t)))))
+         (all-names (seq-uniq (append chart-names venue-names)))
+         (running   (mapcar #'car bebop--live-sessions)))
+    (seq-remove (lambda (n) (member n running)) all-names)))
 
-(defun bebop--set-header-overlay (text &optional color height)
-  "Display TEXT as a styled header at point-min of the current buffer.
-COLOR defaults to `bebop-header-color'; HEIGHT defaults to 3.0.
-Uses the same overlay/before-string technique as `claude-chant--set-header'."
-  (when (overlayp bebop--header-overlay)
-    (delete-overlay bebop--header-overlay)
-    (setq bebop--header-overlay nil))
-  (let* ((resolved (when (fboundp 'claude-chant--resolve-font)
-                     (claude-chant--resolve-font)))
-         (c (or color bebop-header-color))
-         (h (or height 3.0))
-         (header (propertize text
-                             'face `(:height ,h :weight bold
-                                     :foreground ,c
-                                     ,@(when resolved (list :family resolved)))
-                             'read-only t
-                             'front-sticky t
-                             'rear-nonsticky t))
-         (spacer (propertize "\n" 'read-only t))
-         (ov (make-overlay (point-min) (point-min))))
-    (overlay-put ov 'before-string (concat header spacer))
-    (setq bebop--header-overlay ov)))
+(defun bebop--on-deck-icons (name)
+  "Return icon string for NAME based on which artifacts exist on disk."
+  (let ((has-chart (file-exists-p
+                    (expand-file-name (concat name ".org")
+                                      (expand-file-name bebop-charts-dir))))
+        (has-venue (file-directory-p
+                    (expand-file-name name
+                                      (expand-file-name bebop-venues-dir)))))
+    (concat (if has-chart "⊞" " ")
+            (if has-venue " ⎇" ""))))
 
-(defun bebop--toggle-abeyance ()
-  "Toggle abeyance (keystroke passthrough) in this bebop composition buffer.
-The header color changes to amber while active and returns to red when off."
+(defun bebop--on-deck-ticket-slug (name)
+  "Return the ticket slug at the end of NAME (e.g. ROOST-1234), or nil."
+  (when (string-match "\\([A-Z]+-[0-9]+\\)$" name)
+    (match-string 1 name)))
+
+(defun bebop--on-deck-prefix (name)
+  "Return the component prefix of NAME: everything before the first --.
+Returns an empty string for bare names like ROOST-1234."
+  (let ((i (string-match "--" name)))
+    (if i (substring name 0 i) "")))
+
+(defun bebop--dashboard-insert-on-deck ()
+  "Insert On deck section into the current dashboard buffer."
+  (let* ((pinned '("emacs" "bebop" "claude"))
+         (all-names (bebop--on-deck-names))
+         ;; Count how many on-deck names share each slug.
+         ;; Slugs with count > 1 form a cluster and sort first.
+         (slug-counts
+          (let ((tbl (make-hash-table :test #'equal)))
+            (dolist (n all-names)
+              (when-let ((s (bebop--on-deck-ticket-slug n)))
+                (puthash s (1+ (gethash s tbl 0)) tbl)))
+            tbl))
+         (names
+          (sort all-names
+                (lambda (a b)
+                  (let* ((a-pin     (member a pinned))
+                         (b-pin     (member b pinned))
+                         (a-slug    (bebop--on-deck-ticket-slug a))
+                         (b-slug    (bebop--on-deck-ticket-slug b))
+                         (a-cluster (and a-slug (> (gethash a-slug slug-counts 0) 1)))
+                         (b-cluster (and b-slug (> (gethash b-slug slug-counts 0) 1)))
+                         (a-prefix  (bebop--on-deck-prefix a))
+                         (b-prefix  (bebop--on-deck-prefix b)))
+                    (cond
+                     ;; Pinned items last
+                     ((and a-pin (not b-pin)) nil)
+                     ((and b-pin (not a-pin)) t)
+                     ;; Multi-item slug clusters before singletons
+                     ((and a-cluster (not b-cluster)) t)
+                     ((and b-cluster (not a-cluster)) nil)
+                     ;; Within a cluster: by slug, then by name within same slug
+                     ((and a-cluster b-cluster)
+                      (if (string= a-slug b-slug)
+                          (string< a b)
+                        (string< a-slug b-slug)))
+                     ;; Singletons and no-slug: by prefix, then by full name
+                     ((string= a-prefix b-prefix) (string< a b))
+                     (t (string< a-prefix b-prefix))))))))
+    (when names
+      (insert "\n")
+      (insert (propertize "On deck:\n" 'face '(:inherit shadow :weight bold)))
+      (dolist (name names)
+        (let ((start (point)))
+          (insert (propertize "○" 'face 'shadow))
+          (insert " ")
+          (insert (propertize name 'face 'shadow))
+          (insert (propertize (concat "  " (bebop--on-deck-icons name))
+                              'face '(:inherit shadow :slant italic)))
+          (insert "\n")
+          (add-text-properties start (point)
+                               (list 'bebop-on-deck-name name)))))))
+
+(defun bebop--dashboard-annotate-active-pairs ()
+  "Append ⊞/⎇ icons to active-session lines that have a chart or venue.
+Scans the current buffer for lines tagged with `bebop-session-name', looks up
+the corresponding bebop session info, and inserts icons before the newline."
+  (save-excursion
+    (goto-char (point-min))
+    (while (not (eobp))
+      (let ((pair-name (get-text-property (point) 'bebop-session-name)))
+        (when pair-name
+          (let* ((info      (bebop--session-info pair-name))
+                 (has-chart (let ((c (and info (plist-get info :chart))))
+                              (and c (file-exists-p c))))
+                 (has-venue (let ((v (and info (plist-get info :venue))))
+                              (and v (file-directory-p v))))
+                 (icons     (mapconcat #'identity
+                                       (seq-filter #'identity
+                                                   (list (when has-chart "⊞")
+                                                         (when has-venue "⎇")))
+                                       " ")))
+            (unless (string-empty-p icons)
+              (end-of-line)
+              (insert (propertize (concat "  " icons) 'face 'shadow))))))
+      (forward-line 1))))
+
+(defun bebop--dashboard-render-extras (&rest _)
+  "Add Bebop section labels and on-deck section to the dashboard."
+  (let ((buf (get-buffer bebop-buffer-name)))
+    (when buf
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          ;; Insert "Active sessions:" before the first pair line.
+          ;; Only when there are live pairs (otherwise "No agent pairs" message shows).
+          (when bebop--live-sessions
+            (save-excursion
+              (goto-char (point-min))
+              (while (and (< (point) (point-max))
+                          (null (get-text-property (point) 'bebop-session-name)))
+                (forward-line 1))
+              (when (get-text-property (point) 'bebop-session-name)
+                (insert (propertize "Active sessions:\n"
+                                    'face '(:inherit shadow :weight bold))))))
+          ;; Annotate active lines with chart/venue icons.
+          (when bebop--live-sessions
+            (bebop--dashboard-annotate-active-pairs))
+          ;; Insert on-deck before the footer, then replace the
+          ;; footer with a 3-row hint block.
+          (save-excursion
+            (goto-char (point-max))
+            (when (search-backward "\n  n: new" nil t)
+              (let ((footer-pos (match-beginning 0)))
+                ;; Insert on-deck immediately before the old footer.
+                (goto-char footer-pos)
+                (bebop--dashboard-insert-on-deck)
+                ;; Delete the old single-row footer.
+                (when (search-forward "\n  n: new" nil t)
+                  (beginning-of-line)
+                  (let ((beg (point)))
+                    (end-of-line)
+                    (delete-region beg (point))))
+                ;; Insert 3-row hint block, with Docker indicator when active.
+                (goto-char (point-max))
+                (when bebop-use-docker
+                  (insert (propertize "\nDocker sandbox: ON  (! to toggle)\n"
+                                      'face '(:inherit warning :weight bold))))
+                (insert (propertize "\nn: new  C/D: chart  V/W: venue  RET: select\n"
+                                    'face 'shadow))
+                (insert (propertize "k: kill  e: exile  a: archive\n"
+                                    'face 'shadow))
+                (insert (propertize "r: resume  g: refresh  q: quit\n"
+                                    'face 'shadow))))
+          ;; Normalize blank lines: exactly 1 before "On deck:", 1 before footer.
+          ;; Requires its own inhibit-read-only since the dashboard buffer is read-only.
+          (let ((inhibit-read-only t))
+            (save-excursion
+              (goto-char (point-min))
+              (when (re-search-forward "\n+On deck:" nil t)
+                (replace-match "\n\nOn deck:"))
+              ;; Search forward (not backward) so \n+ greedily matches all blank lines.
+              (goto-char (point-min))
+              (when (re-search-forward "\n+n: new" nil t)
+                (replace-match "\n\nn: new"))))))
+      ;; Force the window displaying the dashboard to redraw.
+      (let ((win (get-buffer-window buf t)))
+        (when win
+          (with-selected-window win
+            (redisplay t))))))))
+
+(advice-add 'bebop--render :after #'bebop--dashboard-render-extras)
+
+(defun bebop-resume-at-point ()
+  "Resume the on-deck session at point, or call `bebop-resume' interactively.
+When point is on an on-deck line (has `bebop-on-deck-name' text property),
+call `bebop-resume' with that name pre-filled.  Otherwise call `bebop-resume'
+with no argument."
   (interactive)
-  (chant-abeyance-mode (if chant-abeyance-mode -1 1))
-  (let ((name (and (string-match "\\*bebop-session: \\(.*\\)\\*" (buffer-name))
-                   (match-string 1 (buffer-name)))))
-    (bebop--set-header-overlay (format "Session: %s" name)
-                               (if chant-abeyance-mode
-                                   bebop-abeyance-header-color
-                                 bebop-header-color))))
+  (let ((name (get-text-property (point) 'bebop-on-deck-name)))
+    (if name
+        (bebop-resume name)
+      (bebop-resume))))
 
-(defun bebop--dashboard-mode-after (&rest _)
-  "Add the `Bebop' header overlay after `chant-dashboard-mode' activates.
-Uses the same blue and height as the chant header."
-  (bebop--set-header-overlay "Bebop" claude-chant-header-color claude-chant-header-height))
+(defun bebop--dashboard-entry-at-point-p ()
+  "Return non-nil if point is on a navigable dashboard entry line."
+  (or (get-text-property (point) 'bebop-session-name)
+      (get-text-property (point) 'bebop-on-deck-name)))
 
-(advice-add 'chant-dashboard-mode :after #'bebop--dashboard-mode-after)
+(defun bebop--dashboard-next-entry ()
+  "Move point to the next active or on-deck session line."
+  (interactive)
+  (let ((start (point)))
+    (when (bebop--dashboard-entry-at-point-p)
+      (forward-line 1))
+    (while (and (< (point) (point-max))
+                (not (bebop--dashboard-entry-at-point-p)))
+      (forward-line 1))
+    (unless (bebop--dashboard-entry-at-point-p)
+      (goto-char start))))
+
+(defun bebop--dashboard-prev-entry ()
+  "Move point to the previous active or on-deck session line."
+  (interactive)
+  (let ((start (point)))
+    (forward-line -1)
+    (while (and (> (point) (point-min))
+                (not (bebop--dashboard-entry-at-point-p)))
+      (forward-line -1))
+    (unless (bebop--dashboard-entry-at-point-p)
+      (goto-char start))))
+
+(defun bebop-kill-session-at-point ()
+  "Kill the Bebop session at point.  Requires typing the name to confirm."
+  (interactive)
+  (let ((name (or (get-text-property (point) 'bebop-session-name)
+                  (bebop--session-at-point))))
+    (if (null name)
+        (message "No session at point")
+      (let ((typed (read-string (format "Type \"%s\" (or \"see ya\") to confirm kill: " name))))
+        (if (or (string= typed name) (string= typed "see ya"))
+            (bebop-kill-session name)
+          (message "Cancelled (name mismatch)."))))))
+
+;; Override nav keys to include on-deck lines; k = kill, r = resume, a = archive-chart
+(define-key bebop-dashboard-mode-map (kbd "<down>") #'bebop--dashboard-next-entry)
+(define-key bebop-dashboard-mode-map (kbd "<up>")   #'bebop--dashboard-prev-entry)
+(define-key bebop-dashboard-mode-map (kbd "j")      #'bebop--dashboard-next-entry)
+(define-key bebop-dashboard-mode-map (kbd "p")      #'bebop--dashboard-prev-entry)
+(define-key bebop-dashboard-mode-map (kbd "k") #'bebop-kill-session-at-point)
+(define-key bebop-dashboard-mode-map (kbd "r") #'bebop-resume-at-point)
+(define-key bebop-dashboard-mode-map (kbd "a") #'bebop-archive-chart-at-point)
+(define-key bebop-dashboard-mode-map (kbd "e") #'bebop-exile-session-at-point)
 
 (defun bebop--session-info (name)
   "Return the session plist for NAME, or nil if not found."
   (cdr (assoc name bebop--sessions)))
 
-(defun bebop--pair-gathering-p (name)
-  "Return non-nil if session NAME is currently in gathering mode.
-Called by `chant-dashboard--infer-status' to show the yellow dot."
-  (let ((info (bebop--session-info name)))
-    (and info (plist-get info :gathering))))
+(defun bebop--now-string ()
+  "Return current timestamp string in ISO-like format."
+  (format-time-string "%Y-%m-%dT%H:%M:%S%z"))
+
+(defun bebop--upsert-session (name props)
+  "Create or update session NAME with PROPS plist."
+  (let ((entry (assoc name bebop--sessions))
+        (now (bebop--now-string)))
+    (if entry
+        (let ((info (cdr entry)))
+          (while props
+            (plist-put info (car props) (cadr props))
+            (setq props (cddr props)))
+          (unless (plist-get info :created-at)
+            (plist-put info :created-at now))
+          (unless (plist-get info :last-active)
+            (plist-put info :last-active now)))
+      (let ((base (list :chart nil
+                        :venue nil
+                        :created-at now
+                        :last-active now)))
+        (while props
+          (plist-put base (car props) (cadr props))
+          (setq props (cddr props)))
+        (push (cons name base) bebop--sessions)))))
+
+(defun bebop--mark-active-session (name)
+  "Update last-active timestamp for session NAME."
+  (when name
+    (let ((entry (assoc name bebop--sessions)))
+      (when entry
+        (plist-put (cdr entry) :last-active (bebop--now-string))))))
+
+(defun bebop-reconcile-sessions ()
+  "Reconcile `bebop--sessions' against dashboard-discovered tmux pairs."
+  (let ((now (bebop--now-string)))
+    ;; 1. Mark all known sessions as lost (assume no live pair).
+    (dolist (entry bebop--sessions)
+      (let ((info (cdr entry)))
+        (unless (plist-get info :created-at)
+          (plist-put info :created-at now))
+        (unless (plist-get info :last-active)
+          (plist-put info :last-active now))))
+    ;; 2. Ensure every live dashboard pair exists in the registry.
+    ;; Resolve chart/venue from disk — both for new entries and existing ones
+    ;; where the values are still nil (e.g. sessions discovered before this fix).
+    (dolist (pair bebop--live-sessions)
+      (let* ((name  (car pair))
+             (entry (assoc name bebop--sessions))
+             (info  (cdr entry))
+             (chart-path (expand-file-name (concat name ".org")
+                                           (expand-file-name bebop-charts-dir)))
+             (venue-path (expand-file-name name
+                                           (expand-file-name bebop-venues-dir)))
+             (chart (and (file-exists-p chart-path) chart-path))
+             (venue (and (file-directory-p venue-path) venue-path)))
+        (if entry
+            (progn
+              (when (and chart (null (plist-get info :chart)))
+                (plist-put info :chart chart))
+              (when (and venue (null (plist-get info :venue)))
+                (plist-put info :venue venue)))
+          (push (cons name (list :chart chart
+                                 :venue venue
+                                 :created-at now
+                                 :last-active now))
+                bebop--sessions))))
+    ;; 3. Remove entries with no live pair.
+    (setq bebop--sessions
+          (seq-filter
+           (lambda (entry)
+             (assoc (car entry) bebop--live-sessions))
+           bebop--sessions))
+    (setq bebop--sessions
+          (sort bebop--sessions (lambda (a b) (string< (car a) (car b)))))))
+
+(advice-add 'bebop--discover-existing-sessions :after
+            (lambda (&rest _) (bebop-reconcile-sessions)))
+
+(advice-add 'bebop--apply-active-session :after
+            (lambda (&rest _) (bebop--mark-active-session bebop--active-session)))
 
 (defun bebop--session-chart (name)
   "Return the chart file path for session NAME, or nil."
@@ -106,6 +396,17 @@ Called by `chant-dashboard--infer-status' to show the yellow dot."
   "Return the venue (worktree) path for session NAME, or nil."
   (let ((info (bebop--session-info name)))
     (and info (plist-get info :venue))))
+
+(defun bebop--session-names ()
+  "Return list of known session names."
+  (mapcar #'car bebop--sessions))
+
+(defun bebop--assert-name-available (name)
+  "Signal a user-error if NAME is empty or already used by a running session."
+  (when (string-empty-p (string-trim name))
+    (user-error "Session name cannot be empty"))
+  (when (assoc name bebop--live-sessions)
+    (user-error "Session \"%s\" is already running" name)))
 
 (defun bebop--ensure-dir (dir)
   "Expand DIR and create it (with parents) if it does not exist. Return the expanded path."
@@ -195,6 +496,23 @@ Called by `chant-dashboard--infer-status' to show the yellow dot."
     (let ((choice (completing-read "Existing venue: " venues nil t)))
       (expand-file-name choice (expand-file-name bebop-venues-dir)))))
 
+(defun bebop--prompt-repo-dir ()
+  "Prompt user to pick a plain repo directory from `bebop-repos-dir'.
+Returns the absolute path of the chosen directory.
+Unlike `bebop--prompt-new-venue', no worktree is created."
+  (let* ((repos-dir (expand-file-name bebop-repos-dir))
+         (entries
+          (seq-filter
+           (lambda (f)
+             (and (file-directory-p (expand-file-name f repos-dir))
+                  (not (equal f "Venues"))
+                  (not (string-prefix-p "." f))))
+           (directory-files repos-dir nil nil t)))
+         (_ (unless entries
+              (user-error "No repo directories found in %s" repos-dir)))
+         (choice (completing-read "Repo: " entries nil t)))
+    (expand-file-name choice repos-dir)))
+
 (defun bebop--find-repo-for-venue (venue-path)
   "Guess the repository path for VENUE-PATH using the REPO--BRANCH naming convention."
   (let* ((venue-name (file-name-nondirectory (directory-file-name venue-path)))
@@ -222,45 +540,32 @@ Called by `chant-dashboard--infer-status' to show the yellow dot."
     (let ((choice (completing-read "Chart: " files nil t)))
       (expand-file-name choice charts-dir))))
 
-(defun bebop--chart-section-for (name)
-  "Return the chart section heading for session NAME based on its current state.
-Returns \"Overture\" (gathering), \"Changes\" (active/blocked), or \"Coda\" (gone)."
-  (if (bebop--pair-gathering-p name)
-      "Overture"
-    (let ((pair (cdr (assoc name chant-dashboard--pairs))))
-      (if (and pair (eq (plist-get pair :status) 'gone))
-          "Coda"
-        "Changes"))))
+(defun bebop--prompt-any-org ()
+  "Prompt user to pick any .org file under `bebop-org-dir'.
+Shows paths relative to bebop-org-dir for readability.
+Returns the absolute path."
+  (let* ((root  (expand-file-name bebop-org-dir))
+         (files (directory-files-recursively root "\\.org$"))
+         ;; Exclude archive subdir
+         (files (seq-remove (lambda (f) (string-match-p "/archive/" f)) files))
+         (display (mapcar (lambda (f) (file-relative-name f root)) files))
+         (_ (unless display
+              (user-error "No .org files found under %s" bebop-org-dir)))
+         (choice (completing-read "Org doc: " display nil t)))
+    (expand-file-name choice root)))
 
-(defun bebop--cue-to-chart (subtree chart-path section)
-  "Append SUBTREE text to SECTION in chart at CHART-PATH.
-Creates the section heading if it does not already exist."
+(defun bebop--cue-to-chart (subtree chart-path)
+  "Append SUBTREE text to the end of the chart at CHART-PATH."
   (with-current-buffer (find-file-noselect chart-path)
     (save-excursion
-      ;; Strip the section heading from the start of SUBTREE if present.
-      ;; This prevents a duplicate heading when the user cues from the
-      ;; section heading itself (e.g. point is on "* Changes").
-      (let* ((heading-re (format "\\`\\* %s[^\n]*\n?" (regexp-quote section)))
-             (content (if (string-match heading-re subtree)
-                          (substring subtree (match-end 0))
-                        subtree)))
-        (goto-char (point-min))
-        (if (re-search-forward (format "^\\* %s\\b" (regexp-quote section)) nil t)
-            ;; Section found: move to end of its content
-            (org-end-of-subtree t)
-          ;; Section absent: create it at the end of the file
-          (goto-char (point-max))
-          (unless (bolp) (insert "\n"))
-          (insert (format "* %s\n" section)))
-        ;; Append the content with a blank-line separator
-        (unless (string-empty-p (string-trim content))
-          (unless (bolp) (insert "\n"))
-          (insert "\n")
-          (insert content)
-          (unless (string-suffix-p "\n" content)
-            (insert "\n")))))
+      (goto-char (point-max))
+      (unless (bolp) (insert "\n"))
+      (insert "\n")
+      (insert subtree)
+      (unless (string-suffix-p "\n" subtree)
+        (insert "\n")))
     (save-buffer))
-  (message "Cued to %s (%s)" section (file-name-nondirectory chart-path)))
+  (message "Cued to %s" (file-name-nondirectory chart-path)))
 
 (defun bebop--archive-chart (name chart-path)
   "Move the chart for session NAME from CHART-PATH to the archive directory."
@@ -275,191 +580,300 @@ Creates the section heading if it does not already exist."
       (when buf (kill-buffer buf)))
     (message "Archived chart to %s" archive-path)))
 
-(defun bebop--set-gathering (name value)
-  "Set gathering state for session NAME to VALUE (non-nil = gathering, nil = active).
-When VALUE is non-nil, also marks the dashboard entry as gathering immediately.
-When VALUE is nil, lets the next poll cycle update the status from pane content."
-  (let ((info (cdr (assoc name bebop--sessions))))
-    (when info
-      (plist-put info :gathering value)
-      (when value
-        (let ((pair (cdr (assoc name chant-dashboard--pairs))))
-          (when pair
-            (plist-put pair :status 'gathering))))
-      (chant-dashboard--render))))
+(defun bebop-archive-chart (name)
+  "Manually archive the chart for session NAME to the archive subdirectory.
+The session is not killed; only the chart file is moved."
+  (let ((chart-path (bebop--session-chart name)))
+    (unless (and chart-path (file-exists-p chart-path))
+      (user-error "No chart file found for session: %s" name))
+    (bebop--archive-chart name chart-path)
+    (when-let ((buf (find-buffer-visiting chart-path)))
+      (kill-buffer buf))
+    (bebop--upsert-session name (list :chart nil))
+    (message "Archived chart for session: %s" name)))
 
-(defun bebop--make-send-fn (name)
-  "Return a send function that clears gathering mode for NAME after sending."
-  (lambda ()
-    (interactive)
-    (claude-chant-send-buffer)
-    (bebop--set-gathering name nil)))
+(defun bebop-archive-chart-at-point ()
+  "Archive the chart for the on-deck session at point, or prompt interactively.
+When point has a `bebop-on-deck-name' text property, passes that name directly
+to `bebop-archive-chart'.  Otherwise falls through to the interactive prompt."
+  (interactive)
+  (let ((session-name (get-text-property (point) 'bebop-on-deck-name)))
+    (if session-name
+        (bebop-archive-chart session-name)
+      (bebop-archive-chart))))
+
+(defun bebop--remove-venue (venue-path)
+  "Remove the git worktree at VENUE-PATH.
+Tries `git worktree remove --force' first to properly unregister the worktree
+from the parent repo.  Falls back to `delete-directory' if git fails (e.g.
+the parent repo is gone)."
+  (let ((repo-path (bebop--find-repo-for-venue venue-path)))
+    (if (and repo-path
+             (eq 0 (call-process "git" nil nil nil
+                                 "-C" repo-path
+                                 "worktree" "remove" "--force" venue-path)))
+        (message "Removed worktree: %s" venue-path)
+      (delete-directory venue-path t)
+      (message "Removed venue directory: %s" venue-path))))
+
+(defun bebop-exile-session (name)
+  "Exile on-deck session NAME: archive its chart and delete its venue.
+The session will not appear in On deck and cannot be resumed.
+
+Steps:
+  1. Archive chart to the archive subdirectory (if present on disk)
+  2. Delete venue via git worktree remove --force, or rm -rf (if present)
+  3. Refresh the dashboard"
+  (interactive
+   (list (completing-read "Exile session: "
+                          (bebop--on-deck-names) nil t)))
+  (let* ((chart-path (let ((f (expand-file-name
+                               (concat name ".org")
+                               (expand-file-name bebop-charts-dir))))
+                       (when (file-exists-p f) f)))
+         (venue-path (let ((d (expand-file-name
+                               name
+                               (expand-file-name bebop-venues-dir))))
+                       (when (file-directory-p d) d)))
+         (desc (cond
+                ((and chart-path venue-path) "archive chart + delete venue")
+                (chart-path                  "archive chart (no venue)")
+                (venue-path                  "delete venue (no chart)")
+                (t                           "(no artifacts)"))))
+    (unless (yes-or-no-p (format "Exile \"%s\"? (%s) " name desc))
+      (user-error "Exile cancelled"))
+    (when chart-path
+      (bebop--archive-chart name chart-path))
+    (when venue-path
+      (bebop--remove-venue venue-path))
+    (bebop-refresh)
+    (message "Exiled session: %s" name)))
+
+(defun bebop-exile-session-at-point ()
+  "Exile the on-deck session at point, or call `bebop-exile-session' interactively.
+When point has a `bebop-on-deck-name' text property, passes that name directly
+to `bebop-exile-session'.  Otherwise falls through to the interactive prompt."
+  (interactive)
+  (let ((session-name (get-text-property (point) 'bebop-on-deck-name)))
+    (if session-name
+        (bebop-exile-session session-name)
+      (bebop-exile-session))))
+
+(defvar-local bebop-composition--cookies nil
+  "Face-remapping cookies active while `bebop-composition-mode' is on.")
+
+(defvar-local bebop--composition-session nil
+  "Session name this composition buffer belongs to, or nil for the global buffer.")
+
+(defvar bebop-composition-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'bebop-composition-send)
+    map)
+  "Keymap for `bebop-composition-mode'.")
+
+(defun bebop-composition-send ()
+  "Send this composition buffer to its Claude session."
+  (interactive)
+  (bebop-send-buffer))
+
+(defun bebop-composition--enable ()
+  "Activate composition-buffer settings in the current buffer."
+  (setq-local org-hide-emphasis-markers t)
+  (setq-local org-pretty-entities t)
+  (setq-local org-use-sub-superscripts nil)
+  (setq-local line-spacing 0.15)
+  (visual-line-mode 1)
+  (when (bound-and-true-p flyspell-mode) (flyspell-mode -1))
+  (when (bound-and-true-p company-mode) (company-mode -1))
+  (setq-local completion-at-point-functions
+              (remove 'ispell-completion-at-point
+                      completion-at-point-functions))
+  ;; Hide standard mode-line; use header-line instead (mirrors dashboard)
+  (setq-local mode-line-format nil)
+  (setq-local header-line-format
+              '((:eval
+                 (let* ((resolved (and (fboundp 'bebop--resolve-font) (bebop--resolve-font)))
+                        (base-h (let ((dh (face-attribute 'default :height nil t)))
+                                  (if (integerp dh) dh 160)))
+                        (abs-h (round (* bebop-header-height base-h)))
+                        (label (if bebop--composition-session
+                                   (format "Session: %s" bebop--composition-session)
+                                 "Bebop")))
+                   (propertize (concat " " label)
+                               'face `(:height ,abs-h :weight bold
+                                       :foreground ,bebop-session-header-color
+                                       ,@(when resolved (list :family resolved))))))))
+  (face-remap-add-relative 'header-line
+                           :background (face-attribute 'default :background nil t)
+                           :box nil
+                           :underline nil)
+  (setq bebop-composition--cookies
+        (list
+         (face-remap-add-relative 'default          :family "CamingoCode")
+         (face-remap-add-relative 'variable-pitch   :family "CamingoCode")
+         (face-remap-add-relative 'fixed-pitch       :family "CamingoCode")
+         (face-remap-add-relative 'org-block              :inherit 'fixed-pitch)
+         (face-remap-add-relative 'org-block-begin-line   :inherit 'fixed-pitch)
+         (face-remap-add-relative 'org-block-end-line     :inherit 'fixed-pitch)
+         (face-remap-add-relative 'org-code               :inherit 'fixed-pitch)
+         (face-remap-add-relative 'org-verbatim           :inherit 'fixed-pitch)
+         (face-remap-add-relative 'org-level-1      :family "CamingoCode" :height 1.0 :weight 'bold)
+         (face-remap-add-relative 'org-level-2      :family "CamingoCode" :height 1.0 :weight 'bold)
+         (face-remap-add-relative 'org-level-3      :family "CamingoCode" :height 1.0 :weight 'bold)
+         (face-remap-add-relative 'org-level-4      :family "CamingoCode" :height 1.0 :weight 'bold))))
+
+(defun bebop-composition--disable ()
+  "Deactivate composition-buffer settings in the current buffer."
+  (dolist (cookie bebop-composition--cookies)
+    (face-remap-remove-relative cookie))
+  (setq bebop-composition--cookies nil)
+  (kill-local-variable 'org-hide-emphasis-markers)
+  (kill-local-variable 'org-pretty-entities)
+  (kill-local-variable 'org-use-sub-superscripts)
+  (kill-local-variable 'line-spacing)
+  (kill-local-variable 'mode-line-format)
+  (kill-local-variable 'header-line-format)
+  (visual-line-mode -1)
+  (company-mode 1))
+
+(define-minor-mode bebop-composition-mode
+  "Book-like prose mode for Bebop composition buffers.
+
+Layers variable-pitch fonts, soft word-wrap, and per-face font overrides
+onto org-mode without altering any global org settings.
+
+\\{bebop-composition-mode-map}"
+  :lighter " ♩"
+  (if bebop-composition-mode
+      (bebop-composition--enable)
+    (bebop-composition--disable)))
 
 (defun bebop--get-or-create-composition-buffer (name)
   "Return the composition buffer for session NAME, creating it if absent."
   (let ((buf (get-buffer-create (format "*bebop-session: %s*" name))))
     (with-current-buffer buf
-      (unless (eq major-mode 'text-mode)
-        (text-mode))
-      (claude-chant--apply-buffer-settings)
-      (local-set-key (kbd "C-c C-c") (bebop--make-send-fn name))
-      (local-set-key (kbd "M-a") #'bebop--toggle-abeyance)
-      (bebop--set-header-overlay (format "Session: %s" name)))
+      (unless (eq major-mode 'org-mode)
+        (org-mode))
+      (unless bebop-composition-mode
+        (bebop-composition-mode 1))
+      (setq-local bebop--composition-session name)
+      (bebop--apply-buffer-settings)
+      (local-set-key (kbd "M-a") #'bebop-passthrough))
     buf))
 
-(defun bebop--create-session (name venue-path chart-path)
+(defun bebop--create-session (name venue-path chart-path &optional launcher)
   "Create Bebop session NAME with optional VENUE-PATH and CHART-PATH.
-Registers in `chant-dashboard--pairs' for dashboard display and polling,
-registers in `bebop--sessions' for chart/venue/gathering tracking,
-creates the per-session composition buffer, and starts in gathering mode."
-  (when (assoc name chant-dashboard--pairs)
+LAUNCHER, if non-nil, overrides the default `claude' invocation.  Pass
+\\='docker to run Claude inside the sandbox defined by `bebop-docker-script'.
+Registers in `bebop--live-sessions' for dashboard display and polling,
+registers in `bebop--sessions' for chart/venue/pending tracking,
+creates the per-session composition buffer, and starts in pending mode."
+  (when (assoc name bebop--live-sessions)
     (user-error "A pair named \"%s\" already exists in the dashboard" name))
   ;; Ensure the tmux session exists
-  (unless (chant-dashboard--session-exists-p)
-    (chant-dashboard--tmux "new-session" "-d" "-s" chant-dashboard-session))
+  (unless (bebop--tmux-session-exists-p)
+    (bebop--tmux "new-session" "-d" "-s" bebop-tmux-session))
   ;; Reject duplicate window names
-  (when (member name (chant-dashboard--window-list))
+  (when (member name (bebop--tmux-window-list))
     (user-error "tmux window \"%s\" already exists in session \"%s\""
-                name chant-dashboard-session))
+                name bebop-tmux-session))
   (let* ((work-dir (expand-file-name (or venue-path "~/Code")))
-         (target   (format "%s:%s" chant-dashboard-session name)))
+         (target   (format "%s:%s" bebop-tmux-session name))
+         (launch-cmd (if (eq launcher 'docker)
+                         (format "cd %s && %s"
+                                 (shell-quote-argument work-dir)
+                                 (expand-file-name bebop-docker-script))
+                       (format "cd %s && claude"
+                               (shell-quote-argument work-dir)))))
     ;; Create the tmux window and launch Claude Code
-    (chant-dashboard--tmux "new-window" "-t" chant-dashboard-session "-n" name "-a")
-    (chant-dashboard--tmux "send-keys" "-t" target
-                           (format "cd %s && claude"
-                                   (shell-quote-argument work-dir))
-                           "Enter")
-    ;; Register with chant-dashboard (polling, status display, session switching)
+    (bebop--tmux "new-window" "-t" bebop-tmux-session "-n" name "-a")
+    (bebop--tmux "send-keys" "-t" target launch-cmd "Enter")
+    ;; Register with bebop-dashboard (polling, status display, session switching)
     (push (cons name (list :window  target
-                           :status  'gathering
-                           :pane-id (chant-dashboard--pane-id-for name)))
-          chant-dashboard--pairs)
-    ;; Register with bebop (chart, venue, gathering state)
-    (push (cons name (list :chart     chart-path
-                           :venue     venue-path
-                           :gathering t))
-          bebop--sessions)
-    ;; Auto-select if this is the first session
-    (when (null chant-dashboard--active-pair)
-      (chant-dashboard-select-pair name))
+                           :status  'unknown
+                           :pane-id (bebop--tmux-pane-id-for name)))
+          bebop--live-sessions)
+    ;; Register with bebop (chart, venue, launcher, last-active)
+    (bebop--upsert-session name (list :chart chart-path
+                                      :venue venue-path
+                                      :launcher launcher
+                                      :last-active (bebop--now-string)))
+    ;; Select the new session in bebop
+    (bebop-select-session name)
     ;; Set up the composition buffer
     (bebop--get-or-create-composition-buffer name)
     ;; Open chart in background (no buffer switch)
     (when (and chart-path (file-exists-p chart-path))
       (find-file-noselect chart-path))
-    (chant-dashboard--render)
-    (message "Bebop session \"%s\" created — gathering mode. Cue context with C-c C-p, then jam with C-c C-j." name)))
+    (bebop--render)
+    (message "Bebop session \"%s\" created. Cue context with C-c C-p, then jam with C-c C-j." name)))
 
 (defun bebop-new-session ()
-  "Create a new Bebop session via the three-step flow: venue → name → chart.
+  "Create a new Bebop session.
 
-Step 1 — Venue:
-  New      → pick a repo from ~/Code/Repos/, pick/type a branch, create worktree
-  Existing → pick an existing worktree from ~/Code/Repos/Venues/
-  None     → no venue; session starts in ~/Code
+Context-aware: detects whether point is in an org buffer or at a heading and
+offers appropriate shortcuts in the chart prompt.
 
-Step 2 — Name: pre-filled from the venue's REPO--BRANCH directory name if a
-  venue was chosen; otherwise blank and required.
+Flow:
+  1. Venue  — new / old / repo / none
+  2. Name   — editable string; pre-filled from venue dirname if a venue chosen
+  3. Chart  — context-dependent options (see below)
 
-Step 3 — Chart:
-  New      → blank file created at ~/Code/Org/charts/NAME.org
-  Existing → pick from ~/Code/Org/charts/"
+Chart options vary by context:
+  - In org-mode at a heading: \"from heading\" / new / old / org / none
+  - In org-mode (any):        \"use this file\" / new / old / org / none
+  - Elsewhere:                new / old / org / none
+
+\"from heading\": creates a new chart in bebop-charts-dir and appends the
+current subtree to its * Overture section.
+
+\"use this file\": sets the chart to the current buffer's file path (any
+.org file, not limited to bebop-charts-dir).
+
+\"old\": pick from bebop-charts-dir.
+\"org\": pick any .org under bebop-org-dir (see bebop--prompt-any-org).
+\"new\": create a new blank chart at bebop-charts-dir/NAME.org."
   (interactive)
-  ;; Step 1: Venue
-  (let* ((venue-choice (completing-read "Venue: " '("New" "Existing" "None") nil t))
+  (let* (;; ── Step 1: Venue ────────────────────────────────────────────────
+         (venue-choice (completing-read "Venue: "
+                                        '("new" "old" "repo" "none") nil t))
          (venue-path
           (cond
-           ((equal venue-choice "New")      (bebop--prompt-new-venue))
-           ((equal venue-choice "Existing") (bebop--prompt-existing-venue))
+           ((equal venue-choice "new")  (bebop--prompt-new-venue))
+           ((equal venue-choice "old")  (bebop--prompt-existing-venue))
+           ((equal venue-choice "repo") (bebop--prompt-repo-dir))
+           (t nil)))
+         ;; ── Step 2: Name ─────────────────────────────────────────────────
+         (default-name (when venue-path
+                         (file-name-nondirectory
+                          (directory-file-name venue-path))))
+         (name (read-string "Session name: " default-name))
+         (_ (bebop--assert-name-available name))
+         ;; ── Step 3: Chart (context-aware) ────────────────────────────────
+         (in-org    (derived-mode-p 'org-mode))
+         (at-heading (and in-org
+                          (ignore-errors (save-excursion (org-back-to-heading t) t))))
+         (current-file (buffer-file-name))
+         (chart-options
+          (append
+           (when at-heading  '("from heading"))
+           (when (and in-org current-file) '("use this file"))
+           '("new" "old" "org" "none")))
+         (chart-choice (completing-read "Chart: " chart-options nil t))
+         (chart-path
+          (cond
+           ((equal chart-choice "from heading")
+            (let ((subtree (bebop-cue--subtree-text))
+                  (path    (bebop--create-new-chart name)))
+              (bebop--cue-to-chart subtree path)
+              path))
+           ((equal chart-choice "use this file") current-file)
+           ((equal chart-choice "new")  (bebop--create-new-chart name))
+           ((equal chart-choice "old")  (bebop--prompt-existing-chart))
+           ((equal chart-choice "org")  (bebop--prompt-any-org))
            (t nil))))
-    ;; Step 2: Name
-    (let* ((suggested (and venue-path
-                           (file-name-nondirectory
-                            (directory-file-name venue-path))))
-           (name (read-string "Session name: " suggested)))
-      (when (string-empty-p (string-trim name))
-        (user-error "Session name cannot be empty"))
-      (when (assoc name bebop--sessions)
-        (user-error "Session \"%s\" already exists" name))
-      ;; Step 3: Chart
-      (let* ((chart-choice (completing-read "Chart: " '("New" "Existing") nil t))
-             (chart-path
-              (if (equal chart-choice "New")
-                  (bebop--create-new-chart name)
-                (bebop--prompt-existing-chart))))
-        (bebop--create-session name venue-path chart-path)))))
-
-(defun bebop-rename-session (old-name new-name)
-  "Rename session OLD-NAME to NEW-NAME.
-Updates the tmux window, both alist keys, the composition buffer name and
-header, the chart file (when its basename matches OLD-NAME.org), and any
-open Solo frame."
-  (interactive
-   (let* ((old (completing-read "Rename session: "
-                                (mapcar #'car bebop--sessions)
-                                nil t nil nil
-                                chant-dashboard--active-pair))
-          (new (read-string (format "New name for \"%s\": " old))))
-     (list old new)))
-  (when (string-empty-p (string-trim new-name))
-    (user-error "Session name cannot be empty"))
-  (when (equal old-name new-name)
-    (user-error "New name is the same as the old name"))
-  (when (assoc new-name chant-dashboard--pairs)
-    (user-error "A session named \"%s\" already exists" new-name))
-  (let* ((old-window  (format "%s:%s" chant-dashboard-session old-name))
-         (new-window  (format "%s:%s" chant-dashboard-session new-name))
-         (sinfo       (cdr (assoc old-name bebop--sessions)))
-         (chart-path  (and sinfo (plist-get sinfo :chart))))
-    ;; 1. Rename the tmux window
-    (chant-dashboard--tmux "rename-window" "-t" old-window new-name)
-    ;; 2. Update chant-dashboard--pairs key and :window target
-    (let ((pair (assoc old-name chant-dashboard--pairs)))
-      (when pair
-        (setcar pair new-name)
-        (plist-put (cdr pair) :window new-window)))
-    ;; 3. Update bebop--sessions key
-    (let ((entry (assoc old-name bebop--sessions)))
-      (when entry
-        (setcar entry new-name)))
-    ;; 4. Update active-pair and chant target if this was the active session
-    (when (equal chant-dashboard--active-pair old-name)
-      (setq chant-dashboard--active-pair new-name)
-      (setq claude-chant-target new-window))
-    ;; 5. Rename composition buffer and refresh its header
-    (let ((buf (get-buffer (format "*bebop-session: %s*" old-name))))
-      (when (buffer-live-p buf)
-        (with-current-buffer buf
-          (rename-buffer (format "*bebop-session: %s*" new-name))
-          (bebop--set-header-overlay (format "Session: %s" new-name)
-                                     (if chant-abeyance-mode
-                                         bebop-abeyance-header-color
-                                       bebop-header-color)))))
-    ;; 6. Rename chart file when its basename matches OLD-NAME.org
-    (when (and chart-path
-               (string-equal (file-name-nondirectory chart-path)
-                             (format "%s.org" old-name)))
-      (let* ((dir           (file-name-directory chart-path))
-             (new-chart     (expand-file-name (format "%s.org" new-name) dir)))
-        (when (file-exists-p chart-path)
-          (rename-file chart-path new-chart t))
-        (let ((buf (find-buffer-visiting chart-path)))
-          (when buf
-            (with-current-buffer buf
-              (set-visited-file-name new-chart t t))))
-        (plist-put sinfo :chart new-chart)
-        ;; Refresh conductor chart window if open
-        (when (fboundp 'bebop-frame--update-conductor)
-          (bebop-frame--update-conductor))))
-    ;; 7. Update any open Solo frame
-    (let ((solo (cl-find-if (lambda (f)
-                              (equal (frame-parameter f 'bebop-solo-session) old-name))
-                            (frame-list))))
-      (when solo
-        (set-frame-parameter solo 'bebop-solo-session new-name)
-        (set-frame-parameter solo 'name (format "Solo: %s" new-name))))
-    (chant-dashboard--render)
-    (message "Renamed \"%s\" → \"%s\"" old-name new-name)))
+    (bebop--create-session name venue-path chart-path
+                           (when bebop-use-docker 'docker))))
 
 (defun bebop-kill-session (name)
   "Kill session NAME and clean up all associated state.
@@ -468,87 +882,367 @@ Steps:
   1. Kill the tmux window (claude:NAME)
   2. Kill the *bebop-session: NAME* composition buffer
   3. Close the Solo frame for this session (if open)
-  4. Archive the chart to ~/Code/Org/charts/archive/NAME-MMDD.org
-  5. Offer to remove the venue worktree (git worktree remove)"
-  (interactive
-   (list (or (and bebop--sessions
-                  (completing-read "Kill session: "
-                                   (mapcar #'car bebop--sessions)
-                                   nil t))
-             (user-error "No Bebop sessions to kill"))))
-  (unless (assoc name bebop--sessions)
-    (user-error "Unknown Bebop session: %s" name))
+  4. Close the chart buffer (file remains in bebop-charts-dir)
+
+Chart and venue artifacts are left on disk and will appear in On deck."
   (let* ((sinfo     (bebop--session-info name))
          (chart-path (plist-get sinfo :chart))
          (venue-path (plist-get sinfo :venue))
-         (pair-info  (cdr (assoc name chant-dashboard--pairs))))
+         (pair-info  (cdr (assoc name bebop--live-sessions))))
     ;; 1. Kill tmux window
     (when pair-info
       (ignore-errors
-        (chant-dashboard--tmux "kill-window" "-t" (plist-get pair-info :window))))
+        (bebop--tmux "kill-window" "-t" (plist-get pair-info :window))))
     ;; 2. Kill composition buffer
     (let ((buf (get-buffer (format "*bebop-session: %s*" name))))
       (when (buffer-live-p buf)
         (kill-buffer buf)))
-    ;; 3. Close Solo frame if open
-    (when (fboundp 'bebop-frame--close-solo)
-      (bebop-frame--close-solo name))
-    ;; 4. Archive chart
-    (when (and chart-path (file-exists-p chart-path))
-      (bebop--archive-chart name chart-path))
-    ;; 5. Offer to remove venue worktree
-    (when (and venue-path (file-directory-p venue-path))
-      (when (yes-or-no-p (format "Remove venue worktree %s? " venue-path))
-        (let ((repo-path (bebop--find-repo-for-venue venue-path)))
-          (if repo-path
-              (call-process "git" nil nil nil
-                            "-C" repo-path "worktree" "remove" venue-path)
-            (message "Could not determine repo for venue; skipping worktree removal")))))
-    ;; Remove from registries
+    ;; 3. Close Solo frame if open — offer buffer cleanup
+    (let ((solo-frame (cl-find-if
+                       (lambda (f) (equal (frame-parameter f 'bebop-solo-session) name))
+                       (frame-list))))
+      (when solo-frame
+        (if (yes-or-no-p (format "Solo frame for \"%s\" is open. Close it and clean up buffers? " name))
+            (progn
+              (dolist (buf (delete-dups (mapcar #'window-buffer (window-list solo-frame))))
+                (when (and (buffer-live-p buf)
+                           (cl-every (lambda (w) (eq (window-frame w) solo-frame))
+                                     (get-buffer-window-list buf nil t)))
+                  (let ((kill-buffer-query-functions
+                         (remq 'process-kill-buffer-query-function
+                               kill-buffer-query-functions)))
+                    (kill-buffer buf))))
+              (delete-frame solo-frame))
+          (message "Solo frame left open — it will be stale after this kill."))))
+    ;; 4. Close chart buffer (file remains in bebop-charts-dir)
+    (when chart-path
+      (let ((buf (find-buffer-visiting chart-path)))
+        (when buf (kill-buffer buf))))
+    ;; Remove from registries (simple — no state transition)
     (setq bebop--sessions
           (cl-remove-if (lambda (s) (equal (car s) name)) bebop--sessions))
-    (setq chant-dashboard--pairs
-          (cl-remove-if (lambda (p) (equal (car p) name)) chant-dashboard--pairs))
+    (setq bebop--live-sessions
+          (cl-remove-if (lambda (p) (equal (car p) name)) bebop--live-sessions))
     ;; Update active pair if needed
-    (when (equal chant-dashboard--active-pair name)
-      (setq chant-dashboard--active-pair (caar chant-dashboard--pairs))
-      (chant-dashboard--apply-active-pair))
-    (chant-dashboard--render)
+    (when (equal bebop--active-session name)
+      (setq bebop--active-session (caar bebop--live-sessions))
+      (bebop--apply-active-session))
+    (bebop-refresh)
     (message "Killed Bebop session: %s" name)))
 
-(defun bebop-reconnect-chart (session chart-file)
-  "Re-link SESSION to CHART-FILE after a restart or other loss of session state.
+(defun bebop-resume (&optional name)
+  "Resume a Bebop session using existing artifacts on disk.
 
-SESSION must be a known tmux window (present in `chant-dashboard--pairs').
-CHART-FILE is picked from `bebop-charts-dir'.
+Scans bebop-charts-dir and bebop-venues-dir for matching names and
+pre-fills the session creation flow.  NAME may be passed from an
+on-deck dashboard line."
+  (let* ((names (bebop--on-deck-names))
+         (_ (unless names
+              (user-error "No sessions on deck (no charts or venues on disk)")))
+         (chosen (or name
+                     (completing-read "On deck: " names nil t)))
+         (chart-path (let ((f (expand-file-name
+                               (concat chosen ".org")
+                               (expand-file-name bebop-charts-dir))))
+                       (when (file-exists-p f) f)))
+         (venue-path (let ((d (expand-file-name
+                               chosen
+                               (expand-file-name bebop-venues-dir))))
+                       (when (file-directory-p d) d)))
+         (session-name (read-string "Session name: " chosen))
+         (_ (bebop--assert-name-available session-name))
+         ;; Respect the Docker flag; fall back to the launcher the session was
+         ;; originally created with (stored in :launcher) if the flag is off.
+         (stored   (bebop--session-info chosen))
+         (launcher (if bebop-use-docker 'docker
+                     (and stored (plist-get stored :launcher)))))
+    (bebop--create-session session-name venue-path chart-path launcher)))
 
-If the session has no entry in `bebop--sessions' (common after restart), a
-minimal entry is created with the chart path and no venue. If an entry already
-exists, only the chart path is updated.
-
-After reconnecting, the Conductor frame's chart window is refreshed immediately."
+(defun bebop-associate-chart (name)
+  "Associate an org doc as the chart for session NAME.
+Errors if session already has a chart — use `bebop-dissociate-chart' first."
   (interactive
-   (list
-    (completing-read "Session: "
-                     (or (mapcar #'car chant-dashboard--pairs)
-                         (user-error "No sessions known — open the dashboard first"))
-                     nil t nil nil chant-dashboard--active-pair)
-    (let* ((charts-dir (bebop--ensure-dir bebop-charts-dir))
-           (files (or (bebop--list-charts)
-                      (user-error "No chart files found in %s" bebop-charts-dir))))
-      (expand-file-name (completing-read "Chart: " files nil t) charts-dir))))
-  (if (assoc session bebop--sessions)
-      ;; Session already registered — update chart path only
-      (plist-put (cdr (assoc session bebop--sessions)) :chart chart-file)
-    ;; Session missing from registry (post-restart) — create minimal entry
-    (push (cons session (list :chart chart-file :venue nil :gathering nil))
-          bebop--sessions))
-  ;; Open the chart file in the background so it is ready to display
-  (find-file-noselect chart-file)
-  ;; Refresh the Conductor frame if open
-  (when (fboundp 'bebop-frame--update-conductor)
-    (bebop-frame--update-conductor))
-  (message "Reconnected: %s → %s" session (file-name-nondirectory chart-file)))
+   (list (completing-read "Session: "
+                          (bebop--session-names) nil t)))
+  (when (bebop--session-chart name)
+    (user-error "Session \"%s\" already has a chart — use bebop-dissociate-chart first" name))
+  (let* ((choice (completing-read "Chart: " '("new" "old" "org") nil t))
+         (chart-path
+          (cond
+           ((equal choice "new") (bebop--create-new-chart name))
+           ((equal choice "old") (bebop--prompt-existing-chart))
+           (t                    (bebop--prompt-any-org)))))
+    (bebop--upsert-session name (list :chart chart-path))
+    (find-file-noselect chart-path)
+    (bebop--render)
+    (message "Associated chart: %s" (file-name-nondirectory chart-path))))
+
+(defun bebop-dissociate-chart (name)
+  "Remove the chart association from session NAME."
+  (interactive
+   (list (completing-read "Session: "
+                          (seq-filter #'bebop--session-chart
+                                      (bebop--session-names))
+                          nil t)))
+  (let ((chart (bebop--session-chart name)))
+    (when-let ((buf (and chart (find-buffer-visiting chart))))
+      (kill-buffer buf))
+    (bebop--upsert-session name (list :chart nil))
+    (bebop--render)
+    (message "Dissociated chart from session: %s" name)))
+
+(defun bebop-associate-venue (name)
+  "Associate a repo or worktree as the venue for session NAME.
+Errors if session already has a venue — use `bebop-dissociate-venue' first.
+Note: does not move the running Claude process's working directory."
+  (interactive
+   (list (completing-read "Session: "
+                          (bebop--session-names) nil t)))
+  (when (bebop--session-venue name)
+    (user-error "Session \"%s\" already has a venue — use bebop-dissociate-venue first" name))
+  (let* ((choice (completing-read "Venue: " '("new" "old" "repo") nil t))
+         (venue-path
+          (cond
+           ((equal choice "new")  (bebop--prompt-new-venue))
+           ((equal choice "old")  (bebop--prompt-existing-venue))
+           (t                     (bebop--prompt-repo-dir)))))
+    (bebop--upsert-session name (list :venue venue-path))
+    (bebop--render)
+    (message "Associated venue: %s" (file-name-nondirectory
+                                     (directory-file-name venue-path)))))
+
+(defun bebop-dissociate-venue (name)
+  "Remove the venue association from session NAME."
+  (interactive
+   (list (completing-read "Session: "
+                          (seq-filter #'bebop--session-venue
+                                      (bebop--session-names))
+                          nil t)))
+  (bebop--upsert-session name (list :venue nil))
+  (bebop--render)
+  (message "Dissociated venue from session: %s" name))
+
+(defun bebop-associate-chart-at-point ()
+  "Associate a chart for the session at point."
+  (interactive)
+  (let ((name (get-text-property (point) 'bebop-session-name)))
+    (if name (bebop-associate-chart name)
+      (call-interactively #'bebop-associate-chart))))
+
+(defun bebop-dissociate-chart-at-point ()
+  "Dissociate chart from the session at point."
+  (interactive)
+  (let ((name (get-text-property (point) 'bebop-session-name)))
+    (if name (bebop-dissociate-chart name)
+      (call-interactively #'bebop-dissociate-chart))))
+
+(defun bebop-associate-venue-at-point ()
+  "Associate a venue for the session at point."
+  (interactive)
+  (let ((name (get-text-property (point) 'bebop-session-name)))
+    (if name (bebop-associate-venue name)
+      (call-interactively #'bebop-associate-venue))))
+
+(defun bebop-dissociate-venue-at-point ()
+  "Dissociate venue from the session at point."
+  (interactive)
+  (let ((name (get-text-property (point) 'bebop-session-name)))
+    (if name (bebop-dissociate-venue name)
+      (call-interactively #'bebop-dissociate-venue))))
+
+(define-key bebop-dashboard-mode-map (kbd "C") #'bebop-associate-chart-at-point)
+(define-key bebop-dashboard-mode-map (kbd "D") #'bebop-dissociate-chart-at-point)
+(define-key bebop-dashboard-mode-map (kbd "V") #'bebop-associate-venue-at-point)
+(define-key bebop-dashboard-mode-map (kbd "W") #'bebop-dissociate-venue-at-point)
+(define-key bebop-dashboard-mode-map (kbd "!") #'bebop-toggle-docker)
+
+(defvar-local bebop-jira--overlays nil
+  "Overlays added to this buffer by `bebop-jira-apply-overlays'.")
+
+(defun bebop-jira--ticket-in-name-p (ticket-id name)
+  "Return non-nil if TICKET-ID appears in NAME (case-insensitive)."
+  (string-match-p (regexp-quote (upcase ticket-id))
+                  (upcase (file-name-base name))))
+
+(defun bebop-jira--has-chart-p (ticket-id)
+  "Return non-nil if a chart file in `bebop-charts-dir' references TICKET-ID."
+  (let ((dir (expand-file-name bebop-charts-dir)))
+    (and (file-directory-p dir)
+         (seq-some (lambda (f) (bebop-jira--ticket-in-name-p ticket-id f))
+                   (directory-files dir)))))
+
+(defun bebop-jira--has-venue-p (ticket-id)
+  "Return non-nil if a venue directory in `bebop-venues-dir' references TICKET-ID."
+  (let ((dir (expand-file-name bebop-venues-dir)))
+    (and (file-directory-p dir)
+         (seq-some (lambda (f) (bebop-jira--ticket-in-name-p ticket-id f))
+                   (directory-files dir)))))
+
+(defun bebop-jira--active-session-name (ticket-id)
+  "Return the name of a live (running) session referencing TICKET-ID, or nil.
+Checks `bebop--live-sessions' so on-deck sessions don't show a dot."
+  (car (seq-find (lambda (pair)
+                   (bebop-jira--ticket-in-name-p ticket-id (car pair)))
+                 bebop--live-sessions)))
+
+(defun bebop-jira--indicator (ticket-id)
+  "Return a fixed-width propertized indicator string for TICKET-ID.
+All three icons (● ⊞ ⎇) are always present. Inactive icons are painted
+with the default background color, making them invisible while preserving
+pixel-perfect column alignment across every heading."
+  (let* ((session (bebop-jira--active-session-name ticket-id))
+         (status  (and session
+                       (fboundp 'bebop--infer-status)
+                       (bebop--infer-status session)))
+         (chart   (bebop-jira--has-chart-p ticket-id))
+         (venue   (bebop-jira--has-venue-p ticket-id))
+         (bg      (face-attribute 'default :background nil t)))
+    (concat
+     "  "   ; two spaces between slug and icons
+     (propertize "●" 'face
+                 (if session
+                     (pcase status
+                       ("active"                'bebop-dot-active-face)
+                       ((or "waiting" "blocked") 'bebop-dot-waiting-face)
+                       (_                        'bebop-dot-degraded-face))
+                   `(:foreground ,bg)))
+     (propertize "⊞" 'face
+                 (if chart 'bebop-dot-degraded-face `(:foreground ,bg)))
+     (propertize "⎇" 'face
+                 (if venue 'bebop-dot-degraded-face `(:foreground ,bg)))
+     "  ")))
+
+(defun bebop-jira-apply-overlays ()
+  "Add session/chart/venue indicators to JIRA ticket headings in current buffer.
+Uses a replacing overlay that substitutes the whitespace padding between the
+ticket slug and the description with the compact indicator string. This keeps
+the description column consistent across tickets of different ID lengths, and
+eliminates the excess whitespace that org-jira inserts between slug and title."
+  (interactive)
+  (mapc #'delete-overlay bebop-jira--overlays)
+  (setq bebop-jira--overlays nil)
+  (org-map-entries
+   (lambda ()
+     (let ((ticket-id (or (org-entry-get nil "CUSTOM_ID")
+                          (org-entry-get nil "ID"))))
+       (when (and ticket-id (string-match-p "^[A-Z]+-[0-9]+$" ticket-id))
+         (let ((indicator (bebop-jira--indicator ticket-id)))
+           (save-excursion
+             (let* ((bol  (line-beginning-position))
+                    (line (buffer-substring-no-properties bol (line-end-position)))
+                    (id-pos (string-match (regexp-quote ticket-id) line)))
+               (when id-pos
+                 (let* ((id-end     (+ id-pos (length ticket-id)))
+                        (desc-start (string-match "[^ ]" line id-end))
+                        ;; Pad shorter slugs so icons always land at the same column.
+                        ;; ROOST-XXXX is 10 chars (the longest slug format).
+                        (slug-pad   (make-string (max 0 (- 10 (length ticket-id))) ?\s))
+                        (display-str (concat slug-pad indicator)))
+                   (when (and desc-start (> (- desc-start id-end) 0))
+                     (let ((ov (make-overlay (+ bol id-end)
+                                             (+ bol desc-start))))
+                       (overlay-put ov 'display display-str)
+                       (push ov bebop-jira--overlays)))))))))))
+   nil 'file))
+
+(defvar-local bebop-jira--reapply-timer nil
+  "Idle timer for debounced overlay reapplication after buffer changes.")
+
+(defun bebop-jira--schedule-reapply (&rest _)
+  "Schedule `bebop-jira-apply-overlays' to run after a short idle period.
+Debounces rapid buffer changes (e.g. during jira-sync rewrite) so overlays
+are reapplied once the content settles, not on every inserted character."
+  (when (timerp bebop-jira--reapply-timer)
+    (cancel-timer bebop-jira--reapply-timer))
+  (setq bebop-jira--reapply-timer
+        (run-with-idle-timer 1 nil #'bebop-jira-apply-overlays)))
+
+(defun bebop-jira--maybe-setup ()
+  "Enable JIRA overlays if the current buffer is JIRA.org."
+  (when (and buffer-file-name
+             (string-equal (file-name-nondirectory buffer-file-name) "JIRA.org"))
+    (display-line-numbers-mode -1)
+    (bebop-jira-apply-overlays)
+    ;; Reapply after saves and after any buffer change (covers jira-sync rewrites
+    ;; that may not trigger after-save-hook).
+    (add-hook 'after-save-hook   #'bebop-jira-apply-overlays nil t)
+    (add-hook 'after-change-functions #'bebop-jira--schedule-reapply nil t)))
+
+(add-hook 'org-mode-hook #'bebop-jira--maybe-setup)
+
+;; Refresh JIRA overlays whenever the dashboard re-renders (i.e. each poll
+;; cycle). The idle-timer debounce in bebop-jira--schedule-reapply means this
+;; only fires once the dashboard settles, not on every status flicker.
+(with-eval-after-load 'bebop-dashboard
+  (advice-add 'bebop--render :after
+              (lambda (&rest _)
+                (when-let ((buf (get-buffer "JIRA.org")))
+                  (with-current-buffer buf
+                    (bebop-jira--schedule-reapply))))))
+
+(defun bebop--jira-heading-ticket-id ()
+  "Return the JIRA ticket ID for the heading at point, or nil.
+Checks CUSTOM_ID and ID properties first; falls back to parsing [TICKET-ID]
+from the heading text."
+  (or (org-entry-get nil "CUSTOM_ID")
+      (org-entry-get nil "ID")
+      (when-let ((title (org-get-heading t t t t)))
+        (when (string-match "\\[\\([A-Z]+-[0-9]+\\)\\]" title)
+          (match-string 1 title)))))
+
+(defun bebop-new-session-from-jira-heading ()
+  "Create a Bebop session from the JIRA ticket heading at point.
+
+Extracts the ticket ID from the heading at point (via CUSTOM_ID / ID property
+or [TICKET-ID] text), prompts for a repo, pre-fills the branch with the ticket
+ID and the session name with REPO--TICKET-ID, creates a git worktree, creates
+a chart from the subtree, and calls `bebop--create-session'."
+  (interactive)
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Not in an org-mode buffer"))
+  (unless (ignore-errors (save-excursion (org-back-to-heading t) t))
+    (user-error "Point is not at an org heading"))
+  (save-excursion
+    (org-back-to-heading t)
+    (let* ((ticket-id  (or (bebop--jira-heading-ticket-id)
+                           (user-error "No JIRA ticket ID found at this heading")))
+           ;; ── Repo ──────────────────────────────────────────────────────────
+           (repos      (bebop--list-repos))
+           (_          (unless repos
+                         (user-error "No repositories found in %s" bebop-repos-dir)))
+           (repo       (completing-read "Repository: " repos nil t))
+           (repo-path  (expand-file-name repo (expand-file-name bebop-repos-dir)))
+           ;; ── Branch ────────────────────────────────────────────────────────
+           (branches   (bebop--list-branches repo-path))
+           (branch     (read-string "Branch: " ticket-id))
+           (_          (when (string-empty-p (string-trim branch))
+                         (user-error "Branch name cannot be empty")))
+           ;; ── Session name ──────────────────────────────────────────────────
+           (worktree-name (format "%s--%s" repo (bebop--sanitize-name branch)))
+           (name       (read-string "Session name: " worktree-name))
+           (_          (bebop--assert-name-available name))
+           ;; ── Worktree ──────────────────────────────────────────────────────
+           (venues-dir (bebop--ensure-dir bebop-venues-dir))
+           (venue-path (expand-file-name worktree-name venues-dir))
+           (_          (when (file-directory-p venue-path)
+                         (user-error "Worktree already exists: %s" venue-path)))
+           (_          (if (member branch branches)
+                           (unless (eq 0 (call-process "git" nil nil nil
+                                                       "-C" repo-path
+                                                       "worktree" "add"
+                                                       venue-path branch))
+                             (user-error "git worktree add failed for branch: %s" branch))
+                         (unless (eq 0 (call-process "git" nil nil nil
+                                                     "-C" repo-path
+                                                     "worktree" "add" "-b" branch
+                                                     venue-path "HEAD"))
+                           (user-error "git worktree add -b failed: %s" branch))))
+           ;; ── Chart from subtree ────────────────────────────────────────────
+           (subtree    (bebop-cue--subtree-text))
+           (chart-path (bebop--create-new-chart name)))
+      (bebop--cue-to-chart subtree chart-path)
+      (message "Created worktree: %s" venue-path)
+      (bebop--create-session name venue-path chart-path))))
 
 (provide 'bebop-session)
 
