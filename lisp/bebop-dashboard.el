@@ -360,7 +360,7 @@ not agent sessions.  Called once on first `bebop-dashboard-open'."
 with the setlist tree renderer.")
 
 (defvar bebop-dashboard-footer-lines
-  '("n: new  k: kill  RET: select  g: refresh  q: quit")
+  '("n: new  k: kill  RET: select  g: refresh")
   "Lines of the dashboard footer cheatsheet. Modules may replace this
 list when they add keybindings.")
 
@@ -504,7 +504,6 @@ list when they add keybindings.")
     (define-key map (kbd "p")      #'bebop--prev-session)
     (define-key map (kbd "g")      #'bebop-refresh)
     (define-key map (kbd "D")      #'bebop-debug-pane)
-    (define-key map (kbd "q")      #'quit-window)
     map)
   "Keymap for `bebop-dashboard-mode'.")
 
@@ -514,6 +513,12 @@ list when they add keybindings.")
 ;; derivation would keep the stale parent and TAB would never reach
 ;; `magit-section-toggle'.
 (set-keymap-parent bebop-dashboard-mode-map magit-section-mode-map)
+
+;; q is neutralized, not merely unbound: both parent keymaps
+;; (magit-section-mode-map and special-mode-map) bind it to
+;; quit-window, and burying the Conductor's dashboard pane is never
+;; intentional. Lives outside the defvar so hot-reloads apply it.
+(define-key bebop-dashboard-mode-map (kbd "q") #'ignore)
 
 (define-derived-mode bebop-dashboard-mode magit-section-mode "BebopDash"
   "Major mode for the Bebop multi-agent dashboard.

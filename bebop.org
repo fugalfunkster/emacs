@@ -1512,7 +1512,7 @@ buffer-local visibility cache, keyed on stable section idents.
 with the setlist tree renderer.")
 
 (defvar bebop-dashboard-footer-lines
-  '("n: new  k: kill  RET: select  g: refresh  q: quit")
+  '("n: new  k: kill  RET: select  g: refresh")
   "Lines of the dashboard footer cheatsheet. Modules may replace this
 list when they add keybindings.")
 
@@ -1681,7 +1681,6 @@ Select the session at point as active and focus the composition buffer.
     (define-key map (kbd "p")      #'bebop--prev-session)
     (define-key map (kbd "g")      #'bebop-refresh)
     (define-key map (kbd "D")      #'bebop-debug-pane)
-    (define-key map (kbd "q")      #'quit-window)
     map)
   "Keymap for `bebop-dashboard-mode'.")
 
@@ -1691,6 +1690,12 @@ Select the session at point as active and focus the composition buffer.
 ;; derivation would keep the stale parent and TAB would never reach
 ;; `magit-section-toggle'.
 (set-keymap-parent bebop-dashboard-mode-map magit-section-mode-map)
+
+;; q is neutralized, not merely unbound: both parent keymaps
+;; (magit-section-mode-map and special-mode-map) bind it to
+;; quit-window, and burying the Conductor's dashboard pane is never
+;; intentional. Lives outside the defvar so hot-reloads apply it.
+(define-key bebop-dashboard-mode-map (kbd "q") #'ignore)
 
 (define-derived-mode bebop-dashboard-mode magit-section-mode "BebopDash"
   "Major mode for the Bebop multi-agent dashboard.
@@ -2095,8 +2100,7 @@ replaces this list again with the full setlist cheatsheet when it loads.
 #+begin_src emacs-lisp
 (setq bebop-dashboard-footer-lines
       '("n: new  C/D: chart  V/W: venue  RET: select"
-        "k: kill  e: exile  a: archive"
-        "r: resume  g: refresh  q: quit"))
+        "k: kill  e: exile  r: resume  g: refresh"))
 #+end_src
 
 At-point action commands and navigation over both entry kinds.
@@ -2160,7 +2164,6 @@ with no argument."
 (define-key bebop-dashboard-mode-map (kbd "p")      #'bebop--dashboard-prev-entry)
 (define-key bebop-dashboard-mode-map (kbd "k") #'bebop-kill-session-at-point)
 (define-key bebop-dashboard-mode-map (kbd "r") #'bebop-resume-at-point)
-(define-key bebop-dashboard-mode-map (kbd "a") #'bebop-archive-chart-at-point)
 (define-key bebop-dashboard-mode-map (kbd "e") #'bebop-exile-session-at-point)
 #+end_src
 
@@ -2590,21 +2593,6 @@ The session is not killed; only the chart file is moved."
       (kill-buffer buf))
     (bebop--upsert-session name (list :chart nil))
     (message "Archived chart for session: %s" name)))
-#+end_src
-
-Point-aware wrapper for =bebop-archive-chart=, usable from the dashboard.
-
-#+begin_src emacs-lisp
-(defun bebop-archive-chart-at-point ()
-  "Archive the chart for the on-deck session at point, or prompt for one.
-When point has a `bebop-on-deck-name' text property, passes that name
-directly to `bebop-archive-chart'.  Otherwise prompts (the wrapped
-function takes a required NAME and has no interactive spec of its own)."
-  (interactive)
-  (let ((session-name (or (get-text-property (point) 'bebop-on-deck-name)
-                          (completing-read "Archive chart for session: "
-                                           (bebop--on-deck-names) nil t))))
-    (bebop-archive-chart session-name)))
 #+end_src
 
 Remove a venue worktree via =git worktree remove --force=, falling back to =delete-directory= if the parent repo is gone.
@@ -4042,9 +4030,9 @@ Order: live ungrouped sessions (flat strip), sets, Ungrouped."
 
 (setq bebop-dashboard-footer-lines
       '("RET: select  TAB: fold"
-        "n: new  k: kill  r: resume  e: exile  a: archive"
+        "n: new  k: kill  r: resume  e: exile"
         "C/D: chart  V/W: venue"
-        "N: new set  m: move to set  g: refresh  q: quit"))
+        "N: new set  m: move to set  g: refresh"))
 
 (define-key bebop-dashboard-mode-map (kbd "N") #'bebop-new-set)
 (define-key bebop-dashboard-mode-map (kbd "m") #'bebop-assign-set)

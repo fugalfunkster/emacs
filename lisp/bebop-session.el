@@ -101,8 +101,7 @@ Returns an empty string for bare names like ROOST-1234."
 
 (setq bebop-dashboard-footer-lines
       '("n: new  C/D: chart  V/W: venue  RET: select"
-        "k: kill  e: exile  a: archive"
-        "r: resume  g: refresh  q: quit"))
+        "k: kill  e: exile  r: resume  g: refresh"))
 
 (defun bebop-resume-at-point ()
   "Resume the on-deck session at point, or call `bebop-resume' interactively.
@@ -162,7 +161,6 @@ with no argument."
 (define-key bebop-dashboard-mode-map (kbd "p")      #'bebop--dashboard-prev-entry)
 (define-key bebop-dashboard-mode-map (kbd "k") #'bebop-kill-session-at-point)
 (define-key bebop-dashboard-mode-map (kbd "r") #'bebop-resume-at-point)
-(define-key bebop-dashboard-mode-map (kbd "a") #'bebop-archive-chart-at-point)
 (define-key bebop-dashboard-mode-map (kbd "e") #'bebop-exile-session-at-point)
 
 (defun bebop--session-info (name)
@@ -476,17 +474,6 @@ The session is not killed; only the chart file is moved."
       (kill-buffer buf))
     (bebop--upsert-session name (list :chart nil))
     (message "Archived chart for session: %s" name)))
-
-(defun bebop-archive-chart-at-point ()
-  "Archive the chart for the on-deck session at point, or prompt for one.
-When point has a `bebop-on-deck-name' text property, passes that name
-directly to `bebop-archive-chart'.  Otherwise prompts (the wrapped
-function takes a required NAME and has no interactive spec of its own)."
-  (interactive)
-  (let ((session-name (or (get-text-property (point) 'bebop-on-deck-name)
-                          (completing-read "Archive chart for session: "
-                                           (bebop--on-deck-names) nil t))))
-    (bebop-archive-chart session-name)))
 
 (defun bebop--remove-venue (venue-path)
   "Remove the git worktree at VENUE-PATH.
