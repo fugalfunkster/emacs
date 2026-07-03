@@ -26,6 +26,11 @@ PLIST keys: :set (string or nil), :shelved (boolean).
 Keyed by name, independent of liveness — applies equally to running
 sessions and on-deck artifacts.")
 
+(defvar bebop--exile-proposals nil
+  "List of session names queued for exile approval.
+Populated by roundup (via `bebop-propose-exile' in bebop-api);
+consumed interactively. Persisted with the other choices.")
+
 (defun bebop-set--save ()
   "Persist sets and session choices to `bebop-set-state-file'."
   (let ((sets (make-hash-table :test #'equal))
@@ -47,6 +52,8 @@ sessions and on-deck artifacts.")
     (puthash "version" 2 doc)
     (puthash "sets" sets doc)
     (puthash "sessions" sessions doc)
+    (when bebop--exile-proposals
+      (puthash "proposals" (vconcat bebop--exile-proposals) doc))
     (with-temp-file bebop-set-state-file
       (insert (json-serialize doc)))))
 
@@ -80,7 +87,9 @@ format was written by a retired implementation and never read)."
                                bebop--session-meta))
                        sessions))
             (setq bebop--sets (nreverse bebop--sets)
-                  bebop--session-meta (nreverse bebop--session-meta))))
+                  bebop--session-meta (nreverse bebop--session-meta))
+            (setq bebop--exile-proposals
+                  (append (gethash "proposals" doc) nil))))
       (error (message "bebop-set: could not read %s (%s)"
                       bebop-set-state-file (error-message-string err))))))
 

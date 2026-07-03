@@ -546,10 +546,15 @@ if absent, creating the tmux window, and launching Claude Code in it:
 #+begin_src elisp
 ;; For a session with a venue:
 (bebop--tmux "send-keys" "-t" target
-                       (format "cd %s && claude" venue-path) "Enter")
+                       (format "cd %s && BEBOP_SESSION=%s claude" venue-path name) "Enter")
 ;; For a session without a venue:
-(bebop--tmux "send-keys" "-t" target "claude" "Enter")
+(bebop--tmux "send-keys" "-t" target (format "BEBOP_SESSION=%s claude" name) "Enter")
 #+end_src
+
+=BEBOP_SESSION= gives every agent its identity at birth: a SessionStart
+hook (or the =bebop-orient= skill it points to) calls =bebop-session-info=
+over the emacs server to orient — set, chart, venue, ticket, siblings,
+backline — regardless of which path created the session.
 
 =bebop-new-session= uses this same pattern — passing the venue path
 (=~/Code/Repos/Venues/REPO--BRANCH=) as the working directory.
@@ -633,6 +638,7 @@ Load order and dependency structure:
 | =bebop-session=   | =bebop-core=, =bebop-dashboard=                   |
 | =bebop-backline=  | =bebop-core=, =bebop-dashboard=, =bebop-session=  |
 | =bebop-set=       | =bebop-session=, =magit-section=                  |
+| =bebop-api=       | =bebop-session=, =bebop-set=                      |
 | =bebop-cue=       | =bebop-session=, =org=                            |
 | =bebop-frame=     | =bebop-session=, =bebop-cue=, =magit=             |
 | =bebop-gitlab=    | =bebop-session=, =forge=                          |
@@ -1516,13 +1522,15 @@ and registers the pair in the dashboard."
     (unless (bebop--tmux-session-exists-p)
       (bebop--tmux "new-session" "-d" "-s" bebop-tmux-session))
     ;; Create window and start Claude
-    (let ((target (format "%s:%s" bebop-tmux-session window-name)))
+    (let ((target (format "%s:%s" bebop-tmux-session window-name))
+          (env (format "BEBOP_SESSION=%s" (shell-quote-argument name))))
       (bebop--tmux "new-window" "-t" bebop-tmux-session "-n" window-name "-a")
       (if work-dir
           (bebop--tmux "send-keys" "-t" target
-                                 (format "cd %s && claude" (shell-quote-argument work-dir))
+                                 (format "cd %s && %s claude"
+                                         (shell-quote-argument work-dir) env)
                                  "Enter")
-        (bebop--tmux "send-keys" "-t" target "claude" "Enter"))
+        (bebop--tmux "send-keys" "-t" target (format "%s claude" env) "Enter"))
       ;; Register pair (pane-id may not be available instantly; poll will resolve it)
       (push (cons name (list :window target :status 'unknown
                              :pane-misses 0
@@ -2921,12 +2929,17 @@ creates the per-session composition buffer, and starts in pending mode."
                 name bebop-tmux-session))
   (let* ((work-dir (expand-file-name (or venue-path "~/Code")))
          (target   (format "%s:%s" bebop-tmux-session name))
+         ;; BEBOP_SESSION carries the session's identity into the agent's
+         ;; environment — the hook/skill orientation path keys off it.
+         (env      (format "BEBOP_SESSION=%s" (shell-quote-argument name)))
          (launch-cmd (if (eq launcher 'docker)
-                         (format "cd %s && %s"
+                         (format "cd %s && %s %s"
                                  (shell-quote-argument work-dir)
+                                 env
                                  (expand-file-name bebop-docker-script))
-                       (format "cd %s && claude"
-                               (shell-quote-argument work-dir)))))
+                       (format "cd %s && %s claude"
+                               (shell-quote-argument work-dir)
+                               env))))
     ;; Create the tmux window and launch Claude Code
     (bebop--tmux "new-window" "-t" bebop-tmux-session "-n" name "-a")
     (bebop--tmux "send-keys" "-t" target launch-cmd "Enter")
@@ -3901,6 +3914,11 @@ PLIST keys: :set (string or nil), :shelved (boolean).
 Keyed by name, independent of liveness — applies equally to running
 sessions and on-deck artifacts.")
 
+(defvar bebop--exile-proposals nil
+  "List of session names queued for exile approval.
+Populated by roundup (via `bebop-propose-exile' in bebop-api);
+consumed interactively. Persisted with the other choices.")
+
 (defun bebop-set--save ()
   "Persist sets and session choices to `bebop-set-state-file'."
   (let ((sets (make-hash-table :test #'equal))
@@ -3922,6 +3940,8 @@ sessions and on-deck artifacts.")
     (puthash "version" 2 doc)
     (puthash "sets" sets doc)
     (puthash "sessions" sessions doc)
+    (when bebop--exile-proposals
+      (puthash "proposals" (vconcat bebop--exile-proposals) doc))
     (with-temp-file bebop-set-state-file
       (insert (json-serialize doc)))))
 
@@ -3955,7 +3975,9 @@ format was written by a retired implementation and never read)."
                                bebop--session-meta))
                        sessions))
             (setq bebop--sets (nreverse bebop--sets)
-                  bebop--session-meta (nreverse bebop--session-meta))))
+                  bebop--session-meta (nreverse bebop--session-meta))
+            (setq bebop--exile-proposals
+                  (append (gethash "proposals" doc) nil))))
       (error (message "bebop-set: could not read %s (%s)"
                       bebop-set-state-file (error-message-string err))))))
 #+end_src
@@ -4383,6 +4405,131 @@ column off screen; over-long names simply overflow their cell."
 (provide 'bebop-set)
 
 ;;; bebop-set.el ends here
+#+end_src
+
+** Bebop — API (bebop-api.el)
+   :PROPERTIES:
+   :header-args:emacs-lisp: :tangle lisp/bebop-api.el
+   :END:
+
+The citizen contract: the stable, named surface agents and skills call over
+the emacs server (=emacsclient --eval=). Everything here returns JSON
+strings so callers never parse elisp. Agents must go through these
+functions — never poke internals — so skills survive elisp refactors.
+
+The mutating verbs (=bebop-assign-set=, =bebop-shelve=, =bebop-unshelve=,
+=bebop-new-set=, =bebop-backline-run= …) already live in their owning
+modules and are equally part of the contract; this module adds the
+read/orientation side plus the exile-proposal queue.
+
+*** Header
+
+#+begin_src emacs-lisp
+;;; bebop-api.el --- JSON API surface for agent citizens -*- lexical-binding: t; -*-
+
+(require 'bebop-session)
+(require 'bebop-set)
+
+;; Optional backline integration; soft dependency.
+(declare-function bebop--backline-live-p "bebop-backline")
+(declare-function bebop-backline-status "bebop-backline")
+#+end_src
+
+*** Orientation
+
+#+begin_src emacs-lisp
+(defun bebop-session-info (name)
+  "Return a JSON description of session NAME for agent orientation.
+Fields: session, set, shelved, chart, venue, ticket, siblings
+\(names sharing the set), backline (live/busy/command/ports, or null)."
+  (let* ((row (bebop-set--row name (cdr (assoc name bebop--live-sessions))))
+         (set (plist-get row :set))
+         (venue (plist-get row :venue))
+         (siblings
+          (when set
+            (vconcat
+             (delete name
+                     (mapcar (lambda (r) (plist-get r :name))
+                             (seq-filter
+                              (lambda (r) (equal (plist-get r :set) set))
+                              (bebop-set--rows)))))))
+         (slug (and venue (file-name-nondirectory
+                           (directory-file-name venue))))
+         (backline
+          (when (and slug
+                     (fboundp 'bebop--backline-live-p)
+                     (bebop--backline-live-p slug))
+            (let ((st (bebop-backline-status slug)))
+              (list :live t
+                    :busy (if (plist-get st :busy) t :false)
+                    :command (or (plist-get st :command) :null)
+                    :ports (vconcat (plist-get st :ports)))))))
+    (json-serialize
+     (list :session name
+           :set (or set :null)
+           :shelved (if (plist-get row :shelved) t :false)
+           :chart (or (plist-get row :chart) :null)
+           :venue (or venue :null)
+           :ticket (or (bebop--on-deck-ticket-slug name) :null)
+           :siblings (or siblings (vector))
+           :backline (or backline :null)))))
+#+end_src
+
+*** Registry reads
+
+#+begin_src emacs-lisp
+(defun bebop-list-sessions ()
+  "Return a JSON array of all sessions, running and on deck."
+  (json-serialize
+   (vconcat
+    (mapcar (lambda (r)
+              (let ((live (plist-get r :live)))
+                (list :name (plist-get r :name)
+                      :live (if live t :false)
+                      :status (if live
+                                  (symbol-name
+                                   (or (plist-get live :status) 'unknown))
+                                :null)
+                      :set (or (plist-get r :set) :null)
+                      :shelved (if (plist-get r :shelved) t :false)
+                      :chart (or (plist-get r :chart) :null)
+                      :venue (or (plist-get r :venue) :null))))
+            (bebop-set--rows)))))
+
+(defun bebop-list-sets ()
+  "Return a JSON array of all known set names."
+  (json-serialize (vconcat (bebop-set--names))))
+#+end_src
+
+*** Exile proposals
+
+Roundup queues; the human disposes. Proposing is idempotent.
+
+#+begin_src emacs-lisp
+(defun bebop-propose-exile (name)
+  "Queue session NAME for exile approval. Returns the queue as JSON."
+  (unless (member name bebop--exile-proposals)
+    (push name bebop--exile-proposals)
+    (bebop-set--save))
+  (bebop-exile-proposals))
+
+(defun bebop-exile-proposals ()
+  "Return the exile-proposal queue as a JSON array."
+  (json-serialize (vconcat bebop--exile-proposals)))
+
+(defun bebop-clear-exile-proposal (name)
+  "Remove NAME from the exile-proposal queue. Returns the queue as JSON."
+  (setq bebop--exile-proposals (delete name bebop--exile-proposals))
+  (bebop-set--save)
+  (bebop-exile-proposals))
+#+end_src
+
+*** Footer
+
+#+begin_src emacs-lisp
+(provide 'bebop-api)
+
+;;; bebop-api.el ends here
 #+end_src
 
 ** Bebop — Cue (bebop-cue.el)

@@ -643,12 +643,17 @@ creates the per-session composition buffer, and starts in pending mode."
                 name bebop-tmux-session))
   (let* ((work-dir (expand-file-name (or venue-path "~/Code")))
          (target   (format "%s:%s" bebop-tmux-session name))
+         ;; BEBOP_SESSION carries the session's identity into the agent's
+         ;; environment — the hook/skill orientation path keys off it.
+         (env      (format "BEBOP_SESSION=%s" (shell-quote-argument name)))
          (launch-cmd (if (eq launcher 'docker)
-                         (format "cd %s && %s"
+                         (format "cd %s && %s %s"
                                  (shell-quote-argument work-dir)
+                                 env
                                  (expand-file-name bebop-docker-script))
-                       (format "cd %s && claude"
-                               (shell-quote-argument work-dir)))))
+                       (format "cd %s && %s claude"
+                               (shell-quote-argument work-dir)
+                               env))))
     ;; Create the tmux window and launch Claude Code
     (bebop--tmux "new-window" "-t" bebop-tmux-session "-n" name "-a")
     (bebop--tmux "send-keys" "-t" target launch-cmd "Enter")

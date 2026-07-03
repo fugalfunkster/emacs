@@ -243,13 +243,15 @@ and registers the pair in the dashboard."
     (unless (bebop--tmux-session-exists-p)
       (bebop--tmux "new-session" "-d" "-s" bebop-tmux-session))
     ;; Create window and start Claude
-    (let ((target (format "%s:%s" bebop-tmux-session window-name)))
+    (let ((target (format "%s:%s" bebop-tmux-session window-name))
+          (env (format "BEBOP_SESSION=%s" (shell-quote-argument name))))
       (bebop--tmux "new-window" "-t" bebop-tmux-session "-n" window-name "-a")
       (if work-dir
           (bebop--tmux "send-keys" "-t" target
-                                 (format "cd %s && claude" (shell-quote-argument work-dir))
+                                 (format "cd %s && %s claude"
+                                         (shell-quote-argument work-dir) env)
                                  "Enter")
-        (bebop--tmux "send-keys" "-t" target "claude" "Enter"))
+        (bebop--tmux "send-keys" "-t" target (format "%s claude" env) "Enter"))
       ;; Register pair (pane-id may not be available instantly; poll will resolve it)
       (push (cons name (list :window target :status 'unknown
                              :pane-misses 0
