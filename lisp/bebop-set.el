@@ -410,11 +410,13 @@ column off screen; over-long names simply overflow their cell."
 
 (defun bebop-set--heading-counts (rows width)
   "Return iconographic, column-aligned rollup counts for a set heading.
-Four fixed columns after the name field, each shown only when nonzero:
-● active (dot-active face), ● waiting (dot-waiting face), ○ on deck,
-○ shelved (italic). Columns sit at absolute stops so every set heading
-tables up regardless of name length. Counts are disjoint — a waiting
-session is not also counted as running."
+Four fixed columns after the name field: the state icon repeated once
+per session — ●● for two active (dot-active face), ● waiting
+(dot-waiting face), ○○○ for three on deck, ○ shelved (italic); no
+numerals. Columns sit at absolute stops so every set heading tables
+up regardless of name length; a crowded cell overflows its stop with
+a single space keeping it separated from the next. Counts are
+disjoint — a waiting session is not also counted as running."
   (if (null rows)
       (concat (bebop-set--stop (+ 7 width))
               (bebop-set--prop "(empty)" 'shadow))
@@ -433,14 +435,16 @@ session is not also counted as running."
            (base (+ 7 width))
            (col 0)
            (parts nil))
-      (dolist (cell (list (list active "●" 'bebop-dot-active-face)
-                          (list waiting "●" 'bebop-dot-waiting-face)
-                          (list deck "○" 'shadow)
-                          (list shelved "○" '(:inherit shadow :slant italic))))
+      (dolist (cell (list (list active ?● 'bebop-dot-active-face)
+                          (list waiting ?● 'bebop-dot-waiting-face)
+                          (list deck ?○ 'shadow)
+                          (list shelved ?○ '(:inherit shadow :slant italic))))
+        (push " " parts)
         (push (bebop-set--stop (+ base (* col 6))) parts)
         (when (> (car cell) 0)
-          (push (bebop-set--prop (cadr cell) (nth 2 cell)) parts)
-          (push (bebop-set--prop (format " %d" (car cell)) 'shadow) parts))
+          (push (bebop-set--prop (make-string (car cell) (cadr cell))
+                                 (nth 2 cell))
+                parts))
         (setq col (1+ col)))
       (apply #'concat (nreverse parts)))))
 
