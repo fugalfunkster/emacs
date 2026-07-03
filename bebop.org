@@ -1524,7 +1524,8 @@ list when they add keybindings.")
         (bebop-dashboard-mode))
       (let ((inhibit-read-only t)
             (saved-name (or (get-text-property (point) 'bebop-session-name)
-                            (get-text-property (point) 'bebop-on-deck-name))))
+                            (get-text-property (point) 'bebop-on-deck-name)))
+            (saved-line (line-number-at-pos)))
         (erase-buffer)
         ;; Inherit each section's fold state from the previous render's
         ;; tree (magit's oldroot mechanism). With the default
@@ -1557,20 +1558,22 @@ list when they add keybindings.")
           (insert (propertize (concat line "\n")
                               'face '(:inherit shadow :height 0.85)
                               'font-lock-face '(:inherit shadow :height 0.85))))
-        ;; Restore point to the same entry line (by name, not position).
-        (if saved-name
-            (let ((found nil))
-              (goto-char (point-min))
-              (while (and (not found) (< (point) (point-max)))
-                (if (or (equal (get-text-property (point) 'bebop-session-name)
-                               saved-name)
-                        (equal (get-text-property (point) 'bebop-on-deck-name)
-                               saved-name))
-                    (setq found t)
-                  (forward-line 1)))
-              (unless found
-                (goto-char (point-min))))
-          (goto-char (point-min)))))))
+        ;; Restore point: the same entry by name if it still exists,
+        ;; otherwise the same line number — a killed or exiled entry
+        ;; must not bounce point to the top of the buffer.
+        (let ((found nil))
+          (when saved-name
+            (goto-char (point-min))
+            (while (and (not found) (< (point) (point-max)))
+              (if (or (equal (get-text-property (point) 'bebop-session-name)
+                             saved-name)
+                      (equal (get-text-property (point) 'bebop-on-deck-name)
+                             saved-name))
+                  (setq found t)
+                (forward-line 1))))
+          (unless found
+            (goto-char (point-min))
+            (forward-line (1- saved-line))))))))
 
 (defun bebop--render-flat-body ()
   "Insert the flat pair list — the fallback body when bebop-set is not loaded."
