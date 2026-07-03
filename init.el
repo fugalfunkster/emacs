@@ -167,7 +167,8 @@ Callable via emacsclient: emacsclient --eval \"(tangle-and-reload)\""
   ;; Reload lisp/ bebop modules in dependency order
   (let ((lisp-dir (expand-file-name "lisp/" user-emacs-directory)))
     (dolist (f '("bebop-core.el" "bebop-passthrough.el" "bebop-dashboard.el"
-                 "bebop-session.el" "bebop-cue.el" "bebop-frame.el" "bebop-gitlab.el"))
+                 "bebop-session.el" "bebop-backline.el" "bebop-cue.el"
+                 "bebop-frame.el" "bebop-gitlab.el"))
       (load (expand-file-name f lisp-dir) 'noerror 'nomessage)))
   ;; Re-apply Conductor frame-local face settings (fringe, borders, dividers)
   ;; since module reloads reset them.
@@ -186,6 +187,7 @@ Callable via emacsclient: emacsclient --eval \"(tangle-and-reload)\""
 (require 'bebop-passthrough)
 (require 'bebop-dashboard)
 (require 'bebop-session)
+(require 'bebop-backline)
 (require 'bebop-cue)
 (require 'bebop-frame)
 (require 'bebop-gitlab)

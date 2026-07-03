@@ -1,6 +1,7 @@
 # OS/editor junk
 .DS_Store
 *~
+*.elc
 *conflicted*
 *conflicted copy*
 

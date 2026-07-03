@@ -332,10 +332,14 @@ and registers the pair in the dashboard."
 
 (defun bebop--discover-existing-sessions ()
   "Populate `bebop--live-sessions' from existing tmux windows.
-Skips the window named \"cli\" (the legacy single-agent window).
-Called once on first `bebop-dashboard-open'."
+Skips the window named \"cli\" (the legacy single-agent window) and
+backline windows (prefix \"backline--\"), which are venue work shells,
+not agent sessions.  Called once on first `bebop-dashboard-open'."
   (dolist (name (bebop--tmux-window-list))
     (unless (or (equal name "cli")
+                (string-prefix-p (or (bound-and-true-p bebop-backline-prefix)
+                                     "backline--")
+                                 name)
                 (assoc name bebop--live-sessions))
       (let* ((target (format "%s:%s" bebop-tmux-session name))
              (pane-id (bebop--tmux-pane-id-for name)))
