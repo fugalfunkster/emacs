@@ -404,8 +404,8 @@ list when they add keybindings.")
                               'font-lock-face '(:inherit warning :weight bold))))
         (dolist (line bebop-dashboard-footer-lines)
           (insert (propertize (concat line "\n")
-                              'face '(:inherit shadow :height 0.85)
-                              'font-lock-face '(:inherit shadow :height 0.85))))
+                              'face '(:inherit shadow :height 0.75)
+                              'font-lock-face '(:inherit shadow :height 0.75))))
         ;; Restore point: the same entry by name if it still exists,
         ;; otherwise the same line number — a killed or exiled entry
         ;; must not bounce point to the top of the buffer.

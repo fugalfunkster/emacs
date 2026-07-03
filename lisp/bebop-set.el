@@ -449,7 +449,8 @@ Order: live ungrouped sessions (flat strip), sets, Ungrouped."
 
 (setq bebop-dashboard-footer-lines
       '("n: new  N: new set  m: move to set  RET: select  TAB: fold"
-        "k: kill  e: exile  a: archive  r: resume  C/D: chart  V/W: venue  g: refresh  q: quit"))
+        "k: kill  e: exile  a: archive  r: resume"
+        "C/D: chart  V/W: venue  g: refresh  q: quit"))
 
 (define-key bebop-dashboard-mode-map (kbd "N") #'bebop-new-set)
 (define-key bebop-dashboard-mode-map (kbd "m") #'bebop-assign-set)

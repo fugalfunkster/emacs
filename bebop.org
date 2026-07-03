@@ -1556,8 +1556,8 @@ list when they add keybindings.")
                               'font-lock-face '(:inherit warning :weight bold))))
         (dolist (line bebop-dashboard-footer-lines)
           (insert (propertize (concat line "\n")
-                              'face '(:inherit shadow :height 0.85)
-                              'font-lock-face '(:inherit shadow :height 0.85))))
+                              'face '(:inherit shadow :height 0.75)
+                              'font-lock-face '(:inherit shadow :height 0.75))))
         ;; Restore point: the same entry by name if it still exists,
         ;; otherwise the same line number — a killed or exiled entry
         ;; must not bounce point to the top of the buffer.
@@ -4042,7 +4042,8 @@ Order: live ungrouped sessions (flat strip), sets, Ungrouped."
 
 (setq bebop-dashboard-footer-lines
       '("n: new  N: new set  m: move to set  RET: select  TAB: fold"
-        "k: kill  e: exile  a: archive  r: resume  C/D: chart  V/W: venue  g: refresh  q: quit"))
+        "k: kill  e: exile  a: archive  r: resume"
+        "C/D: chart  V/W: venue  g: refresh  q: quit"))
 
 (define-key bebop-dashboard-mode-map (kbd "N") #'bebop-new-set)
 (define-key bebop-dashboard-mode-map (kbd "m") #'bebop-assign-set)
