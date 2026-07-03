@@ -396,7 +396,12 @@ is not also counted as running."
          ;; The set's own session, by naming convention: a row named
          ;; exactly like the set renders as the heading's gutter.
          (own (seq-find (lambda (r) (equal (plist-get r :name) set)) rows))
-         (children (if own (remq own rows) rows))
+         ;; copy-sequence before sort: sort is destructive and ROWS is
+         ;; still iterated for the heading counts.
+         (children (sort (copy-sequence (if own (remq own rows) rows))
+                         (lambda (a b)
+                           (string< (plist-get a :name)
+                                    (plist-get b :name)))))
          (start (point)))
     (magit-insert-section (bebop-set set hide)
       (magit-insert-heading
