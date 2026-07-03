@@ -383,6 +383,17 @@ list when they add keybindings.")
         ;; only to sections that did not exist before.
         (let ((magit-section-preserve-visibility nil))
           (funcall bebop--render-body-function))
+        ;; Materialize visual state from the hidden slots. Insertion only
+        ;; SETS the slots — the invisibility overlays are created solely
+        ;; by magit-section-hide, which magit's own refresh reaches via a
+        ;; post-render magit-section-show/hide walk. Without this pass,
+        ;; slot-hidden sections render expanded and the first TAB merely
+        ;; syncs the slot (the double-TAB symptom), and hide defaults
+        ;; like the collapsed Shelf never took effect visually.
+        (dolist (child (oref magit-root-section children))
+          (if (oref child hidden)
+              (magit-section-hide child)
+            (magit-section-show child)))
         ;; Footer. font-lock is active in magit-section buffers and strips
         ;; plain face properties — set font-lock-face as well.
         (insert "\n")
