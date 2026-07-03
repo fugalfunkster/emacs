@@ -31,6 +31,8 @@ The canonical terms. Everything in the spec and implementation uses these.
 | *Chart*     | Org doc holding a session's accumulated context; persists after session ends                                     |
 | *Venue*     | Git worktree for a session; optional; persists independently                                                     |
 | *Backline*  | Venue-owned work shell (tmux window) for long-running processes: dev servers, watch builds; hot-seat attachable  |
+| *Set*       | Attention-level grouping of sessions; lazy attributes; sometimes wraps a Jira epic, sometimes ticketless         |
+| *Shelved*   | Visibility flag hiding a session or set from the default view; orthogonal to liveness; artifacts untouched       |
 | *Cue*       | Write a heading into a session's chart; verb and noun                                                            |
 | *Jam*       | Send a heading to a session's agent via tmux; verb and noun                                                      |
 | *Conductor* | Role/layout: high-level view across all sessions                                                                 |
@@ -377,6 +379,49 @@ Principles:
   =bebop-backline-run=, so human and agent watch the same process output in
   the same window and the agent's pane stays conversational.
 
+* Sets and the Shelf
+
+A set is an attention-level grouping of sessions — sometimes it wraps a Jira
+epic, sometimes a single ticket, sometimes it is ticketless ("emacs",
+"design tooling"). It is not a Jira mirror: it groups what belongs together
+on stage.
+
+Two axes that never mix:
+
+- *Liveness* — running or not; a fact derived from tmux.
+- *Shelved* — hidden from the default view or not; a stored choice.
+
+The old "On deck" section conflated these ("backgrounded, will return" vs.
+"abandoned, needs exile"). In the setlist model, objects never move: a
+session renders under its set for its entire lifetime, and shelving or
+killing it only changes how its line displays. Shelving a set batch-flags
+its member sessions — there is no separate set-level flag; a set shows on
+the Shelf exactly when it has members and all of them are shelved.
+
+The dashboard is one folding tree (magit-section, TAB to fold):
+
+#+begin_example
+  ● ⊞ ⎇  lease-explorer            2 running · 1 shelved
+  ● ⊞ ⎇      lease-explorer--parser        :3000
+  ● ⊞        lease-explorer--fixtures
+             … 1 shelved
+         Ungrouped                 12 on deck
+         Shelf                     4 sets
+#+end_example
+
+The gutter is sacred: status dot at column 0, chart glyph ⊞ at column 2,
+venue glyph ⎇ at column 4, on every line at every depth. Tree structure is
+expressed only in the name field's indent, so the at-a-glance scan the flat
+dashboard trained never degrades. A set heading whose set has an eponymous
+session (the set's own session, by naming convention) wears that session's
+gutter; otherwise its gutter is blank.
+
+Set membership and shelved flags persist to =bebop-state.json= (version 2)
+— they are choices, not derivable state. Everything else remains derived.
+Assignment is designed to be filled asynchronously by agents (silent Jira
+epic enrichment, later phase); until then sessions land honestly in
+*Ungrouped*, collapsed by default.
+
 * Environment
 
 | Path                                    | Purpose                                  |
@@ -583,10 +628,11 @@ Load order and dependency structure:
 | Module            | Requires                                          |
 |-------------------+---------------------------------------------------|
 | =bebop-core=      | (none)                                            |
-| =bebop-dashboard= | =bebop-core=                                      |
+| =bebop-dashboard= | =bebop-core=, =magit-section=                     |
 | =bebop-passthrough= | =bebop-core=                                    |
 | =bebop-session=   | =bebop-core=, =bebop-dashboard=                   |
 | =bebop-backline=  | =bebop-core=, =bebop-dashboard=, =bebop-session=  |
+| =bebop-set=       | =bebop-session=, =magit-section=                  |
 | =bebop-cue=       | =bebop-session=, =org=                            |
 | =bebop-frame=     | =bebop-session=, =bebop-cue=, =magit=             |
 | =bebop-gitlab=    | =bebop-session=, =forge=                          |
@@ -1153,6 +1199,7 @@ have chart or venue artifacts on disk but are not currently running.
 ;; Green dot = Claude is active/responding or idle at the prompt.
 
 (require 'bebop-core)
+(require 'magit-section)
 #+end_src
 
 *** Customization
@@ -1602,40 +1649,67 @@ not agent sessions.  Called once on first `bebop-dashboard-open'."
 
 *** Rendering
 
-The header is inserted as buffer text rather than a before-string overlay
-because =:inverse-video= on the first pair line bleeds into overlay
-=before-string= content, causing the header to also invert. Buffer text keeps
-the face domains cleanly separated.
+The render skeleton owns the buffer lifecycle — mode, erase, footer, and
+point restore — and delegates the body to =bebop--render-body-function=.
+The default body is the flat pair list below; =bebop-set= (when loaded)
+plugs in the setlist tree instead. Commenting out =bebop-set= in
+=emacs.org= therefore reverts the dashboard to the flat list with no other
+breakage, per the module degradation doctrine.
+
+Point is restored by entry name (never position) because re-renders happen
+on every poll tick. Fold state survives re-renders via magit-section's
+buffer-local visibility cache, keyed on stable section idents.
 
 #+begin_src emacs-lisp
+(defvar bebop--render-body-function #'bebop--render-flat-body
+  "Function inserting the dashboard body. bebop-set overrides this
+with the setlist tree renderer.")
+
+(defvar bebop-dashboard-footer-lines
+  '("n: new  k: kill  RET: select  g: refresh  q: quit")
+  "Lines of the dashboard footer cheatsheet. Modules may replace this
+list when they add keybindings.")
+
 (defun bebop--render ()
   "Redraw the dashboard buffer with current pair state."
   (let ((buf (get-buffer-create bebop-buffer-name)))
     (with-current-buffer buf
+      (unless (derived-mode-p 'bebop-dashboard-mode)
+        (bebop-dashboard-mode))
       (let ((inhibit-read-only t)
-            (saved-name (get-text-property (point) 'bebop-session-name)))
+            (saved-name (or (get-text-property (point) 'bebop-session-name)
+                            (get-text-property (point) 'bebop-on-deck-name))))
         (erase-buffer)
-        ;; Pair lines
-        (if (null bebop--live-sessions)
-            (insert (propertize "  No agent pairs. Press 'n' to spawn one.\n"
-                                'face 'shadow))
-          (dolist (pair bebop--live-sessions)
-            (bebop--insert-session-line (car pair) (cdr pair))))
+        (funcall bebop--render-body-function)
         ;; Footer
-        (insert (propertize "  n: new  k: kill  RET: select  g: refresh  q: quit\n"
-                            'face 'shadow))
-        ;; Restore point to the same session line (by name, not position,
-        ;; since :after advice inserts extra lines that shift positions).
+        (insert "\n")
+        (when (bound-and-true-p bebop-use-docker)
+          (insert (propertize "Docker sandbox: ON  (! to toggle)\n"
+                              'face '(:inherit warning :weight bold))))
+        (dolist (line bebop-dashboard-footer-lines)
+          (insert (propertize (concat line "\n") 'face 'shadow)))
+        ;; Restore point to the same entry line (by name, not position).
         (if saved-name
             (let ((found nil))
               (goto-char (point-min))
               (while (and (not found) (< (point) (point-max)))
-                (if (equal (get-text-property (point) 'bebop-session-name) saved-name)
+                (if (or (equal (get-text-property (point) 'bebop-session-name)
+                               saved-name)
+                        (equal (get-text-property (point) 'bebop-on-deck-name)
+                               saved-name))
                     (setq found t)
                   (forward-line 1)))
               (unless found
                 (goto-char (point-min))))
           (goto-char (point-min)))))))
+
+(defun bebop--render-flat-body ()
+  "Insert the flat pair list — the fallback body when bebop-set is not loaded."
+  (if (null bebop--live-sessions)
+      (insert (propertize "  No agent pairs. Press 'n' to spawn one.\n"
+                          'face 'shadow))
+    (dolist (pair bebop--live-sessions)
+      (bebop--insert-session-line (car pair) (cdr pair)))))
 #+end_src
 
 Render a single pair line with status dot and text properties for point-based navigation.
@@ -1739,11 +1813,14 @@ Select the session at point as active and focus the composition buffer.
     map)
   "Keymap for `bebop-dashboard-mode'.")
 
-(define-derived-mode bebop-dashboard-mode special-mode "BebopDash"
+(define-derived-mode bebop-dashboard-mode magit-section-mode "BebopDash"
   "Major mode for the Bebop multi-agent dashboard.
+Derived from `magit-section-mode' for section folding (TAB) with
+fold state preserved across poll re-renders via the visibility cache.
 \\{bebop-dashboard-mode-map}"
   (setq buffer-read-only t
         truncate-lines t)
+  (setq-local magit-section-cache-visibility t)
   (setq-local line-spacing -6)
   (when (fboundp 'display-line-numbers-mode)
     (display-line-numbers-mode -1))
@@ -2077,8 +2154,11 @@ SINFO is a plist with keys:
 
 *** Dashboard sections
 
-Adds "Active sessions:" label and an "On deck:" section to the dashboard via
-=:after= advice on =bebop--render=.
+On-deck discovery: which session names are derivable from chart/venue
+artifacts on disk but not currently running. The rendering of these entries
+lives in =bebop-set= (the setlist tree); this module only provides the
+scan and artifact helpers, plus the at-point action commands and their
+dashboard keybindings.
 
 #+begin_src emacs-lisp
 (defun bebop--on-deck-names ()
@@ -2122,148 +2202,21 @@ minus any currently running session names."
 Returns an empty string for bare names like ROOST-1234."
   (let ((i (string-match "--" name)))
     (if i (substring name 0 i) "")))
+#+end_src
 
-(defun bebop--dashboard-insert-on-deck ()
-  "Insert On deck section into the current dashboard buffer."
-  (let* ((pinned '("emacs" "bebop" "claude"))
-         (all-names (bebop--on-deck-names))
-         ;; Count how many on-deck names share each slug.
-         ;; Slugs with count > 1 form a cluster and sort first.
-         (slug-counts
-          (let ((tbl (make-hash-table :test #'equal)))
-            (dolist (n all-names)
-              (when-let ((s (bebop--on-deck-ticket-slug n)))
-                (puthash s (1+ (gethash s tbl 0)) tbl)))
-            tbl))
-         (names
-          (sort all-names
-                (lambda (a b)
-                  (let* ((a-pin     (member a pinned))
-                         (b-pin     (member b pinned))
-                         (a-slug    (bebop--on-deck-ticket-slug a))
-                         (b-slug    (bebop--on-deck-ticket-slug b))
-                         (a-cluster (and a-slug (> (gethash a-slug slug-counts 0) 1)))
-                         (b-cluster (and b-slug (> (gethash b-slug slug-counts 0) 1)))
-                         (a-prefix  (bebop--on-deck-prefix a))
-                         (b-prefix  (bebop--on-deck-prefix b)))
-                    (cond
-                     ;; Pinned items last
-                     ((and a-pin (not b-pin)) nil)
-                     ((and b-pin (not a-pin)) t)
-                     ;; Multi-item slug clusters before singletons
-                     ((and a-cluster (not b-cluster)) t)
-                     ((and b-cluster (not a-cluster)) nil)
-                     ;; Within a cluster: by slug, then by name within same slug
-                     ((and a-cluster b-cluster)
-                      (if (string= a-slug b-slug)
-                          (string< a b)
-                        (string< a-slug b-slug)))
-                     ;; Singletons and no-slug: by prefix, then by full name
-                     ((string= a-prefix b-prefix) (string< a b))
-                     (t (string< a-prefix b-prefix))))))))
-    (when names
-      (insert "\n")
-      (insert (propertize "On deck:\n" 'face '(:inherit shadow :weight bold)))
-      (dolist (name names)
-        (let ((start (point)))
-          (insert (propertize "○" 'face 'shadow))
-          (insert " ")
-          (insert (propertize name 'face 'shadow))
-          (insert (propertize (concat "  " (bebop--on-deck-icons name))
-                              'face '(:inherit shadow :slant italic)))
-          (insert "\n")
-          (add-text-properties start (point)
-                               (list 'bebop-on-deck-name name)))))))
+Session-module keybinding hints for the dashboard footer. =bebop-set=
+replaces this list again with the full setlist cheatsheet when it loads.
 
-(defun bebop--dashboard-annotate-active-pairs ()
-  "Append ⊞/⎇ icons to active-session lines that have a chart or venue.
-Scans the current buffer for lines tagged with `bebop-session-name', looks up
-the corresponding bebop session info, and inserts icons before the newline."
-  (save-excursion
-    (goto-char (point-min))
-    (while (not (eobp))
-      (let ((pair-name (get-text-property (point) 'bebop-session-name)))
-        (when pair-name
-          (let* ((info      (bebop--session-info pair-name))
-                 (has-chart (let ((c (and info (plist-get info :chart))))
-                              (and c (file-exists-p c))))
-                 (has-venue (let ((v (and info (plist-get info :venue))))
-                              (and v (file-directory-p v))))
-                 (icons     (mapconcat #'identity
-                                       (seq-filter #'identity
-                                                   (list (when has-chart "⊞")
-                                                         (when has-venue "⎇")))
-                                       " ")))
-            (unless (string-empty-p icons)
-              (end-of-line)
-              (insert (propertize (concat "  " icons) 'face 'shadow))))))
-      (forward-line 1))))
+#+begin_src emacs-lisp
+(setq bebop-dashboard-footer-lines
+      '("n: new  C/D: chart  V/W: venue  RET: select"
+        "k: kill  e: exile  a: archive"
+        "r: resume  g: refresh  q: quit"))
+#+end_src
 
-(defun bebop--dashboard-render-extras (&rest _)
-  "Add Bebop section labels and on-deck section to the dashboard."
-  (let ((buf (get-buffer bebop-buffer-name)))
-    (when buf
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          ;; Insert "Active sessions:" before the first pair line.
-          ;; Only when there are live pairs (otherwise "No agent pairs" message shows).
-          (when bebop--live-sessions
-            (save-excursion
-              (goto-char (point-min))
-              (while (and (< (point) (point-max))
-                          (null (get-text-property (point) 'bebop-session-name)))
-                (forward-line 1))
-              (when (get-text-property (point) 'bebop-session-name)
-                (insert (propertize "Active sessions:\n"
-                                    'face '(:inherit shadow :weight bold))))))
-          ;; Annotate active lines with chart/venue icons.
-          (when bebop--live-sessions
-            (bebop--dashboard-annotate-active-pairs))
-          ;; Insert on-deck before the footer, then replace the
-          ;; footer with a 3-row hint block.
-          (save-excursion
-            (goto-char (point-max))
-            (when (search-backward "\n  n: new" nil t)
-              (let ((footer-pos (match-beginning 0)))
-                ;; Insert on-deck immediately before the old footer.
-                (goto-char footer-pos)
-                (bebop--dashboard-insert-on-deck)
-                ;; Delete the old single-row footer.
-                (when (search-forward "\n  n: new" nil t)
-                  (beginning-of-line)
-                  (let ((beg (point)))
-                    (end-of-line)
-                    (delete-region beg (point))))
-                ;; Insert 3-row hint block, with Docker indicator when active.
-                (goto-char (point-max))
-                (when bebop-use-docker
-                  (insert (propertize "\nDocker sandbox: ON  (! to toggle)\n"
-                                      'face '(:inherit warning :weight bold))))
-                (insert (propertize "\nn: new  C/D: chart  V/W: venue  RET: select\n"
-                                    'face 'shadow))
-                (insert (propertize "k: kill  e: exile  a: archive\n"
-                                    'face 'shadow))
-                (insert (propertize "r: resume  g: refresh  q: quit\n"
-                                    'face 'shadow))))
-          ;; Normalize blank lines: exactly 1 before "On deck:", 1 before footer.
-          ;; Requires its own inhibit-read-only since the dashboard buffer is read-only.
-          (let ((inhibit-read-only t))
-            (save-excursion
-              (goto-char (point-min))
-              (when (re-search-forward "\n+On deck:" nil t)
-                (replace-match "\n\nOn deck:"))
-              ;; Search forward (not backward) so \n+ greedily matches all blank lines.
-              (goto-char (point-min))
-              (when (re-search-forward "\n+n: new" nil t)
-                (replace-match "\n\nn: new"))))))
-      ;; Force the window displaying the dashboard to redraw.
-      (let ((win (get-buffer-window buf t)))
-        (when win
-          (with-selected-window win
-            (redisplay t))))))))
+At-point action commands and navigation over both entry kinds.
 
-(advice-add 'bebop--render :after #'bebop--dashboard-render-extras)
-
+#+begin_src emacs-lisp
 (defun bebop-resume-at-point ()
   "Resume the on-deck session at point, or call `bebop-resume' interactively.
 When point is on an on-deck line (has `bebop-on-deck-name' text property),
@@ -3888,6 +3841,548 @@ client shows it."
 (provide 'bebop-backline)
 
 ;;; bebop-backline.el ends here
+#+end_src
+
+** Bebop — Sets (bebop-set.el)
+   :PROPERTIES:
+   :header-args:emacs-lisp: :tangle lisp/bebop-set.el
+   :END:
+
+Sets (attention-level session grouping), shelving (visibility flags), and
+the setlist tree renderer. See the =* Sets and the Shelf= design section.
+
+Two hard rules from the design:
+
+1. *The gutter is sacred.* Status dot at column 0, chart glyph at column 2,
+   venue glyph at column 4 — on every line, at every tree depth. Tree
+   structure lives only in the name field's indent.
+2. *Objects never move.* A session renders under its set for life; shelving
+   and liveness only change how the line displays, never where it lives.
+
+Only choices persist (set membership, shelved flags, declared sets) — to
+=bebop-state.json= as a version-2 document. Liveness, charts, and venues
+stay derived from tmux and the filesystem, as everywhere else in Bebop.
+
+This module plugs its renderer into =bebop--render-body-function=;
+commenting it out in =emacs.org= reverts the dashboard to the flat list.
+
+*** Header
+
+#+begin_src emacs-lisp
+;;; bebop-set.el --- Sets, shelving, and the setlist dashboard tree -*- lexical-binding: t; -*-
+
+(require 'bebop-core)
+(require 'bebop-dashboard)
+(require 'bebop-session)
+(require 'magit-section)
+(require 'seq)
+
+;; Optional backline integration (port annotations); soft dependency.
+(declare-function bebop--backline-slugs "bebop-backline")
+(declare-function bebop--backline-ports "bebop-backline")
+#+end_src
+
+*** State and persistence
+
+#+begin_src emacs-lisp
+(defcustom bebop-set-state-file (locate-user-emacs-file "bebop-state.json")
+  "File persisting set declarations, set membership, and shelved flags."
+  :type 'file
+  :group 'bebop)
+
+(defvar bebop--sets nil
+  "Alist of (SET-NAME . PLIST) for declared sets.
+PLIST keys: :created-at.  Chart/repo/session attributes arrive lazily
+in later phases; a set is at minimum a name.")
+
+(defvar bebop--session-meta nil
+  "Alist of (SESSION-NAME . PLIST) persisting per-session choices.
+PLIST keys: :set (string or nil), :shelved (boolean).
+Keyed by name, independent of liveness — applies equally to running
+sessions and on-deck artifacts.")
+
+(defun bebop-set--save ()
+  "Persist sets and session choices to `bebop-set-state-file'."
+  (let ((sets (make-hash-table :test #'equal))
+        (sessions (make-hash-table :test #'equal))
+        (doc (make-hash-table :test #'equal)))
+    (dolist (cell bebop--sets)
+      (let ((attrs (make-hash-table :test #'equal)))
+        (when-let ((c (plist-get (cdr cell) :created-at)))
+          (puthash "created-at" c attrs))
+        (puthash (car cell) attrs sets)))
+    (dolist (cell bebop--session-meta)
+      (let ((entry (make-hash-table :test #'equal)))
+        (when-let ((s (plist-get (cdr cell) :set)))
+          (puthash "set" s entry))
+        (when (plist-get (cdr cell) :shelved)
+          (puthash "shelved" t entry))
+        (when (> (hash-table-count entry) 0)
+          (puthash (car cell) entry sessions))))
+    (puthash "version" 2 doc)
+    (puthash "sets" sets doc)
+    (puthash "sessions" sessions doc)
+    (with-temp-file bebop-set-state-file
+      (insert (json-serialize doc)))))
+
+(defun bebop-set--load ()
+  "Load sets and session choices from `bebop-set-state-file'.
+Silently ignores missing files and pre-version-2 documents (the v1
+format was written by a retired implementation and never read)."
+  (when (file-exists-p bebop-set-state-file)
+    (condition-case err
+        (let* ((doc (with-temp-buffer
+                      (insert-file-contents bebop-set-state-file)
+                      (json-parse-buffer)))
+               (version (and (hash-table-p doc) (gethash "version" doc))))
+          (when (and (numberp version) (>= version 2))
+            (setq bebop--sets nil bebop--session-meta nil)
+            (when-let ((sets (gethash "sets" doc)))
+              (maphash (lambda (name attrs)
+                         (push (cons name
+                                     (when-let ((c (gethash "created-at" attrs)))
+                                       (list :created-at c)))
+                               bebop--sets))
+                       sets))
+            (when-let ((sessions (gethash "sessions" doc)))
+              (maphash (lambda (name entry)
+                         (push (cons name
+                                     (append
+                                      (when-let ((s (gethash "set" entry)))
+                                        (list :set s))
+                                      (when (eq (gethash "shelved" entry) t)
+                                        (list :shelved t))))
+                               bebop--session-meta))
+                       sessions))
+            (setq bebop--sets (nreverse bebop--sets)
+                  bebop--session-meta (nreverse bebop--session-meta))))
+      (error (message "bebop-set: could not read %s (%s)"
+                      bebop-set-state-file (error-message-string err))))))
+#+end_src
+
+*** Accessors and mutation
+
+All mutation funnels through =bebop-set--update-session-meta= so every
+choice is persisted the moment it is made.
+
+#+begin_src emacs-lisp
+(defun bebop-set--session-meta (name)
+  "Return the persisted choice plist for session NAME."
+  (cdr (assoc name bebop--session-meta)))
+
+(defun bebop-set--session-set (name)
+  "Return the set NAME belongs to, or nil if ungrouped."
+  (plist-get (bebop-set--session-meta name) :set))
+
+(defun bebop-set--session-shelved-p (name)
+  "Return non-nil if session NAME is shelved."
+  (plist-get (bebop-set--session-meta name) :shelved))
+
+(defun bebop-set--update-session-meta (name &rest props)
+  "Merge PROPS into session NAME's choice plist and persist."
+  (let ((cell (assoc name bebop--session-meta)))
+    (unless cell
+      (setq cell (cons name nil))
+      (push cell bebop--session-meta))
+    (let ((plist (cdr cell)))
+      (while props
+        (setq plist (plist-put plist (car props) (cadr props)))
+        (setq props (cddr props)))
+      (setcdr cell plist)))
+  (bebop-set--save))
+
+(defun bebop-set--declare (name)
+  "Declare set NAME if not already declared. Return NAME."
+  (unless (assoc name bebop--sets)
+    (push (cons name (list :created-at (bebop--now-string))) bebop--sets)
+    (bebop-set--save))
+  name)
+
+(defun bebop-set--names ()
+  "Return all known set names: declared plus referenced."
+  (seq-uniq
+   (append (mapcar #'car bebop--sets)
+           (delq nil (mapcar (lambda (c) (plist-get (cdr c) :set))
+                             bebop--session-meta)))))
+#+end_src
+
+*** Commands
+
+#+begin_src emacs-lisp
+(defun bebop-new-set (name)
+  "Declare a new set NAME — the manual path for ticketless groupings."
+  (interactive "sNew set name: ")
+  (when (string-empty-p (string-trim name))
+    (user-error "Set name cannot be empty"))
+  (bebop-set--declare name)
+  (bebop--render)
+  (message "Set \"%s\" declared" name))
+
+(defun bebop--entry-name-at-point ()
+  "Return the session or on-deck entry name at point, or nil."
+  (or (get-text-property (point) 'bebop-session-name)
+      (get-text-property (point) 'bebop-on-deck-name)))
+
+(defun bebop-assign-set (session set)
+  "Assign SESSION to SET. Empty or nil SET clears the assignment.
+Undeclared SET names are declared on the fly."
+  (interactive
+   (let* ((session (or (bebop--entry-name-at-point)
+                       (completing-read "Session: "
+                                        (mapcar #'car bebop--live-sessions)
+                                        nil t)))
+          (set (completing-read
+                (format "Move %s to set (empty to ungroup): " session)
+                (bebop-set--names))))
+     (list session set)))
+  (let ((set (and set (not (string-empty-p (string-trim set))) set)))
+    (when set (bebop-set--declare set))
+    (bebop-set--update-session-meta session :set set)
+    (bebop--render)
+    (message "%s → %s" session (or set "Ungrouped"))))
+
+(defun bebop-shelve (name)
+  "Shelve session NAME: hide it from the default dashboard view."
+  (bebop-set--update-session-meta name :shelved t)
+  (bebop--render))
+
+(defun bebop-unshelve (name)
+  "Unshelve session NAME."
+  (bebop-set--update-session-meta name :shelved nil)
+  (bebop--render))
+
+(defun bebop-shelve-toggle-at-point ()
+  "Toggle the shelved flag of the entry at point."
+  (interactive)
+  (let ((name (bebop--entry-name-at-point)))
+    (unless name
+      (user-error "No session at point"))
+    (if (bebop-set--session-shelved-p name)
+        (progn (bebop-unshelve name) (message "%s unshelved" name))
+      (bebop-shelve name)
+      (message "%s shelved" name))))
+
+(defun bebop-set--set-at-point ()
+  "Return the set name of the section at point, or of the entry at point."
+  (or (when-let ((section (magit-current-section)))
+        (let ((s section))
+          (catch 'found
+            (while s
+              (when (eq (oref s type) 'bebop-set)
+                (throw 'found (oref s value)))
+              (setq s (oref s parent))))))
+      (when-let ((name (bebop--entry-name-at-point)))
+        (bebop-set--session-set name))))
+
+(defun bebop-shelve-set-at-point ()
+  "Shelve every session in the set at point (batch-flag).
+If all of them are already shelved, unshelve them all instead."
+  (interactive)
+  (let ((set (bebop-set--set-at-point)))
+    (unless set
+      (user-error "No set at point"))
+    (let* ((members (seq-filter (lambda (r) (equal (plist-get r :set) set))
+                                (bebop-set--rows)))
+           (names (mapcar (lambda (r) (plist-get r :name)) members))
+           (all-shelved (and names
+                             (seq-every-p #'bebop-set--session-shelved-p names))))
+      (unless names
+        (user-error "Set %s has no sessions" set))
+      (dolist (n names)
+        (bebop-set--update-session-meta n :shelved (not all-shelved)))
+      (bebop--render)
+      (message "Set %s: %s (%d sessions)"
+               set (if all-shelved "unshelved" "shelved") (length names)))))
+#+end_src
+
+*** Row assembly
+
+A row unifies a running session and an on-deck artifact into one shape, so
+the renderer never cares which it is.
+
+#+begin_src emacs-lisp
+(defun bebop-set--row (name live-info)
+  "Build a row plist for NAME. LIVE-INFO is the live-session plist or nil."
+  (let* ((sinfo (bebop--session-info name))
+         (chart (or (let ((c (and sinfo (plist-get sinfo :chart))))
+                      (and c (file-exists-p c) c))
+                    (let ((p (expand-file-name
+                              (concat name ".org")
+                              (expand-file-name bebop-charts-dir))))
+                      (and (file-exists-p p) p))))
+         (venue (or (let ((v (and sinfo (plist-get sinfo :venue))))
+                      (and v (file-directory-p v) v))
+                    (let ((p (expand-file-name
+                              name (expand-file-name bebop-venues-dir))))
+                      (and (file-directory-p p) p)))))
+    (list :name name
+          :live live-info
+          :chart chart
+          :venue venue
+          :set (bebop-set--session-set name)
+          :shelved (bebop-set--session-shelved-p name))))
+
+(defun bebop-set--rows ()
+  "Return rows for all running sessions and on-deck artifacts."
+  (append
+   (mapcar (lambda (pair) (bebop-set--row (car pair) (cdr pair)))
+           bebop--live-sessions)
+   (mapcar (lambda (name) (bebop-set--row name nil))
+           (bebop--on-deck-names))))
+
+(defun bebop-set--group (rows)
+  "Group ROWS into (:sets ALIST :ungrouped ROWS :shelf ALIST).
+A set lands on the shelf when it has members and every one is shelved.
+Declared-but-empty sets render in :sets with no children."
+  (let ((by-set (make-hash-table :test #'equal))
+        ungrouped)
+    (dolist (r rows)
+      (let ((set (plist-get r :set)))
+        (if set
+            (puthash set (cons r (gethash set by-set)) by-set)
+          (push r ungrouped))))
+    (let (sets shelf)
+      (dolist (name (bebop-set--names))
+        (let ((members (nreverse (gethash name by-set))))
+          (if (and members
+                   (seq-every-p (lambda (r) (plist-get r :shelved)) members))
+              (push (cons name members) shelf)
+            (push (cons name members) sets))))
+      ;; Sets with a live session first, then alphabetical.
+      (let ((live-in (lambda (g)
+                       (seq-some (lambda (r) (plist-get r :live)) (cdr g)))))
+        (setq sets (sort (nreverse sets)
+                         (lambda (a b)
+                           (let ((la (funcall live-in a)) (lb (funcall live-in b)))
+                             (cond ((and la (not lb)) t)
+                                   ((and lb (not la)) nil)
+                                   (t (string< (car a) (car b)))))))))
+      (list :sets sets
+            :ungrouped (bebop-set--sort-ungrouped (nreverse ungrouped))
+            :shelf (sort (nreverse shelf)
+                         (lambda (a b) (string< (car a) (car b))))))))
+
+(defun bebop-set--sort-ungrouped (rows)
+  "Sort ungrouped ROWS: live first, ticket-slug clusters together,
+pinned utility names (emacs, bebop, claude) last."
+  (let ((pinned '("emacs" "bebop" "claude")))
+    (sort rows
+          (lambda (a b)
+            (let* ((na (plist-get a :name)) (nb (plist-get b :name))
+                   (la (plist-get a :live)) (lb (plist-get b :live))
+                   (pa (member na pinned)) (pb (member nb pinned))
+                   (sa (or (bebop--on-deck-ticket-slug na) na))
+                   (sb (or (bebop--on-deck-ticket-slug nb) nb)))
+              (cond
+               ((and la (not lb)) t)
+               ((and lb (not la)) nil)
+               ((and pa (not pb)) nil)
+               ((and pb (not pa)) t)
+               ((string= sa sb) (string< na nb))
+               (t (string< sa sb))))))))
+#+end_src
+
+*** Rendering — the setlist tree
+
+The sacred gutter: dot, chart glyph, venue glyph in fixed columns on every
+line. Set headings with an eponymous session row use that row's gutter (the
+set's own session, by naming convention); otherwise the gutter is blank.
+
+#+begin_src emacs-lisp
+(defvar bebop-set--backline-ports-cache nil
+  "Alist of (SLUG TIME . PORTS) caching backline port lookups.")
+
+(defcustom bebop-set-backline-cache-ttl 10
+  "Seconds to cache backline port lookups between dashboard renders."
+  :type 'integer
+  :group 'bebop)
+
+(defun bebop-set--backline-ports (venue)
+  "Return cached ports held by VENUE's backline, or nil."
+  (when (and venue (fboundp 'bebop--backline-slugs))
+    (let ((slug (file-name-nondirectory (directory-file-name venue))))
+      (when (member slug (bebop--backline-slugs))
+        (let ((hit (assoc slug bebop-set--backline-ports-cache)))
+          (if (and hit (< (- (float-time) (cadr hit))
+                          bebop-set-backline-cache-ttl))
+              (cddr hit)
+            (let ((ports (bebop--backline-ports slug)))
+              (setq bebop-set--backline-ports-cache
+                    (cons (cons slug (cons (float-time) ports))
+                          (assoc-delete-all
+                           slug bebop-set--backline-ports-cache)))
+              ports)))))))
+
+(defun bebop-set--dot-face (status)
+  "Return the dot face for live STATUS — same mapping as the flat list."
+  (cond
+   ((memq status '(blocked waiting)) 'bebop-dot-waiting-face)
+   ((memq status '(unknown degraded)) 'bebop-dot-degraded-face)
+   (t 'bebop-dot-active-face)))
+
+(defun bebop-set--gutter (row)
+  "Return the fixed-column gutter string for ROW, or blanks if ROW is nil."
+  (if (null row)
+      (make-string 7 ?\s)
+    (let* ((live (plist-get row :live))
+           (shelved (plist-get row :shelved))
+           (dot (cond
+                 (live (propertize "●" 'face (bebop-set--dot-face
+                                              (plist-get live :status))))
+                 (shelved (propertize "○" 'face '(:inherit shadow :slant italic)))
+                 (t (propertize "○" 'face 'shadow))))
+           (chart (if (plist-get row :chart)
+                      (propertize "⊞" 'face 'shadow) " "))
+           (venue (if (plist-get row :venue)
+                      (propertize "⎇" 'face 'shadow) " ")))
+      (concat dot " " chart " " venue "  "))))
+
+(defun bebop-set--name-width (rows)
+  "Return the name column width for ROWS.
+Capped so a single long outlier name cannot push the annotation
+column off screen; over-long names simply overflow their cell."
+  (min 44
+       (max 24 (+ 2 (apply #'max 0 (mapcar (lambda (r)
+                                             (length (plist-get r :name)))
+                                           rows))))))
+
+(defun bebop-set--insert-row (row width indent)
+  "Insert one session line for ROW with name column WIDTH and INDENT."
+  (let* ((name (plist-get row :name))
+         (live (plist-get row :live))
+         (shelved (plist-get row :shelved))
+         (face (cond
+                (shelved '(:inherit shadow :slant italic))
+                ((and live (equal name bebop--active-session))
+                 'bebop-selected-face)
+                (live 'bebop-session-face)
+                (t 'shadow)))
+         (ports (bebop-set--backline-ports (plist-get row :venue)))
+         (start (point)))
+    (magit-insert-section (bebop-session-row name)
+      (insert (bebop-set--gutter row))
+      (insert indent)
+      (insert (propertize name 'face face))
+      (when ports
+        (insert (make-string (max 1 (- width (length name) (length indent))) ?\s))
+        (insert (propertize (mapconcat (lambda (p) (format ":%d" p)) ports " ")
+                            'face 'shadow)))
+      (insert "\n")
+      (add-text-properties
+       start (point)
+       (if live
+           (list 'bebop-session-name name)
+         (list 'bebop-on-deck-name name))))))
+
+(defun bebop-set--counts (rows)
+  "Return the rollup annotation string for a set's ROWS."
+  (if (null rows)
+      "(empty)"
+    (let* ((running (seq-count (lambda (r) (plist-get r :live)) rows))
+           (waiting (seq-count (lambda (r)
+                                 (and (plist-get r :live)
+                                      (memq (plist-get (plist-get r :live) :status)
+                                            '(waiting blocked))))
+                               rows))
+           (shelved (seq-count (lambda (r) (plist-get r :shelved)) rows))
+           ;; Count directly — a row can be live AND shelved, so
+           ;; total − running − shelved would double-subtract it.
+           (deck (seq-count (lambda (r) (and (not (plist-get r :live))
+                                             (not (plist-get r :shelved))))
+                            rows))
+           (pieces (delq nil
+                         (list (when (> running 0) (format "%d running" running))
+                               (when (> waiting 0) (format "%d waiting" waiting))
+                               (when (> deck 0) (format "%d on deck" deck))
+                               (when (> shelved 0) (format "%d shelved" shelved))))))
+      (mapconcat #'identity pieces " · "))))
+
+(defun bebop-set--insert-set (group width &optional hide)
+  "Insert the section for GROUP (SET-NAME . ROWS). HIDE collapses it."
+  (let* ((set (car group))
+         (rows (cdr group))
+         ;; The set's own session, by naming convention: a row named
+         ;; exactly like the set renders as the heading's gutter.
+         (own (seq-find (lambda (r) (equal (plist-get r :name) set)) rows))
+         (children (if own (remq own rows) rows))
+         (unshelved (seq-remove (lambda (r) (plist-get r :shelved)) children))
+         (shelved (seq-filter (lambda (r) (plist-get r :shelved)) children))
+         (start (point)))
+    (magit-insert-section (bebop-set set hide)
+      (magit-insert-heading
+        (concat (bebop-set--gutter own)
+                (propertize set 'face '(:weight bold))
+                (make-string (max 2 (- width (length set))) ?\s)
+                (propertize (bebop-set--counts rows) 'face 'shadow)))
+      (when own
+        (add-text-properties
+         start (point)
+         (if (plist-get own :live)
+             (list 'bebop-session-name set)
+           (list 'bebop-on-deck-name set))))
+      (dolist (r unshelved)
+        (bebop-set--insert-row r width "    "))
+      (when shelved
+        (magit-insert-section (bebop-shelved (concat set "/shelved") t)
+          (magit-insert-heading
+            (concat (make-string 7 ?\s) "    "
+                    (propertize (format "… %d shelved" (length shelved))
+                                'face '(:inherit shadow :slant italic))))
+          (dolist (r shelved)
+            (bebop-set--insert-row r width "    ")))))))
+
+(defun bebop-set--render-body ()
+  "Insert the setlist tree — the dashboard body."
+  (let* ((rows (bebop-set--rows))
+         (groups (bebop-set--group rows))
+         (width (bebop-set--name-width rows)))
+    (magit-insert-section (bebop-setlist)
+      (dolist (g (plist-get groups :sets))
+        (bebop-set--insert-set g width))
+      (when-let ((un (plist-get groups :ungrouped)))
+        (magit-insert-section (bebop-ungrouped "Ungrouped" t)
+          (magit-insert-heading
+            (concat (make-string 7 ?\s)
+                    (propertize "Ungrouped" 'face '(:inherit shadow :weight bold))
+                    (make-string (max 2 (- width 9)) ?\s)
+                    (propertize (bebop-set--counts un) 'face 'shadow)))
+          (dolist (r un)
+            (bebop-set--insert-row r width "    "))))
+      (when-let ((shelf (plist-get groups :shelf)))
+        (magit-insert-section (bebop-shelf "Shelf" t)
+          (magit-insert-heading
+            (concat (make-string 7 ?\s)
+                    (propertize "Shelf" 'face '(:inherit shadow :weight bold))
+                    (make-string (max 2 (- width 5)) ?\s)
+                    (propertize (format "%d sets" (length shelf)) 'face 'shadow)))
+          (dolist (g shelf)
+            (bebop-set--insert-set g width t)))))))
+#+end_src
+
+*** Plug in: renderer, keybindings, cheatsheet
+
+#+begin_src emacs-lisp
+(setq bebop--render-body-function #'bebop-set--render-body)
+
+(setq bebop-dashboard-footer-lines
+      '("n: new  N: new set  m: move to set  RET: select  TAB: fold"
+        "k: kill  e: exile  a: archive  r: resume  C/D: chart  V/W: venue"
+        "z: shelve  Z: shelve set  g: refresh  q: quit"))
+
+(define-key bebop-dashboard-mode-map (kbd "N") #'bebop-new-set)
+(define-key bebop-dashboard-mode-map (kbd "m") #'bebop-assign-set)
+(define-key bebop-dashboard-mode-map (kbd "z") #'bebop-shelve-toggle-at-point)
+(define-key bebop-dashboard-mode-map (kbd "Z") #'bebop-shelve-set-at-point)
+
+(bebop-set--load)
+#+end_src
+
+*** Footer
+
+#+begin_src emacs-lisp
+(provide 'bebop-set)
+
+;;; bebop-set.el ends here
 #+end_src
 
 ** Bebop — Cue (bebop-cue.el)

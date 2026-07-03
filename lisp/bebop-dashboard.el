@@ -9,6 +9,7 @@
 ;; Green dot = Claude is active/responding or idle at the prompt.
 
 (require 'bebop-core)
+(require 'magit-section)
 
 (defcustom bebop-poll-interval 4
   "Seconds between tmux pane status polls."
@@ -352,34 +353,55 @@ not agent sessions.  Called once on first `bebop-dashboard-open'."
     (setq bebop--active-session (caar bebop--live-sessions))
     (bebop--apply-active-session)))
 
+(defvar bebop--render-body-function #'bebop--render-flat-body
+  "Function inserting the dashboard body. bebop-set overrides this
+with the setlist tree renderer.")
+
+(defvar bebop-dashboard-footer-lines
+  '("n: new  k: kill  RET: select  g: refresh  q: quit")
+  "Lines of the dashboard footer cheatsheet. Modules may replace this
+list when they add keybindings.")
+
 (defun bebop--render ()
   "Redraw the dashboard buffer with current pair state."
   (let ((buf (get-buffer-create bebop-buffer-name)))
     (with-current-buffer buf
+      (unless (derived-mode-p 'bebop-dashboard-mode)
+        (bebop-dashboard-mode))
       (let ((inhibit-read-only t)
-            (saved-name (get-text-property (point) 'bebop-session-name)))
+            (saved-name (or (get-text-property (point) 'bebop-session-name)
+                            (get-text-property (point) 'bebop-on-deck-name))))
         (erase-buffer)
-        ;; Pair lines
-        (if (null bebop--live-sessions)
-            (insert (propertize "  No agent pairs. Press 'n' to spawn one.\n"
-                                'face 'shadow))
-          (dolist (pair bebop--live-sessions)
-            (bebop--insert-session-line (car pair) (cdr pair))))
+        (funcall bebop--render-body-function)
         ;; Footer
-        (insert (propertize "  n: new  k: kill  RET: select  g: refresh  q: quit\n"
-                            'face 'shadow))
-        ;; Restore point to the same session line (by name, not position,
-        ;; since :after advice inserts extra lines that shift positions).
+        (insert "\n")
+        (when (bound-and-true-p bebop-use-docker)
+          (insert (propertize "Docker sandbox: ON  (! to toggle)\n"
+                              'face '(:inherit warning :weight bold))))
+        (dolist (line bebop-dashboard-footer-lines)
+          (insert (propertize (concat line "\n") 'face 'shadow)))
+        ;; Restore point to the same entry line (by name, not position).
         (if saved-name
             (let ((found nil))
               (goto-char (point-min))
               (while (and (not found) (< (point) (point-max)))
-                (if (equal (get-text-property (point) 'bebop-session-name) saved-name)
+                (if (or (equal (get-text-property (point) 'bebop-session-name)
+                               saved-name)
+                        (equal (get-text-property (point) 'bebop-on-deck-name)
+                               saved-name))
                     (setq found t)
                   (forward-line 1)))
               (unless found
                 (goto-char (point-min))))
           (goto-char (point-min)))))))
+
+(defun bebop--render-flat-body ()
+  "Insert the flat pair list — the fallback body when bebop-set is not loaded."
+  (if (null bebop--live-sessions)
+      (insert (propertize "  No agent pairs. Press 'n' to spawn one.\n"
+                          'face 'shadow))
+    (dolist (pair bebop--live-sessions)
+      (bebop--insert-session-line (car pair) (cdr pair)))))
 
 (defun bebop--insert-session-line (name info)
   "Insert one dashboard line for pair NAME with plist INFO."
@@ -458,11 +480,14 @@ not agent sessions.  Called once on first `bebop-dashboard-open'."
     map)
   "Keymap for `bebop-dashboard-mode'.")
 
-(define-derived-mode bebop-dashboard-mode special-mode "BebopDash"
+(define-derived-mode bebop-dashboard-mode magit-section-mode "BebopDash"
   "Major mode for the Bebop multi-agent dashboard.
+Derived from `magit-section-mode' for section folding (TAB) with
+fold state preserved across poll re-renders via the visibility cache.
 \\{bebop-dashboard-mode-map}"
   (setq buffer-read-only t
         truncate-lines t)
+  (setq-local magit-section-cache-visibility t)
   (setq-local line-spacing -6)
   (when (fboundp 'display-line-numbers-mode)
     (display-line-numbers-mode -1))
