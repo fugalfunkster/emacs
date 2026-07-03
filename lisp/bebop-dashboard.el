@@ -519,6 +519,12 @@ fold state preserved across poll re-renders via the visibility cache.
   (setq buffer-read-only t
         truncate-lines t)
   (setq-local magit-section-cache-visibility t)
+  ;; Flush the gutter against the window edge: no left fringe. The
+  ;; fringe is where magit draws its fold-caret bitmaps, so switch the
+  ;; visibility indicator to the textual style (trailing … on collapsed
+  ;; headings) for GUI windows too.
+  (setq-local left-fringe-width 0)
+  (setq-local magit-section-visibility-indicators '(("…" . t) ("…" . t)))
   (setq-local line-spacing -6)
   (when (fboundp 'display-line-numbers-mode)
     (display-line-numbers-mode -1))
