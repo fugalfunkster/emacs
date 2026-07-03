@@ -1528,13 +1528,16 @@ list when they add keybindings.")
                             (get-text-property (point) 'bebop-on-deck-name))))
         (erase-buffer)
         (funcall bebop--render-body-function)
-        ;; Footer
+        ;; Footer. font-lock is active in magit-section buffers and strips
+        ;; plain face properties — set font-lock-face as well.
         (insert "\n")
         (when (bound-and-true-p bebop-use-docker)
           (insert (propertize "Docker sandbox: ON  (! to toggle)\n"
-                              'face '(:inherit warning :weight bold))))
+                              'face '(:inherit warning :weight bold)
+                              'font-lock-face '(:inherit warning :weight bold))))
         (dolist (line bebop-dashboard-footer-lines)
-          (insert (propertize (concat line "\n") 'face 'shadow)))
+          (insert (propertize (concat line "\n")
+                              'face 'shadow 'font-lock-face 'shadow)))
         ;; Restore point to the same entry line (by name, not position).
         (if saved-name
             (let ((found nil))
@@ -3877,22 +3880,39 @@ set's own session, by naming convention); otherwise the gutter is blank.
    ((memq status '(unknown degraded)) 'bebop-dot-degraded-face)
    (t 'bebop-dot-active-face)))
 
+(defun bebop-set--prop (string face)
+  "Propertize STRING with FACE as both `face' and `font-lock-face'.
+font-lock is active in magit-section buffers and strips plain `face'
+properties on refontification — setting both keeps colors, exactly as
+magit's own `magit--propertize-face' does."
+  (propertize string 'face face 'font-lock-face face))
+
+(defun bebop-set--stop (column)
+  "Return a stretch-space aligning subsequent text to COLUMN.
+The gutter glyphs (⊞ 13px, ⎇ 16px) are wider than the 9px character
+cell, so literal-space padding drifts; pixel column stops keep the
+gutter grid exact on every line."
+  (propertize " " 'display `(space :align-to ,column)))
+
 (defun bebop-set--gutter (row)
-  "Return the fixed-column gutter string for ROW, or blanks if ROW is nil."
+  "Return the fixed-column gutter string for ROW, or blank stops if nil.
+Dot at column 0, chart glyph at 2, venue glyph at 4, text begins at 7."
   (if (null row)
-      (make-string 7 ?\s)
+      (bebop-set--stop 7)
     (let* ((live (plist-get row :live))
            (shelved (plist-get row :shelved))
            (dot (cond
-                 (live (propertize "●" 'face (bebop-set--dot-face
-                                              (plist-get live :status))))
-                 (shelved (propertize "○" 'face '(:inherit shadow :slant italic)))
-                 (t (propertize "○" 'face 'shadow))))
-           (chart (if (plist-get row :chart)
-                      (propertize "⊞" 'face 'shadow) " "))
-           (venue (if (plist-get row :venue)
-                      (propertize "⎇" 'face 'shadow) " ")))
-      (concat dot " " chart " " venue "  "))))
+                 (live (bebop-set--prop "●" (bebop-set--dot-face
+                                             (plist-get live :status))))
+                 (shelved (bebop-set--prop "○" '(:inherit shadow :slant italic)))
+                 (t (bebop-set--prop "○" 'shadow))))
+           (chart (when (plist-get row :chart)
+                    (bebop-set--prop "⊞" 'shadow)))
+           (venue (when (plist-get row :venue)
+                    (bebop-set--prop "⎇" 'shadow))))
+      (concat dot (bebop-set--stop 2)
+              (or chart "") (bebop-set--stop 4)
+              (or venue "") (bebop-set--stop 7)))))
 
 (defun bebop-set--name-width (rows)
   "Return the name column width for ROWS.
@@ -3919,11 +3939,12 @@ column off screen; over-long names simply overflow their cell."
     (magit-insert-section (bebop-session-row name)
       (insert (bebop-set--gutter row))
       (insert indent)
-      (insert (propertize name 'face face))
+      (insert (bebop-set--prop name face))
       (when ports
         (insert (make-string (max 1 (- width (length name) (length indent))) ?\s))
-        (insert (propertize (mapconcat (lambda (p) (format ":%d" p)) ports " ")
-                            'face 'shadow)))
+        (insert (bebop-set--prop
+                 (mapconcat (lambda (p) (format ":%d" p)) ports " ")
+                 'shadow)))
       (insert "\n")
       (add-text-properties
        start (point)
@@ -3968,9 +3989,9 @@ column off screen; over-long names simply overflow their cell."
     (magit-insert-section (bebop-set set hide)
       (magit-insert-heading
         (concat (bebop-set--gutter own)
-                (propertize set 'face '(:weight bold))
+                (bebop-set--prop set '(:weight bold))
                 (make-string (max 2 (- width (length set))) ?\s)
-                (propertize (bebop-set--counts rows) 'face 'shadow)))
+                (bebop-set--prop (bebop-set--counts rows) 'shadow)))
       (when own
         (add-text-properties
          start (point)
@@ -3982,9 +4003,9 @@ column off screen; over-long names simply overflow their cell."
       (when shelved
         (magit-insert-section (bebop-shelved (concat set "/shelved") t)
           (magit-insert-heading
-            (concat (make-string 7 ?\s) "    "
-                    (propertize (format "… %d shelved" (length shelved))
-                                'face '(:inherit shadow :slant italic))))
+            (concat (bebop-set--stop 7) "    "
+                    (bebop-set--prop (format "… %d shelved" (length shelved))
+                                     '(:inherit shadow :slant italic))))
           (dolist (r shelved)
             (bebop-set--insert-row r width "    ")))))))
 
@@ -3999,19 +4020,19 @@ column off screen; over-long names simply overflow their cell."
       (when-let ((un (plist-get groups :ungrouped)))
         (magit-insert-section (bebop-ungrouped "Ungrouped" t)
           (magit-insert-heading
-            (concat (make-string 7 ?\s)
-                    (propertize "Ungrouped" 'face '(:inherit shadow :weight bold))
+            (concat (bebop-set--stop 7)
+                    (bebop-set--prop "Ungrouped" '(:inherit shadow :weight bold))
                     (make-string (max 2 (- width 9)) ?\s)
-                    (propertize (bebop-set--counts un) 'face 'shadow)))
+                    (bebop-set--prop (bebop-set--counts un) 'shadow)))
           (dolist (r un)
             (bebop-set--insert-row r width "    "))))
       (when-let ((shelf (plist-get groups :shelf)))
         (magit-insert-section (bebop-shelf "Shelf" t)
           (magit-insert-heading
-            (concat (make-string 7 ?\s)
-                    (propertize "Shelf" 'face '(:inherit shadow :weight bold))
+            (concat (bebop-set--stop 7)
+                    (bebop-set--prop "Shelf" '(:inherit shadow :weight bold))
                     (make-string (max 2 (- width 5)) ?\s)
-                    (propertize (format "%d sets" (length shelf)) 'face 'shadow)))
+                    (bebop-set--prop (format "%d sets" (length shelf)) 'shadow)))
           (dolist (g shelf)
             (bebop-set--insert-set g width t)))))))
 #+end_src

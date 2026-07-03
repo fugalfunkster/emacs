@@ -375,13 +375,16 @@ list when they add keybindings.")
                             (get-text-property (point) 'bebop-on-deck-name))))
         (erase-buffer)
         (funcall bebop--render-body-function)
-        ;; Footer
+        ;; Footer. font-lock is active in magit-section buffers and strips
+        ;; plain face properties — set font-lock-face as well.
         (insert "\n")
         (when (bound-and-true-p bebop-use-docker)
           (insert (propertize "Docker sandbox: ON  (! to toggle)\n"
-                              'face '(:inherit warning :weight bold))))
+                              'face '(:inherit warning :weight bold)
+                              'font-lock-face '(:inherit warning :weight bold))))
         (dolist (line bebop-dashboard-footer-lines)
-          (insert (propertize (concat line "\n") 'face 'shadow)))
+          (insert (propertize (concat line "\n")
+                              'face 'shadow 'font-lock-face 'shadow)))
         ;; Restore point to the same entry line (by name, not position).
         (if saved-name
             (let ((found nil))
