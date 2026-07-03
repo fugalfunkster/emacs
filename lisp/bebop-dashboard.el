@@ -403,7 +403,8 @@ list when they add keybindings.")
                               'font-lock-face '(:inherit warning :weight bold))))
         (dolist (line bebop-dashboard-footer-lines)
           (insert (propertize (concat line "\n")
-                              'face 'shadow 'font-lock-face 'shadow)))
+                              'face '(:inherit shadow :height 0.85)
+                              'font-lock-face '(:inherit shadow :height 0.85))))
         ;; Restore point to the same entry line (by name, not position).
         (if saved-name
             (let ((found nil))

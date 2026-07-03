@@ -535,8 +535,8 @@ Order: live ungrouped sessions (flat strip), sets, Ungrouped, Shelf."
           (magit-insert-heading
             (concat (bebop-set--stop 7)
                     (bebop-set--prop "Ungrouped" '(:inherit shadow :weight bold))
-                    (make-string (max 2 (- width 9)) ?\s)
-                    (bebop-set--prop (bebop-set--counts un) 'shadow)))
+                    (bebop-set--prop (format " (%s)" (bebop-set--counts un))
+                                     'shadow)))
           (dolist (r un)
             (bebop-set--insert-row r width "    "))))
       (when-let ((shelf (plist-get groups :shelf)))
@@ -545,8 +545,8 @@ Order: live ungrouped sessions (flat strip), sets, Ungrouped, Shelf."
           (magit-insert-heading
             (concat (bebop-set--stop 7)
                     (bebop-set--prop "Shelf" '(:inherit shadow :weight bold))
-                    (make-string (max 2 (- width 5)) ?\s)
-                    (bebop-set--prop (format "%d sets" (length shelf)) 'shadow)))
+                    (bebop-set--prop (format " (%d sets)" (length shelf))
+                                     'shadow)))
           (dolist (g shelf)
             (bebop-set--insert-set g width t)))))))
 
