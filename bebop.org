@@ -468,16 +468,16 @@ and exile proposals persist to =bebop-state.json= (version 2, owned by
 
 Load order and dependency structure:
 
-| Module            | Requires                                          |
-|-------------------+---------------------------------------------------|
-| =bebop-core=      | (none)                                            |
-| =bebop-dashboard= | =bebop-core=, =magit-section=                     |
-| =bebop-passthrough= | =bebop-core=                                    |
-| =bebop-session=   | =bebop-core=, =bebop-dashboard=                   |
-| =bebop-backline=  | =bebop-core=, =bebop-dashboard=, =bebop-session=  |
-| =bebop-set=       | =bebop-session=, =magit-section=                  |
-| =bebop-api=       | =bebop-session=, =bebop-set=                      |
-| =bebop-frame=     | =bebop-session=, =magit=                          |
+| Module              | Requires                                                          |
+|---------------------+-------------------------------------------------------------------|
+| =bebop-core=        | (none)                                                            |
+| =bebop-dashboard=   | =bebop-core=, =magit-section=                                     |
+| =bebop-passthrough= | =bebop-core=                                                      |
+| =bebop-session=     | =bebop-core=, =bebop-dashboard=                                   |
+| =bebop-backline=    | =bebop-core=, =bebop-dashboard=, =bebop-session=                  |
+| =bebop-set=         | =bebop-core=, =bebop-dashboard=, =bebop-session=, =magit-section= |
+| =bebop-api=         | =bebop-session=, =bebop-set=                                      |
+| =bebop-frame=       | =bebop-session=, =magit=                                          |
 
 Each module maps to one =use-package= block in =emacs.org=. They are designed
 to be independently commentable:
@@ -507,7 +507,7 @@ not a Bebop problem. The fix lives in =emacs.org=.
   - [[*Core][Core]] (=bebop-core.el=) — composition buffer, tmux send, header overlay
   - [[*Passthrough][Passthrough]] (=bebop-passthrough.el=) — TUI keystroke passthrough (=bebop-passthrough=)
   - [[*Dashboard][Dashboard]] (=bebop-dashboard.el=) — agent pool, status polling, =*bebop*= buffer
-  - [[*Bebop Sessions][Bebop Sessions]] (=bebop-session.el=) — session registry, lifecycle, venues, charts
+  - [[*Bebop — Sessions (bebop-session.el)][Bebop Sessions]] (=bebop-session.el=) — session registry, lifecycle, venues, charts
   - [[*Bebop — Backline (bebop-backline.el)][Bebop Backline]] (=bebop-backline.el=) — venue work shells, port ownership
   - [[*Bebop — Sets (bebop-set.el)][Bebop Sets]] (=bebop-set.el=) — sets, shelving, setlist tree, persistence
   - [[*Bebop — API (bebop-api.el)][Bebop API]] (=bebop-api.el=) — JSON citizen surface for agents
@@ -2558,14 +2558,15 @@ Point-aware wrapper for =bebop-archive-chart=, usable from the dashboard.
 
 #+begin_src emacs-lisp
 (defun bebop-archive-chart-at-point ()
-  "Archive the chart for the on-deck session at point, or prompt interactively.
-When point has a `bebop-on-deck-name' text property, passes that name directly
-to `bebop-archive-chart'.  Otherwise falls through to the interactive prompt."
+  "Archive the chart for the on-deck session at point, or prompt for one.
+When point has a `bebop-on-deck-name' text property, passes that name
+directly to `bebop-archive-chart'.  Otherwise prompts (the wrapped
+function takes a required NAME and has no interactive spec of its own)."
   (interactive)
-  (let ((session-name (get-text-property (point) 'bebop-on-deck-name)))
-    (if session-name
-        (bebop-archive-chart session-name)
-      (bebop-archive-chart))))
+  (let ((session-name (or (get-text-property (point) 'bebop-on-deck-name)
+                          (completing-read "Archive chart for session: "
+                                           (bebop--on-deck-names) nil t))))
+    (bebop-archive-chart session-name)))
 #+end_src
 
 Remove a venue worktree via =git worktree remove --force=, falling back to =delete-directory= if the parent repo is gone.

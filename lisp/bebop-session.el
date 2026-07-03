@@ -478,14 +478,15 @@ The session is not killed; only the chart file is moved."
     (message "Archived chart for session: %s" name)))
 
 (defun bebop-archive-chart-at-point ()
-  "Archive the chart for the on-deck session at point, or prompt interactively.
-When point has a `bebop-on-deck-name' text property, passes that name directly
-to `bebop-archive-chart'.  Otherwise falls through to the interactive prompt."
+  "Archive the chart for the on-deck session at point, or prompt for one.
+When point has a `bebop-on-deck-name' text property, passes that name
+directly to `bebop-archive-chart'.  Otherwise prompts (the wrapped
+function takes a required NAME and has no interactive spec of its own)."
   (interactive)
-  (let ((session-name (get-text-property (point) 'bebop-on-deck-name)))
-    (if session-name
-        (bebop-archive-chart session-name)
-      (bebop-archive-chart))))
+  (let ((session-name (or (get-text-property (point) 'bebop-on-deck-name)
+                          (completing-read "Archive chart for session: "
+                                           (bebop--on-deck-names) nil t))))
+    (bebop-archive-chart session-name)))
 
 (defun bebop--remove-venue (venue-path)
   "Remove the git worktree at VENUE-PATH.
