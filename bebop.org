@@ -33,8 +33,6 @@ The canonical terms. Everything in the spec and implementation uses these.
 | *Backline*  | Venue-owned work shell (tmux window) for long-running processes: dev servers, watch builds; hot-seat attachable  |
 | *Set*       | Attention-level grouping of sessions; lazy attributes; sometimes wraps a Jira epic, sometimes ticketless         |
 | *Shelved*   | Visibility flag hiding a session or set from the default view; orthogonal to liveness; artifacts untouched       |
-| *Cue*       | Write a heading into a session's chart; verb and noun                                                            |
-| *Jam*       | Send a heading to a session's agent via tmux; verb and noun                                                      |
 | *Conductor* | Role/layout: high-level view across all sessions                                                                 |
 | *Solo*      | Role/layout: full-screen dev environment for one session                                                         |
 | *On deck*   | Sessions that have chart or venue artifacts on disk but are not currently running; shown in the dashboard footer |
@@ -51,14 +49,6 @@ A session is Bebop's core abstraction. It bundles:
 - A venue - a git worktree that lives on disk (optional — absent for research, planning, or multi-repo work)
 
 ** Session creation
-
-=M-x bebop-new-session= runs a three-step flow (see below).
-
-=M-x bebop-new-session-from-jira-heading= — shortcut for launching from a JIRA
-ticket heading. When point is at a ticket heading in =jira.org= (or any org
-buffer with JIRA-style headings), it auto-fills repo, branch (ticket ID), and
-session name (=REPO--TICKET-ID=), creates the worktree, and cues the subtree
-into a new chart — all in one go. See [[Session from JIRA heading]].
 
 =M-x bebop-new-session= runs a three-step flow:
 
@@ -136,13 +126,14 @@ Created when a session is created, or assigned from an existing chart:
 
 : ~/Code/Org/charts/NAME.org
 
-Three sections, populated by cueing and jamming (see [[Chart structure]]):
+Three sections (see [[Chart structure]]):
 - =* Overture= — context assembled before work begins
 - =* Changes= — context added while the agent is active
 - =* Coda= — notes added after the session ends
 
-The chart persists when the session ends. Re-assigning it to a new session makes
-all prior context immediately available to jam.
+The chart persists when the session ends. Re-assigning it to a new session
+makes all prior context immediately available — the agent reads it at
+orientation.
 
 ** 3. Personal context doc (freeform)
 
@@ -156,8 +147,8 @@ source. May be empty, may be dense. No required format.
 ** Pending mode
 
 A session is in *pending mode* from the moment it is created until the first
-jam or free-form composition is sent. No prompt is sent to the agent — pending
-is a Bebop-side state only, visible in the dashboard:
+composition send. No prompt has been sent to the agent — pending is a
+Bebop-side state only, visible in the dashboard:
 
 | Dot    | State            | Meaning                                                       |
 |--------+------------------+---------------------------------------------------------------|
@@ -172,56 +163,22 @@ Waiting and Blocked both show red — both mean the agent needs your attention.
 The distinction matters for routing: waiting accepts a new prompt; blocked needs
 passthrough (=M-a=) to navigate the TUI.
 
-The agent leaves pending mode on the first jam (=C-c C-j=) or composition send
-(=C-c C-c= in the session buffer).
+The agent leaves pending mode on the first composition send (=C-c C-c= in the
+session buffer).
 
 ** Chart structure
 
-Every chart has three sections. Cues and jams are routed to the appropriate
-section based on agent state at the time of the action:
+Every chart has three sections, aligned with session phases:
 
-| Section      | Agent state at time of action  | Purpose                        |
+| Section      | Session phase                  | Purpose                        |
 |--------------+--------------------------------+--------------------------------|
 | =* Overture= | Pending                        | Context assembled before work  |
 | =* Changes=  | Anything except pending/gone   | Context added during work      |
 | =* Coda=     | Gone                           | Notes added after session ends |
 
-New charts are blank — sections are created on first use.
-
-** Cueing and Jamming
-
-Two operations, both available in =bebop-cue-mode= (active in any =org-mode=
-buffer):
-
-| Key               | Action                                                    |
-|-------------------+-----------------------------------------------------------|
-| =C-c C-p=         | Cue heading at point → write to active session's chart    |
-| =C-c C-P=         | Cue heading at point → write to chart, pick session       |
-| =C-c C-j=         | Jam heading at point → send to active session's agent     |
-| =C-c C-J=         | Jam heading at point → send to agent, pick session        |
-
-*Cue* writes a heading into the chart under the appropriate section. Nothing is
-sent to the agent.
-
-*Jam* sends a heading to the agent via tmux. If jamming from outside the chart,
-the heading is also written to the chart first (so the chart stays a complete
-record). If jamming from within the chart itself, no write occurs — it is
-already there.
-
-#+begin_example
-  Any org file                          Session chart
-  (jira.org, tasks.org, spec, ...)      ~/Code/Org/charts/NAME.org
-        │                                     │
-        │  C-c C-p (cue)                      │
-        └────────────────────────────────────►│
-                                              │  C-c C-j (jam, from chart)
-        │  C-c C-j (jam, from outside)        └──────────────────────────►  tmux
-        ├────────────────────────────────────►│
-        │           (write to chart)          └──────────────────────────►  tmux
-#+end_example
-
-When no session is pinned by the current layout, both =C-c C-p= and =C-c C-j=
-fall back to the completing-read session picker.
+New charts are blank — sections are created on first use. The "from heading"
+option in =bebop-new-session= seeds =* Overture= from the org subtree at
+point; beyond that, humans and agents write chart sections directly.
 
 ** Standards library
 
@@ -229,101 +186,15 @@ Standards are org headings in:
 
 : ~/Code/Org/standards.org
 
-No special integration — cue from it exactly like =jira.org= or any other org
-doc via =bebop-cue-mode=. Two kinds of headings:
+No special integration — agents read it directly by path when pointed at it.
+Two kinds of headings:
 
 - *Task templates* — structured task frames (Investigate, Plan, Implement, etc.)
 - *Development standards* — how-to-work guidance (TDD, debugging, code review, etc.)
 
-Jam one or more standards before sending a task to establish how the agent should
-work. The agent exits pending mode upon receiving a task jam.
-
-* External Context Sources
-** JIRA → Org
-
-Package: =org-jira= (built on =jiralib2=)
-
-Tickets are synced into:
-
-: ~/Code/Org/jira.org
-
-Structure mirrors kanban columns:
-
-#+begin_example
-TO DO
-[PROJECT-123] Fix login timeout
-   :PROPERTIES:
-   :JIRA_URL: https://...
-   :STATUS: To Do
-   :END:
-   Description...
-
-IN PROGRESS
-[PROJECT-456] Add dark mode toggle...
-#+end_example
-
-Any heading in =jira.org= is cueable via =bebop-cue-mode=, regardless of which
-layout is active. =jira.org= is a standalone document — it does not live inside
-the Bebop frame.
-
-*** Setup
-
-*Prerequisite*: =org-jira= installation, auth, and base configuration are handled
-as part of general Emacs config (see =emacs.org=). By the time Phase 5 is
-reached, pulling tickets should already work.
-
-=bebop-jira.el= adds only Bebop-specific wrappers on top of a working =org-jira=
-install.
-
-** GitLab → Magit + Org
-
-Package: =forge= (=magit= extension, supports GitLab natively)
-
-MRs, issues, and review comments appear in Magit as standard Magit sections.
-You can comment, approve, and merge without leaving Emacs.
-
-*** =bebop-gitlab.el=
-
-One command:
-
-: M-x bebop-gitlab-mr-to-chart
-
-Exports the forge MR at point in Magit to the active session's chart. Prompts
-for the session name. Cues to =* Overture= (pending) or =* Changes= (active).
-
-What it exports:
-- MR title, description, state, author, URL
-- All unresolved discussions and non-system general notes, including file/line
-  positions (fetched via a direct =GET /discussions= API call, since forge
-  discards position data when pulling notes)
-
-What it does not export:
-- Inline diff comments with surrounding diff context — they lose meaning without
-  the diff. For diff-specific feedback, send the agent to inspect the branch
-  directly (=git diff=, =git log=, reading files).
-
-#+begin_example
- ** MR !42: [MR title]
-   :PROPERTIES:
-   :GITLAB_URL: https://...
-   :STATUS: open
-   :AUTHOR: someone
-   :END:
-   [description]
-
- *** Open Comments
-
- **** @reviewer — src/foo.ts:42
-     This function needs a docstring
-#+end_example
-
-*** Setup
-
-*Prerequisite*: =forge= installation, GitLab auth (=~/.authinfo.gpg= entry with
-=^forge= suffix), and initial =forge-pull= are handled in =emacs.org=.
-
-=bebop-gitlab.el= adds only =bebop-gitlab-mr-to-chart= on top of a working =forge=
-install.
+(Historical note: cue/jam — elisp commands that routed org subtrees into
+charts and agents — were retired in the setlist transition. Agents fetch
+their own context now via MCP, CLI tooling, and orientation.)
 
 * Venues
 
@@ -429,7 +300,6 @@ epic enrichment, later phase); until then sessions land honestly in
 | =~/Code/Org/charts/=                   | Active charts                            |
 | =~/Code/Org/charts/archive/=           | Archived charts                          |
 | =~/Code/Org/standards.org=             | Task templates and development standards |
-| =~/Code/Org/jira.org=                  | JIRA tickets synced by org-jira          |
 | =~/Code/Org/scratch.org=               | Personal freeform context                |
 | =~/Code/Repos/Venues/=                 | Git worktrees for active sessions        |
 
@@ -441,14 +311,13 @@ A Solo frame is per-session and per-macOS-space; multiple Solo frames can coexis
 
 =M-x bebop= — the default workspace.
 
-Cueing agents, monitoring status, directing work at a high level.
+Directing agents, monitoring status, working at a high level.
 You're not reading or writing code.
-You write specs in org docs, and cue the agents.
+You write specs in org docs and prompts in composition buffers.
 
 This is the default Bebop frame (=M-x bebop=). The left column shows the session
 pool (dashboard top, eshell bottom); the right column is the active session's
-composition buffer. You cue from =jira.org= or specs and jam to the right session;
-the dashboard shows session statuses in detail..
+composition buffer. The dashboard shows session statuses in detail.
 
 *** Layout
 
@@ -467,9 +336,9 @@ Right column (60%): the active session's =*bebop-session: NAME*= composition
 buffer at 2× font size.
 
 All three windows are weakly dedicated: interactive buffer switching is blocked,
-but session switches update the composition pane automatically. To read
-=jira.org=, specs, or any external doc for cueing, open a regular Emacs frame
-or window — the Conductor frame stays focused on the active session.
+but session switches update the composition pane automatically. To read specs
+or any external doc, open a regular Emacs frame or window — the Conductor
+frame stays focused on the active session.
 
 Switching the active session in the dashboard updates:
 - The composition buffer (right) — switches to =*bebop-session: NAME*=
@@ -488,7 +357,7 @@ Get in and out quickly, don't hog the stage.
 
 The solo frame is a 2-column dev layout for one session (=M-x bebop-solo NAME=).
 Eshell on the left, magit-status on the right, both at the session's venue.
-Cue and jam still work from anywhere via =bebop-cue-mode=.
+The venue's backline (work shell) is one tmux jump away.
 
 *** Layout
 
@@ -513,8 +382,8 @@ accessible: =C-c C-p= / =C-c C-j= work from anywhere, including mid-edit.
 ** Pending mode state
 
 Yellow (pending) is tracked as explicit Emacs state in =bebop-session.el=, not
-inferred from pane content. The state is set when a session is created and clears
-on the first jam (=C-c C-j=) or composition send (=C-c C-c=).
+inferred from pane content. The state is set when a session is created and
+clears on the first composition send (=C-c C-c=).
 =bebop--infer-status= should check this state first before falling
 through to pane-content detection.
 
@@ -527,7 +396,7 @@ full module section pattern.
 
 Key entry points for future work:
 - =bebop-send-buffer= — the tmux send pattern (load-buffer → paste-buffer →
-  send-keys C-m); jam uses the same three =call-process= calls on a subtree
+  send-keys C-m)
 - =bebop--active-session= — *variable* (defvar), not a function; the active pair name
 - =bebop-select-session= — call this to change the active session; propagates to
   all dependent state
@@ -573,28 +442,8 @@ primary composition surface. Session buffers replace it for all per-session work
 
 "Active session" throughout this spec means the value returned by
 =bebop--active-session=. This is the same concept Chant already uses for
-its active agent — Bebop inherits it unchanged. Cue and jam operations target
-this session when no session is explicitly picked. Do not introduce a separate
+its active agent — Bebop inherits it unchanged. Do not introduce a separate
 active-session tracking mechanism.
-
-** Cue and jam operate on the org subtree at point
-
-Both cue and jam act on the *full org subtree* at point — the heading plus all
-body text and subheadings beneath it. Use =org-copy-subtree= or
-=(buffer-substring-no-properties (org-entry-beginning-position) (org-entry-end-position))=
-to extract it. For jam, pipe that text through the tmux send pattern (see above)
-rather than sending only the heading line.
-
-** Keybinding conflicts
-
-=C-c C-p= and =C-c C-j= both shadow standard org-mode bindings:
-- =C-c C-p= normally runs =org-previous-visible-heading=
-- =C-c C-j= normally runs =org-goto=
-
-This is intentional — =bebop-cue-mode= overrides them in its local keymap, so
-they only take effect when the mode is active. Define the keymap correctly as a
-minor mode map and the shadowing works as expected. Users who need the org
-defaults in a specific buffer can toggle =bebop-cue-mode= off there.
 
 ** Conductor frame window locking
 
@@ -604,27 +453,16 @@ after the layout is created. A dedicated window refuses =switch-to-buffer= and
 cannot be split. Pair this with =window-configuration-change-hook= or
 =delete-window= advice if needed to prevent the user from closing a window.
 
-** bebop-cue-mode activation
-
-=bebop-cue-mode= is a custom minor mode defined in =bebop-cue.el=. It must be
-enabled in all org buffers:
-
-#+begin_src elisp
-(add-hook 'org-mode-hook #'bebop-cue-mode)
-#+end_src
-
-This line belongs in the =bebop-cue.el= setup block in =emacs.org=. Without it
-the cue and jam keybindings never appear.
-
 ** Session state and restarts
 
-Bebop's session registry (which chart and venue belong to which session, and
-each session's pending state) lives in memory only — it is not persisted to
-disk. This is intentional: the underlying tmux sessions survive Emacs restarts
-and Chant already reconnects to them via the dashboard on next launch. The only
-thing lost is the chart-to-session mapping. The resume flow (=bebop-new-session=
-→ pick existing venue → pick existing chart) is the recovery path. Do not
-attempt to persist session state to disk.
+Bebop's *derived* session state (which tmux windows are live, chart/venue
+existence, statuses) lives in memory only and is rediscovered from tmux and
+the filesystem on next launch. The resume flow (=bebop-new-session= → pick
+existing venue → pick existing chart) is the recovery path.
+
+*Choices* are the exception: set declarations, set membership, shelved flags,
+and exile proposals persist to =bebop-state.json= (version 2, owned by
+=bebop-set=). Never persist anything derivable — only choices.
 
 ** Module dependencies and graceful degradation
 
@@ -639,31 +477,30 @@ Load order and dependency structure:
 | =bebop-backline=  | =bebop-core=, =bebop-dashboard=, =bebop-session=  |
 | =bebop-set=       | =bebop-session=, =magit-section=                  |
 | =bebop-api=       | =bebop-session=, =bebop-set=                      |
-| =bebop-cue=       | =bebop-session=, =org=                            |
-| =bebop-frame=     | =bebop-session=, =bebop-cue=, =magit=             |
-| =bebop-gitlab=    | =bebop-session=, =forge=                          |
+| =bebop-frame=     | =bebop-session=, =magit=                          |
 
 Each module maps to one =use-package= block in =emacs.org=. They are designed
 to be independently commentable:
 
 - Comment out =bebop-frame= → no Conductor/Solo layouts; everything else works
-- Comment out =bebop-cue= → no cue/jam keybindings; sessions still manageable via =M-x=
-- Comment out =bebop-jira= or =bebop-gitlab= → those integrations gone; nothing else affected
+- Comment out =bebop-set= → dashboard reverts to the flat pair list; sets/shelving gone
+- Comment out =bebop-backline= → no venue work shells; port annotations disappear
+- Comment out =bebop-api= → agents lose the citizen surface; interactive use unaffected
 - Comment out =bebop-session= → all Bebop functionality gone; only core composition buffer remains
 
-No module other than =bebop-session= should be a hard dependency of any other
-Bebop module. Use =(require 'bebop-session)= in =bebop-cue=, =bebop-frame=, etc.,
-but =bebop-frame= must not =require= =bebop-cue= — load order is controlled
-entirely from =emacs.org=.
+No module other than =bebop-session= (and =bebop-set= for =bebop-api=) should
+be a hard dependency of any other Bebop module — load order is controlled
+entirely from =emacs.org=, and soft integrations (backline port annotations,
+the set renderer plug-in) degrade via =fboundp= guards and function variables.
+
+(Retired in the setlist transition, deleted outright: =bebop-cue=,
+=bebop-gitlab=, and the JIRA sync hooks in the session flow — all replaced
+by agent-side MCP/CLI tooling. See git history for the code.)
 
 ** Env parity (out of scope)
 
-The pain of desktop vs. laptop config drift (org-jira not configured on desktop,
-forge auth missing) is an Emacs config sync problem, not a Bebop problem. The fix
-lives in =emacs.org=.
-
-Bebop can help surface "is forge configured?" as a preflight check before creating
-a forge-dependent session — but that's a nice-to-have, not Phase 5 scope.
+The pain of desktop vs. laptop config drift is an Emacs config sync problem,
+not a Bebop problem. The fix lives in =emacs.org=.
 
 * Tangle artifacts                                                 :noexport:
 
@@ -671,9 +508,10 @@ a forge-dependent session — but that's a nice-to-have, not Phase 5 scope.
   - [[*Passthrough][Passthrough]] (=bebop-passthrough.el=) — TUI keystroke passthrough (=bebop-passthrough=)
   - [[*Dashboard][Dashboard]] (=bebop-dashboard.el=) — agent pool, status polling, =*bebop*= buffer
   - [[*Bebop Sessions][Bebop Sessions]] (=bebop-session.el=) — session registry, lifecycle, venues, charts
-  - [[*Bebop Cue][Bebop Cue]] (=bebop-cue.el=) — cue/jam keybindings, subtree extraction
-  - [[*Bebop Frame][Bebop Frame]] (=bebop-frame.el=) — Conductor and Solo frame layouts
-  - [[*Bebop GitLab][Bebop GitLab]] (=bebop-gitlab.el=) — MR export to chart
+  - [[*Bebop — Backline (bebop-backline.el)][Bebop Backline]] (=bebop-backline.el=) — venue work shells, port ownership
+  - [[*Bebop — Sets (bebop-set.el)][Bebop Sets]] (=bebop-set.el=) — sets, shelving, setlist tree, persistence
+  - [[*Bebop — API (bebop-api.el)][Bebop API]] (=bebop-api.el=) — JSON citizen surface for agents
+  - [[*Bebop — Frame (bebop-frame.el)][Bebop Frame]] (=bebop-frame.el=) — Conductor and Solo frame layouts
 
 * Implementation
 
@@ -682,19 +520,20 @@ Emacs. It composes three things:
 
 - *Emacs* — per-session composition buffers, dashboard, passthrough mode
 - *tmux* — persistent terminal session bridging Emacs (Lisp) to Claude CLI (TTY)
-- *Org* — charts accumulate context; cueing and jamming move org subtrees into sessions
+- *Org* — charts hold accumulated session context; agents read them at orientation
 
 The canonical usage pattern:
 
 1. =M-x bebop= → creates or focuses the Conductor frame; ensures the =claude= tmux
    session exists; discovers any pre-existing sessions; starts polling
 2. Press =n= in the dashboard → three-step flow: venue → name → chart; new tmux
-   window launched with Claude Code
-3. Open any org doc (=jira.org=, a spec, a chart) → =C-c C-p= cues a heading to
-   the session chart; =C-c C-j= jams it directly to the agent
-4. Write a prompt in =*bebop-session: NAME*= → =C-c C-c= sends it to the agent
-5. Press =M-a= (bebop-passthrough) to forward keystrokes for TUI prompts without
+   window launched with Claude Code carrying =BEBOP_SESSION= identity; the
+   agent orients itself from the chart and registry
+3. Write a prompt in =*bebop-session: NAME*= → =C-c C-c= sends it to the agent
+4. Press =M-a= (bebop-passthrough) to forward keystrokes for TUI prompts without
    leaving Emacs
+5. =TAB= folds sets in the dashboard; =z=/=Z= shelve; the Shelf and Ungrouped
+   sections keep in-flight work off stage until it needs you
 
 ** Core (bebop-core.el)
    :PROPERTIES:
@@ -2400,8 +2239,8 @@ Wire reconciliation and active-session tracking into the dashboard via advice.
 Pending state is tracked explicitly in =bebop--sessions= rather than
 inferred from pane output because pane content is unreliable immediately
 after session creation (the agent may not have printed anything yet) and
-because the state is cleared on the first jam — a discrete event, not a
-content pattern.
+because the state is cleared on the first composition send — a discrete
+event, not a content pattern.
 
 
 
@@ -2647,6 +2486,27 @@ Map a session's current status to the appropriate chart section heading.
 Append a subtree to a named section in a chart file, creating the section if absent.
 
 #+begin_src emacs-lisp
+;; Only called from org-mode buffers, where org is already loaded —
+;; no hard (require 'org) needed.
+(declare-function org-at-heading-p "org")
+(declare-function org-back-to-heading "org")
+(declare-function org-end-of-subtree "org")
+
+(defun bebop--subtree-text ()
+  "Return the full org subtree at point as a string.
+Signals a user error if point is not within a heading.
+(Rehomed from the retired bebop-cue module — still used by the
+\"from heading\" chart option in `bebop-new-session'.)"
+  (save-excursion
+    (condition-case _
+        (progn
+          (unless (org-at-heading-p)
+            (org-back-to-heading t))
+          (let* ((beg (point))
+                 (end (progn (org-end-of-subtree t t) (point))))
+            (buffer-substring-no-properties beg end)))
+      (error (user-error "Point is not within an org heading")))))
+
 (defun bebop--cue-to-chart (subtree chart-path)
   "Append SUBTREE text to the end of the chart at CHART-PATH."
   (with-current-buffer (find-file-noselect chart-path)
@@ -2961,7 +2821,7 @@ creates the per-session composition buffer, and starts in pending mode."
     (when (and chart-path (file-exists-p chart-path))
       (find-file-noselect chart-path))
     (bebop--render)
-    (message "Bebop session \"%s\" created. Cue context with C-c C-p, then jam with C-c C-j." name)))
+    (message "Bebop session \"%s\" created." name)))
 
 (defun bebop-new-session ()
   "Create a new Bebop session.
@@ -3018,7 +2878,7 @@ current subtree to its * Overture section.
          (chart-path
           (cond
            ((equal chart-choice "from heading")
-            (let ((subtree (bebop-cue--subtree-text))
+            (let ((subtree (bebop--subtree-text))
                   (path    (bebop--create-new-chart name)))
               (bebop--cue-to-chart subtree path)
               path))
@@ -3249,232 +3109,6 @@ Point-aware wrappers for the four associate/dissociate commands, and their dashb
 (define-key bebop-dashboard-mode-map (kbd "V") #'bebop-associate-venue-at-point)
 (define-key bebop-dashboard-mode-map (kbd "W") #'bebop-dissociate-venue-at-point)
 (define-key bebop-dashboard-mode-map (kbd "!") #'bebop-toggle-docker)
-#+end_src
-
-*** JIRA ticket cross-reference
-
-Show session, chart, and venue indicators inline on JIRA.org ticket headings.
-After-string overlays are added after each heading line that contains a ticket
-ID matching the naming convention (=REPO--TICKET-ID=) used by charts and venues.
-
-Indicators match the dashboard exactly:
-- =●= session dot — colored by status using the dashboard faces
-  (green = active, red = waiting/blocked, gray = unknown/pending)
-- =⊞= chart exists on disk in =bebop-charts-dir=
-- =⎇= venue exists on disk in =bebop-venues-dir=
-
-Overlays are applied on first visit and after every save (e.g. =M-x jira-sync=
-writes the file, triggering a fresh scan). Call =M-x bebop-jira-apply-overlays=
-to refresh manually.
-
-#+begin_src emacs-lisp
-(defvar-local bebop-jira--overlays nil
-  "Overlays added to this buffer by `bebop-jira-apply-overlays'.")
-
-(defun bebop-jira--ticket-in-name-p (ticket-id name)
-  "Return non-nil if TICKET-ID appears in NAME (case-insensitive)."
-  (string-match-p (regexp-quote (upcase ticket-id))
-                  (upcase (file-name-base name))))
-
-(defun bebop-jira--has-chart-p (ticket-id)
-  "Return non-nil if a chart file in `bebop-charts-dir' references TICKET-ID."
-  (let ((dir (expand-file-name bebop-charts-dir)))
-    (and (file-directory-p dir)
-         (seq-some (lambda (f) (bebop-jira--ticket-in-name-p ticket-id f))
-                   (directory-files dir)))))
-
-(defun bebop-jira--has-venue-p (ticket-id)
-  "Return non-nil if a venue directory in `bebop-venues-dir' references TICKET-ID."
-  (let ((dir (expand-file-name bebop-venues-dir)))
-    (and (file-directory-p dir)
-         (seq-some (lambda (f) (bebop-jira--ticket-in-name-p ticket-id f))
-                   (directory-files dir)))))
-
-(defun bebop-jira--active-session-name (ticket-id)
-  "Return the name of a live (running) session referencing TICKET-ID, or nil.
-Checks `bebop--live-sessions' so on-deck sessions don't show a dot."
-  (car (seq-find (lambda (pair)
-                   (bebop-jira--ticket-in-name-p ticket-id (car pair)))
-                 bebop--live-sessions)))
-
-(defun bebop-jira--indicator (ticket-id)
-  "Return a fixed-width propertized indicator string for TICKET-ID.
-All three icons (● ⊞ ⎇) are always present. Inactive icons are painted
-with the default background color, making them invisible while preserving
-pixel-perfect column alignment across every heading."
-  (let* ((session (bebop-jira--active-session-name ticket-id))
-         (status  (and session
-                       (fboundp 'bebop--infer-status)
-                       (bebop--infer-status session)))
-         (chart   (bebop-jira--has-chart-p ticket-id))
-         (venue   (bebop-jira--has-venue-p ticket-id))
-         (bg      (face-attribute 'default :background nil t)))
-    (concat
-     "  "   ; two spaces between slug and icons
-     (propertize "●" 'face
-                 (if session
-                     (pcase status
-                       ("active"                'bebop-dot-active-face)
-                       ((or "waiting" "blocked") 'bebop-dot-waiting-face)
-                       (_                        'bebop-dot-degraded-face))
-                   `(:foreground ,bg)))
-     (propertize "⊞" 'face
-                 (if chart 'bebop-dot-degraded-face `(:foreground ,bg)))
-     (propertize "⎇" 'face
-                 (if venue 'bebop-dot-degraded-face `(:foreground ,bg)))
-     "  ")))
-
-(defun bebop-jira-apply-overlays ()
-  "Add session/chart/venue indicators to JIRA ticket headings in current buffer.
-Uses a replacing overlay that substitutes the whitespace padding between the
-ticket slug and the description with the compact indicator string. This keeps
-the description column consistent across tickets of different ID lengths, and
-eliminates the excess whitespace that org-jira inserts between slug and title."
-  (interactive)
-  (mapc #'delete-overlay bebop-jira--overlays)
-  (setq bebop-jira--overlays nil)
-  (org-map-entries
-   (lambda ()
-     (let ((ticket-id (or (org-entry-get nil "CUSTOM_ID")
-                          (org-entry-get nil "ID"))))
-       (when (and ticket-id (string-match-p "^[A-Z]+-[0-9]+$" ticket-id))
-         (let ((indicator (bebop-jira--indicator ticket-id)))
-           (save-excursion
-             (let* ((bol  (line-beginning-position))
-                    (line (buffer-substring-no-properties bol (line-end-position)))
-                    (id-pos (string-match (regexp-quote ticket-id) line)))
-               (when id-pos
-                 (let* ((id-end     (+ id-pos (length ticket-id)))
-                        (desc-start (string-match "[^ ]" line id-end))
-                        ;; Pad shorter slugs so icons always land at the same column.
-                        ;; ROOST-XXXX is 10 chars (the longest slug format).
-                        (slug-pad   (make-string (max 0 (- 10 (length ticket-id))) ?\s))
-                        (display-str (concat slug-pad indicator)))
-                   (when (and desc-start (> (- desc-start id-end) 0))
-                     (let ((ov (make-overlay (+ bol id-end)
-                                             (+ bol desc-start))))
-                       (overlay-put ov 'display display-str)
-                       (push ov bebop-jira--overlays)))))))))))
-   nil 'file))
-
-(defvar-local bebop-jira--reapply-timer nil
-  "Idle timer for debounced overlay reapplication after buffer changes.")
-
-(defun bebop-jira--schedule-reapply (&rest _)
-  "Schedule `bebop-jira-apply-overlays' to run after a short idle period.
-Debounces rapid buffer changes (e.g. during jira-sync rewrite) so overlays
-are reapplied once the content settles, not on every inserted character."
-  (when (timerp bebop-jira--reapply-timer)
-    (cancel-timer bebop-jira--reapply-timer))
-  (setq bebop-jira--reapply-timer
-        (run-with-idle-timer 1 nil #'bebop-jira-apply-overlays)))
-
-(defun bebop-jira--maybe-setup ()
-  "Enable JIRA overlays if the current buffer is JIRA.org."
-  (when (and buffer-file-name
-             (string-equal (file-name-nondirectory buffer-file-name) "JIRA.org"))
-    (display-line-numbers-mode -1)
-    (bebop-jira-apply-overlays)
-    ;; Reapply after saves and after any buffer change (covers jira-sync rewrites
-    ;; that may not trigger after-save-hook).
-    (add-hook 'after-save-hook   #'bebop-jira-apply-overlays nil t)
-    (add-hook 'after-change-functions #'bebop-jira--schedule-reapply nil t)))
-
-(add-hook 'org-mode-hook #'bebop-jira--maybe-setup)
-
-;; Refresh JIRA overlays whenever the dashboard re-renders (i.e. each poll
-;; cycle). The idle-timer debounce in bebop-jira--schedule-reapply means this
-;; only fires once the dashboard settles, not on every status flicker.
-(with-eval-after-load 'bebop-dashboard
-  (advice-add 'bebop--render :after
-              (lambda (&rest _)
-                (when-let ((buf (get-buffer "JIRA.org")))
-                  (with-current-buffer buf
-                    (bebop-jira--schedule-reapply))))))
-#+end_src
-
-*** Session from JIRA heading
-
-=M-x bebop-new-session-from-jira-heading= — one-shot command for launching a
-session directly from a JIRA ticket heading in =jira.org= (or any org buffer
-with JIRA-style headings).
-
-When point is at a ticket heading, it:
-
-1. Extracts the ticket ID from =CUSTOM_ID= / =ID= property, or parses
-   =[TICKET-ID]= from the heading text.
-2. Prompts for a repository (completing-read over =bebop-repos-dir=).
-3. Pre-fills the branch name with the ticket ID; lets you edit it.
-4. Derives the session name as =REPO--BRANCH= (editable).
-5. Creates the git worktree (new branch from HEAD, or attaches to an existing
-   branch if the name already exists in the repo).
-6. Creates a chart from the full subtree at point (cued into =* Overture=).
-7. Calls =bebop--create-session= to wire everything up.
-
-#+begin_src emacs-lisp
-(defun bebop--jira-heading-ticket-id ()
-  "Return the JIRA ticket ID for the heading at point, or nil.
-Checks CUSTOM_ID and ID properties first; falls back to parsing [TICKET-ID]
-from the heading text."
-  (or (org-entry-get nil "CUSTOM_ID")
-      (org-entry-get nil "ID")
-      (when-let ((title (org-get-heading t t t t)))
-        (when (string-match "\\[\\([A-Z]+-[0-9]+\\)\\]" title)
-          (match-string 1 title)))))
-
-(defun bebop-new-session-from-jira-heading ()
-  "Create a Bebop session from the JIRA ticket heading at point.
-
-Extracts the ticket ID from the heading at point (via CUSTOM_ID / ID property
-or [TICKET-ID] text), prompts for a repo, pre-fills the branch with the ticket
-ID and the session name with REPO--TICKET-ID, creates a git worktree, creates
-a chart from the subtree, and calls `bebop--create-session'."
-  (interactive)
-  (unless (derived-mode-p 'org-mode)
-    (user-error "Not in an org-mode buffer"))
-  (unless (ignore-errors (save-excursion (org-back-to-heading t) t))
-    (user-error "Point is not at an org heading"))
-  (save-excursion
-    (org-back-to-heading t)
-    (let* ((ticket-id  (or (bebop--jira-heading-ticket-id)
-                           (user-error "No JIRA ticket ID found at this heading")))
-           ;; ── Repo ──────────────────────────────────────────────────────────
-           (repos      (bebop--list-repos))
-           (_          (unless repos
-                         (user-error "No repositories found in %s" bebop-repos-dir)))
-           (repo       (completing-read "Repository: " repos nil t))
-           (repo-path  (expand-file-name repo (expand-file-name bebop-repos-dir)))
-           ;; ── Branch ────────────────────────────────────────────────────────
-           (branches   (bebop--list-branches repo-path))
-           (branch     (read-string "Branch: " ticket-id))
-           (_          (when (string-empty-p (string-trim branch))
-                         (user-error "Branch name cannot be empty")))
-           ;; ── Session name ──────────────────────────────────────────────────
-           (worktree-name (format "%s--%s" repo (bebop--sanitize-name branch)))
-           (name       (read-string "Session name: " worktree-name))
-           (_          (bebop--assert-name-available name))
-           ;; ── Worktree ──────────────────────────────────────────────────────
-           (venues-dir (bebop--ensure-dir bebop-venues-dir))
-           (venue-path (expand-file-name worktree-name venues-dir))
-           (_          (when (file-directory-p venue-path)
-                         (user-error "Worktree already exists: %s" venue-path)))
-           (_          (if (member branch branches)
-                           (unless (eq 0 (call-process "git" nil nil nil
-                                                       "-C" repo-path
-                                                       "worktree" "add"
-                                                       venue-path branch))
-                             (user-error "git worktree add failed for branch: %s" branch))
-                         (unless (eq 0 (call-process "git" nil nil nil
-                                                     "-C" repo-path
-                                                     "worktree" "add" "-b" branch
-                                                     venue-path "HEAD"))
-                           (user-error "git worktree add -b failed: %s" branch))))
-           ;; ── Chart from subtree ────────────────────────────────────────────
-           (subtree    (bebop-cue--subtree-text))
-           (chart-path (bebop--create-new-chart name)))
-      (bebop--cue-to-chart subtree chart-path)
-      (message "Created worktree: %s" venue-path)
-      (bebop--create-session name venue-path chart-path))))
 #+end_src
 
 *** Footer
@@ -4532,206 +4166,6 @@ Roundup queues; the human disposes. Proposing is idempotent.
 ;;; bebop-api.el ends here
 #+end_src
 
-** Bebop — Cue (bebop-cue.el)
-   :PROPERTIES:
-   :header-args:emacs-lisp: :tangle lisp/bebop-cue.el
-   :END:
-
-Minor mode that adds cue and jam keybindings to all =org-mode= buffers.
-Auto-enabled via =(add-hook 'org-mode-hook #'bebop-cue-mode)=.
-
-| Key               | Action                                                  |
-|-------------------+---------------------------------------------------------|
-| =C-c C-p=         | Cue heading at point → write to active session's chart  |
-| =C-c C-P=         | Cue heading at point → pick session, write to chart     |
-| =C-c C-j=         | Jam heading at point → send to active session's agent   |
-| =C-c C-J=         | Jam heading at point → pick session, send to agent      |
-
-Both =C-c C-p= and =C-c C-j= shadow standard org-mode bindings intentionally.
-Users who need the org defaults in a buffer can toggle =bebop-cue-mode= off.
-
-*** Header
-
-#+begin_src emacs-lisp
-;;; bebop-cue.el --- Cue and jam keybindings for Bebop -*- lexical-binding: t; -*-
-
-(require 'cl-lib)
-(require 'org)
-(require 'bebop-session)
-#+end_src
-
-*** Subtree extraction
-
-Both cue and jam operate on the *full org subtree* at point: the heading line,
-its body text, and all nested subheadings beneath it.
-
-#+begin_src emacs-lisp
-(defun bebop-cue--subtree-text ()
-  "Return the full org subtree at point as a string.
-Signals a user error if point is not within a heading."
-  (save-excursion
-    (condition-case _
-        (progn
-          (unless (org-at-heading-p)
-            (org-back-to-heading t))
-          (let* ((beg (point))
-                 (end (progn (org-end-of-subtree t t) (point))))
-            (buffer-substring-no-properties beg end)))
-      (error (user-error "Point is not within an org heading")))))
-
-(defun bebop-cue--in-chart-p (session-name)
-  "Return non-nil if the current buffer is SESSION-NAME's chart file."
-  (let ((chart (bebop--session-chart session-name))
-        (fname (buffer-file-name)))
-    (and chart fname
-         (string-equal (expand-file-name chart)
-                       (expand-file-name fname)))))
-#+end_src
-
-*** Session selection helpers
-
-#+begin_src emacs-lisp
-(defun bebop-cue--active-session ()
-  "Return the active session name (value of `bebop--active-session'), or nil."
-  bebop--active-session)
-
-(defun bebop-cue--pick-session ()
-  "Prompt the user to select a session from all known pairs."
-  (when (null bebop--live-sessions)
-    (user-error "No sessions exist — create one with M-x bebop-new-session"))
-  (completing-read "Session: " (mapcar #'car bebop--live-sessions) nil t))
-
-(defun bebop-cue--require-session (&optional pick-p)
-  "Return the active session name, prompting if PICK-P is non-nil or no active session."
-  (if pick-p
-      (bebop-cue--pick-session)
-    (or (bebop-cue--active-session)
-        (bebop-cue--pick-session))))
-#+end_src
-
-*** Jam — send subtree via tmux
-
-Jam sends the full org subtree to the session's tmux pane using the same
-load-buffer → paste-buffer → C-m pattern as =bebop-send-buffer=.
-
-#+begin_src emacs-lisp
-(defun bebop--jam-subtree (subtree session-name)
-  "Send SUBTREE text to the tmux pane for SESSION-NAME and clear pending mode."
-  (let* ((pair (cdr (assoc session-name bebop--live-sessions))))
-    (unless pair
-      (user-error "No dashboard entry for session: %s" session-name))
-    (let ((pane-id (or (plist-get pair :pane-id)
-                       (bebop--tmux-pane-id-for
-                        (bebop--tmux-window-name session-name)))))
-      (unless pane-id
-        (user-error "No tmux pane found for session: %s (is the agent running?)"
-                    session-name))
-      ;; Cache the resolved pane-id
-      (plist-put pair :pane-id pane-id)
-      ;; load-buffer → paste-buffer → Enter (matches bebop-send-buffer)
-      (with-temp-buffer
-        (insert subtree)
-        (call-process-region (point-min) (point-max)
-                             "tmux" nil nil nil "load-buffer" "-"))
-      (call-process "tmux" nil nil nil "paste-buffer" "-d" "-t" pane-id)
-      (call-process "tmux" nil nil nil "send-keys" "-t" pane-id "C-m")
-      (message "Jammed to session: %s" session-name))))
-#+end_src
-
-*** Interactive cue/jam commands
-
-#+begin_src emacs-lisp
-(defun bebop-cue ()
-  "Cue: write the org subtree at point to the active session's chart."
-  (interactive)
-  (let* ((session (bebop-cue--require-session))
-         (chart   (bebop--session-chart session))
-         (subtree (bebop-cue--subtree-text)))
-    (unless chart
-      (user-error "Session \"%s\" has no chart" session))
-    (bebop--cue-to-chart subtree chart)))
-
-(defun bebop-cue-to ()
-  "Cue: write the org subtree at point to a chosen session's chart."
-  (interactive)
-  (let* ((session (bebop-cue--require-session 'pick))
-         (chart   (bebop--session-chart session))
-         (subtree (bebop-cue--subtree-text)))
-    (unless chart
-      (user-error "Session \"%s\" has no chart" session))
-    (bebop--cue-to-chart subtree chart)))
-
-(defun bebop-jam ()
-  "Jam: send the org subtree at point to the active session's agent via tmux.
-If invoked from outside the session's chart, also writes to the chart first
-so the chart remains a complete record."
-  (interactive)
-  (let* ((session (bebop-cue--require-session))
-         (subtree (bebop-cue--subtree-text)))
-    ;; Write to chart unless we are already inside it
-    (unless (bebop-cue--in-chart-p session)
-      (let ((chart (bebop--session-chart session)))
-        (when chart
-          (bebop--cue-to-chart subtree chart))))
-    (bebop--jam-subtree subtree session)))
-
-(defun bebop-jam-to ()
-  "Jam: send the org subtree at point to a chosen session's agent via tmux.
-If invoked from outside the session's chart, also writes to the chart first."
-  (interactive)
-  (let* ((session (bebop-cue--require-session 'pick))
-         (subtree (bebop-cue--subtree-text)))
-    (unless (bebop-cue--in-chart-p session)
-      (let ((chart (bebop--session-chart session)))
-        (when chart
-          (bebop--cue-to-chart subtree chart))))
-    (bebop--jam-subtree subtree session)))
-#+end_src
-
-*** Minor mode
-
-#+begin_src emacs-lisp
-(defvar bebop-cue-mode-map
-  (let ((map (make-sparse-keymap)))
-    ;; C-c C-p / C-c C-P: cue to active / pick session
-    ;; Intentionally shadows org-previous-visible-heading
-    (define-key map (kbd "C-c C-p") #'bebop-cue)
-    (define-key map (kbd "C-c C-P") #'bebop-cue-to)
-    ;; C-c C-j / C-c C-J: jam to active / pick session
-    ;; Intentionally shadows org-goto
-    (define-key map (kbd "C-c C-j") #'bebop-jam)
-    (define-key map (kbd "C-c C-J") #'bebop-jam-to)
-    map)
-  "Keymap for `bebop-cue-mode'.
-Bindings are active in all org-mode buffers when the mode is enabled.")
-
-(define-minor-mode bebop-cue-mode
-  "Minor mode adding Bebop cue/jam keybindings to org-mode buffers.
-
-\\{bebop-cue-mode-map}
-
-C-c C-p — Cue subtree at point → active session's chart
-C-c C-P — Cue subtree at point → pick-session chart
-C-c C-j — Jam subtree at point → active session's agent
-C-c C-J — Jam subtree at point → pick-session agent
-
-Enable in all org buffers with:
-  (add-hook \\='org-mode-hook #\\='bebop-cue-mode)"
-  :lighter " Cue"
-  :keymap bebop-cue-mode-map)
-
-;; Enable automatically in every org-mode buffer
-(add-hook 'org-mode-hook #'bebop-cue-mode)
-#+end_src
-
-*** Footer
-
-#+begin_src emacs-lisp
-(provide 'bebop-cue)
-
-;;; bebop-cue.el ends here
-#+end_src
-
 ** Bebop — Frame (bebop-frame.el)
    :PROPERTIES:
    :header-args:emacs-lisp: :tangle lisp/bebop-frame.el
@@ -5059,542 +4493,3 @@ Returns focus to the Conductor frame if one exists."
 ;;; bebop-frame.el ends here
 #+end_src
 
-** Bebop — GitLab (bebop-gitlab.el)
-   :PROPERTIES:
-   :header-args:emacs-lisp: :tangle lisp/bebop-gitlab.el
-   :END:
-
-Progressive, idempotent sync of GitLab MR review comments into Bebop session
-charts. =M-x bebop-gitlab-mr-to-chart= creates the MR section on first call
-and syncs updates on repeat calls. =C-c g= re-syncs from within the chart
-without needing a Magit buffer.
-
-Chart structure: each MR gets a =* MR Review: !N — Title= heading with API
-connection info in PROPERTIES. Comments are organized under =** file/path=
-sub-headings. Each discussion thread root is a =*** OPEN/RESOLVED @author=
-heading; replies nest at =****=. New comments get =:NEW:=; user can change to
-=:ACTIVE:= or =:ADDRESSED:=. RESOLVED + =:ADDRESSED:= comments are moved to
-=** Archived= on the next sync.
-
-*** Header
-
-#+begin_src emacs-lisp
-;;; bebop-gitlab.el --- GitLab MR sync to Bebop charts -*- lexical-binding: t; -*-
-
-(require 'cl-lib)
-(require 'org)
-(require 'forge)
-(require 'forge-pullreq)
-(require 'bebop-session)
-(require 'ghub)
-(require 'url-util)
-#+end_src
-
-*** Fetch discussions
-
-Returns /all/ discussions (not just unresolved) so the sync can both insert
-new comments and flip resolved state on existing ones.
-
-#+begin_src emacs-lisp
-(defun bebop-gitlab--fetch-discussions (pr repo)
-  "Return all MR discussions for PR via GitLab API.
-Each element is a discussion alist with \\='id, \\='resolved, and \\='notes."
-  (ghub-request "GET"
-    (format "/projects/%s%%2F%s/merge_requests/%s/discussions"
-            (url-hexify-string (oref repo owner))
-            (url-hexify-string (oref repo name))
-            (oref pr number))
-    nil
-    :forge 'gitlab
-    :auth 'forge
-    :host (oref repo apihost)
-    :unpaginate t))
-#+end_src
-
-*** Fetch MR changes
-
-One extra API call per sync; returns file-path → diff-string map used to
-include a small diff-context block when inserting new comments.
-
-#+begin_src emacs-lisp
-(defun bebop-gitlab--fetch-changes (pr repo)
-  "Return hash table mapping file path to diff string for all changed files in PR."
-  (let ((changes (alist-get 'changes
-                   (ghub-request "GET"
-                     (format "/projects/%s%%2F%s/merge_requests/%s/changes"
-                             (url-hexify-string (oref repo owner))
-                             (url-hexify-string (oref repo name))
-                             (oref pr number))
-                     nil
-                     :forge 'gitlab
-                     :auth 'forge
-                     :host (oref repo apihost))))
-        (table (make-hash-table :test #'equal)))
-    (dolist (change changes)
-      (let ((path (or (alist-get 'new_path change)
-                      (alist-get 'old_path change)))
-            (diff (alist-get 'diff change)))
-        (when (and path diff)
-          (puthash path diff table))))
-    table))
-#+end_src
-
-*** Body cleanup
-
-#+begin_src emacs-lisp
-(defun bebop-gitlab--markdown-to-org (text)
-  "Normalize GitLab markdown TEXT to org format.
-Converts code fences and common emoji shortcodes."
-  (let ((text (string-trim (or text ""))))
-    ;; Code fences: ```lang\ncode\n``` → #+begin_src lang\ncode\n#+end_src
-    (while (string-match
-            "```\\([a-zA-Z0-9_-]*\\)\n\\(\\(?:[^`]\\|`[^`]\\|``[^`]\\)*\\)\n?```"
-            text)
-      (let ((lang (match-string 1 text))
-            (code (string-trim-right (match-string 2 text))))
-        (setq text (concat (substring text 0 (match-beginning 0))
-                           (if (string-empty-p lang)
-                               (format "#+begin_src\n%s\n#+end_src" code)
-                             (format "#+begin_src %s\n%s\n#+end_src" lang code))
-                           (substring text (match-end 0))))))
-    ;; Common emoji shortcodes
-    (dolist (pair '((":smile:"  . "😊") (":laughing:"    . "😂")
-                    (":thumbsup:" . "👍") (":\\+1:"       . "👍")
-                    (":thumbsdown:" . "👎") (":-1:"       . "👎")
-                    (":tada:"   . "🎉") (":rocket:"       . "🚀")
-                    (":warning:" . "⚠️") (":white_check_mark:" . "✅")))
-      (setq text (replace-regexp-in-string (car pair) (cdr pair) text t)))
-    text))
-#+end_src
-
-*** Diff context
-
-#+begin_src emacs-lisp
-(defun bebop-gitlab--diff-context (diff-str target-line context)
-  "Return CONTEXT lines of code around TARGET-LINE from unified DIFF-STR.
-Target line is prefixed with \"> \"; surrounding context lines with \"  \".
-Returns nil when TARGET-LINE is not present in the diff."
-  (when (and diff-str target-line (not (string-empty-p diff-str)))
-    (let ((line-map (make-hash-table :test #'eql))
-          (cur-line 0))
-      (with-temp-buffer
-        (insert diff-str)
-        (goto-char (point-min))
-        (while (not (eobp))
-          (let ((txt (buffer-substring-no-properties
-                      (point) (line-end-position))))
-            (cond
-             ((string-match
-               "^@@ -[0-9]+\\(?:,[0-9]+\\)? \\+\\([0-9]+\\)" txt)
-              (setq cur-line (string-to-number (match-string 1 txt))))
-             ;; Deletion lines: don't advance new-line counter
-             ((and (> (length txt) 0) (= (aref txt 0) ?-)) nil)
-             ;; Addition or context lines: record new-line → text
-             ((and (> (length txt) 0)
-                   (or (= (aref txt 0) ?+) (= (aref txt 0) ? )))
-              (puthash cur-line (substring txt 1) line-map)
-              (setq cur-line (1+ cur-line)))))
-          (forward-line 1)))
-      (when (gethash target-line line-map)
-        (let ((lines '()))
-          (cl-loop for n from (max 1 (- target-line context))
-                   to (+ target-line context)
-                   do (let ((txt (gethash n line-map)))
-                        (when txt
-                          (push (if (= n target-line)
-                                    (format "> %s" txt)
-                                  (format "  %s" txt))
-                                lines))))
-          (when lines
-            (mapconcat #'identity (nreverse lines) "\n")))))))
-#+end_src
-
-*** Org helpers — MR section
-
-#+begin_src emacs-lisp
-(defun bebop-gitlab--mr-subtree-end (mr-pos)
-  "Return buffer position at end of MR subtree rooted at MR-POS."
-  (save-excursion
-    (goto-char mr-pos)
-    (org-end-of-subtree t t)))
-
-(defun bebop-gitlab--find-or-create-mr-section
-    (mr-number title url author api-host owner name)
-  "Find or create a * MR Review: !MR-NUMBER heading in current buffer.
-Returns position of the heading. Updates LAST_SYNCED when found."
-  (let ((mr-pos nil))
-    (org-map-entries
-     (lambda ()
-       (when (equal (number-to-string mr-number)
-                    (org-entry-get nil "MR_NUMBER"))
-         (setq mr-pos (point))))
-     nil 'file)
-    (if mr-pos
-        (progn
-          (goto-char mr-pos)
-          (org-entry-put nil "LAST_SYNCED"
-                         (format-time-string "%Y-%m-%dT%H:%M:%S"))
-          mr-pos)
-      (goto-char (point-max))
-      (unless (bolp) (insert "\n"))
-      (setq mr-pos (point))
-      (insert (format "* MR Review: !%s — %s\n" mr-number title))
-      (insert "  :PROPERTIES:\n")
-      (insert (format "  :GITLAB_URL: %s\n" url))
-      (insert (format "  :MR_NUMBER: %s\n" mr-number))
-      (insert (format "  :MR_AUTHOR: %s\n" author))
-      (insert (format "  :API_HOST: %s\n" api-host))
-      (insert (format "  :REPO_OWNER: %s\n" owner))
-      (insert (format "  :REPO_NAME: %s\n" name))
-      (insert (format "  :LAST_SYNCED: %s\n"
-                      (format-time-string "%Y-%m-%dT%H:%M:%S")))
-      (insert "  :END:\n")
-      mr-pos)))
-#+end_src
-
-*** Org helpers — file and archived sections
-
-#+begin_src emacs-lisp
-(defun bebop-gitlab--ensure-archived-section (mr-pos)
-  "Return position of ** Archived heading under MR at MR-POS, creating if needed."
-  (let ((found-pos nil))
-    (save-excursion
-      (goto-char mr-pos)
-      (org-map-entries
-       (lambda ()
-         (when (and (= (org-current-level) 2)
-                    (equal "Archived" (org-get-heading t t t t)))
-           (setq found-pos (point))))
-       nil 'tree))
-    (unless found-pos
-      (save-excursion
-        (goto-char (bebop-gitlab--mr-subtree-end mr-pos))
-        (unless (bolp) (insert "\n"))
-        (insert "** Archived\n")
-        (forward-line -1)
-        (beginning-of-line)
-        (setq found-pos (point))))
-    found-pos))
-
-(defun bebop-gitlab--find-or-create-file-section (mr-pos file-path)
-  "Return position of ** FILE-PATH heading under MR section at MR-POS.
-Creates it if absent. Pass \"General\" for notes without file position."
-  (let ((file-pos nil))
-    (save-excursion
-      (save-restriction
-        (narrow-to-region mr-pos (bebop-gitlab--mr-subtree-end mr-pos))
-        (goto-char (point-min))
-        (while (and (not file-pos)
-                    (re-search-forward "^\\*\\* " nil t))
-          (beginning-of-line)
-          (when (equal file-path (org-get-heading t t t t))
-            (setq file-pos (point)))
-          (end-of-line))))
-    (unless file-pos
-      (let ((archived-pos nil)
-            (mr-end (bebop-gitlab--mr-subtree-end mr-pos)))
-        (save-excursion
-          (save-restriction
-            (narrow-to-region mr-pos mr-end)
-            (goto-char (point-min))
-            (when (re-search-forward "^\\*\\* Archived$" nil t)
-              (setq archived-pos (line-beginning-position)))))
-        (goto-char (or archived-pos mr-end))
-        (unless (bolp) (insert "\n"))
-        (setq file-pos (point))
-        (insert (format "** %s\n" file-path))))
-    file-pos))
-#+end_src
-
-*** Org helpers — upsert comment
-
-Idempotent insert/update of a single note. Thread root (=note-index= 0) gets
-a =***= heading with OPEN/RESOLVED keyword and =:NEW:= tag. Replies
-(=note-index= > 0) nest under the root at =****= with no keyword or tag.
-
-#+begin_src emacs-lisp
-(defun bebop-gitlab--upsert-comment
-    (file-pos note discussion-id resolved-p note-index diff-map)
-  "Insert or update a comment heading under the file section at FILE-POS.
-NOTE is a note alist from the GitLab discussions API.
-DISCUSSION-ID is the parent discussion\\='s id string.
-RESOLVED-P is non-nil when the discussion is resolved.
-NOTE-INDEX is 0 for the thread root, > 0 for replies.
-DIFF-MAP maps file paths to diff strings for inline context.
-Returns \\='new or \\='updated."
-  (let* ((note-id   (number-to-string (alist-get 'id note)))
-         (author    (or (alist-get 'username (alist-get 'author note)) "unknown"))
-         (body      (bebop-gitlab--markdown-to-org
-                     (or (alist-get 'body note) "")))
-         (position  (alist-get 'position note))
-         (file-path (and position (alist-get 'new_path position)))
-         (new-line  (and position (alist-get 'new_line position)))
-         (todo-kw   (if resolved-p "RESOLVED" "OPEN"))
-         (found-pos nil)
-         (found-lvl nil))
-    (org-map-entries
-     (lambda ()
-       (when (equal note-id (org-entry-get nil "GITLAB_NOTE_ID"))
-         (setq found-pos (point))
-         (setq found-lvl (org-current-level))))
-     nil 'file)
-    (if found-pos
-        ;; Update: flip OPEN↔RESOLVED on root notes only; never touch tags or body
-        (progn
-          (when (= (or found-lvl 0) 3)
-            (save-excursion
-              (goto-char found-pos)
-              (beginning-of-line)
-              (when (looking-at "^\\(\\*+\\) \\(OPEN\\|RESOLVED\\)\\( \\)")
-                (replace-match (concat "\\1 " todo-kw "\\3")))))
-          'updated)
-      ;; Insert new note
-      (let ((insert-pos
-             (if (= note-index 0)
-                 ;; Root: end of file section subtree
-                 (save-excursion
-                   (goto-char file-pos)
-                   (org-end-of-subtree t t))
-               ;; Reply: end of the root note's subtree for this discussion
-               (let ((root-pos nil))
-                 (org-map-entries
-                  (lambda ()
-                    (when (and (= (org-current-level) 3)
-                               (equal discussion-id
-                                      (org-entry-get nil "GITLAB_DISCUSSION_ID")))
-                      (setq root-pos (point))))
-                  nil 'file)
-                 (save-excursion
-                   (goto-char (or root-pos file-pos))
-                   (org-end-of-subtree t t))))))
-        (goto-char insert-pos)
-        (unless (bolp) (insert "\n"))
-        (if (= note-index 0)
-            (let* ((loc      (if new-line (format "L%s" new-line) "general"))
-                   (diff-ctx (when (and file-path new-line)
-                               (bebop-gitlab--diff-context
-                                (gethash file-path diff-map) new-line 2))))
-              (insert (format "*** %s @%s — %s  :NEW:\n" todo-kw author loc))
-              (insert "    :PROPERTIES:\n")
-              (insert (format "    :GITLAB_NOTE_ID: %s\n" note-id))
-              (insert (format "    :GITLAB_DISCUSSION_ID: %s\n" discussion-id))
-              (insert "    :END:\n")
-              (when diff-ctx
-                (insert "    #+begin_quote\n")
-                (dolist (ln (split-string diff-ctx "\n"))
-                  (insert (format "    %s\n" ln)))
-                (insert "    #+end_quote\n"))
-              (dolist (ln (split-string body "\n"))
-                (insert (format "    %s\n" ln))))
-          (insert (format "**** @%s\n" author))
-          (insert "     :PROPERTIES:\n")
-          (insert (format "     :GITLAB_NOTE_ID: %s\n" note-id))
-          (insert (format "     :GITLAB_DISCUSSION_ID: %s\n" discussion-id))
-          (insert "     :END:\n")
-          (dolist (ln (split-string body "\n"))
-            (insert (format "     %s\n" ln))))
-        'new))))
-#+end_src
-
-*** Org helpers — maintenance
-
-#+begin_src emacs-lisp
-(defun bebop-gitlab--remove-deleted-comments (mr-pos valid-ids)
-  "Delete headings whose GITLAB_NOTE_ID is absent from VALID-IDS hash table.
-Operates within the MR subtree at MR-POS."
-  (let ((to-delete '()))
-    (save-excursion
-      (goto-char mr-pos)
-      (org-map-entries
-       (lambda ()
-         (let ((note-id (org-entry-get nil "GITLAB_NOTE_ID")))
-           (when (and note-id (not (gethash note-id valid-ids)))
-             (push (point-marker) to-delete))))
-       nil 'tree))
-    (dolist (marker (sort to-delete (lambda (a b)
-                                      (> (marker-position a)
-                                         (marker-position b)))))
-      (goto-char (marker-position marker))
-      (org-cut-subtree))))
-
-(defun bebop-gitlab--archive-addressed-comments (mr-pos)
-  "Move RESOLVED :ADDRESSED: level-3 headings to ** Archived under MR at MR-POS."
-  (let ((to-archive '()))
-    (save-excursion
-      (goto-char mr-pos)
-      (org-map-entries
-       (lambda ()
-         (when (and (= (org-current-level) 3)
-                    (save-excursion
-                      (beginning-of-line)
-                      (looking-at "^\\*\\*\\* RESOLVED "))
-                    (member "ADDRESSED" (org-get-tags nil t)))
-           (push (point-marker) to-archive)))
-       nil 'tree))
-    (when to-archive
-      (let ((texts '()))
-        ;; Collect and delete in reverse order (highest position first)
-        (dolist (marker (sort to-archive (lambda (a b)
-                                           (> (marker-position a)
-                                              (marker-position b)))))
-          (goto-char (marker-position marker))
-          (let ((end (save-excursion (org-end-of-subtree t t))))
-            (push (buffer-substring-no-properties (point) end) texts)
-            (delete-region (point) end)))
-        ;; Append to ** Archived in original (top-to-bottom) order
-        (let ((archived-pos (bebop-gitlab--ensure-archived-section mr-pos)))
-          (save-excursion
-            (goto-char archived-pos)
-            (org-end-of-subtree t t)
-            (unless (bolp) (insert "\n"))
-            (dolist (text (nreverse texts))
-              (insert text))))))))
-#+end_src
-
-*** Sync orchestrator
-
-#+begin_src emacs-lisp
-(defun bebop-gitlab--do-sync (discussions diff-map mr-pos)
-  "Sync DISCUSSIONS into the chart at MR-POS using DIFF-MAP for diff context.
-Returns (new-count . updated-count)."
-  (let ((new-count 0)
-        (updated-count 0)
-        (valid-ids (let ((h (make-hash-table :test #'equal)))
-                     (dolist (d discussions)
-                       (dolist (n (alist-get 'notes d))
-                         (let ((id (alist-get 'id n)))
-                           (when id
-                             (puthash (number-to-string id) t h)))))
-                     h)))
-    (bebop-gitlab--remove-deleted-comments mr-pos valid-ids)
-    (dolist (discussion discussions)
-      (let* ((disc-id     (alist-get 'id discussion))
-             (resolved-p  (eq t (alist-get 'resolved discussion)))
-             (valid-notes (cl-remove-if
-                           (lambda (n)
-                             (or (eq t (alist-get 'system n))
-                                 (string-empty-p
-                                  (string-trim
-                                   (or (alist-get 'body n) "")))))
-                           (alist-get 'notes discussion))))
-        (cl-loop for note in valid-notes
-                 for idx from 0
-                 do (let* ((pos    (alist-get 'position note))
-                           (fp     (or (and pos (alist-get 'new_path pos))
-                                      "General"))
-                           (fpos   (bebop-gitlab--find-or-create-file-section
-                                    mr-pos fp))
-                           (result (bebop-gitlab--upsert-comment
-                                    fpos note disc-id resolved-p idx diff-map)))
-                      (if (eq result 'new)
-                          (cl-incf new-count)
-                        (cl-incf updated-count))))))
-    (bebop-gitlab--archive-addressed-comments mr-pos)
-    (cons new-count updated-count)))
-
-(defun bebop-gitlab--sync-mr-comments (pr repo url chart)
-  "Sync all MR discussions from PR/REPO into CHART (file path).
-URL is the full GitLab MR URL. Returns (new-count . updated-count)."
-  (let* ((discussions (bebop-gitlab--fetch-discussions pr repo))
-         (diff-map    (bebop-gitlab--fetch-changes pr repo))
-         (result      nil))
-    (with-current-buffer (find-file-noselect chart)
-      (let ((mr-pos (bebop-gitlab--find-or-create-mr-section
-                     (oref pr number)
-                     (oref pr title)
-                     url
-                     (or (oref pr author) "unknown")
-                     (oref repo apihost)
-                     (oref repo owner)
-                     (oref repo name))))
-        (setq result (bebop-gitlab--do-sync discussions diff-map mr-pos))
-        (save-buffer)))
-    result))
-#+end_src
-
-*** Re-sync from chart
-
-=C-c g= on any heading inside an MR Review section re-fetches from GitLab
-using the stored PROPERTIES — no Magit buffer or forge object required.
-
-#+begin_src emacs-lisp
-(defun bebop-gitlab-sync-from-chart ()
-  "Re-sync the MR Review section at point directly from GitLab.
-Reads API_HOST, REPO_OWNER, REPO_NAME from the heading PROPERTIES.
-Works from any heading inside the * MR Review section."
-  (interactive)
-  (save-excursion
-    (org-back-to-heading t)
-    ;; Walk up to the MR Review heading (identified by MR_NUMBER property)
-    (while (and (not (org-entry-get nil "MR_NUMBER"))
-                (> (org-current-level) 1))
-      (outline-up-heading 1 t))
-    (unless (org-entry-get nil "MR_NUMBER")
-      (user-error "Not inside an MR Review section"))
-    (let* ((mr-number (string-to-number (org-entry-get nil "MR_NUMBER")))
-           (api-host  (or (org-entry-get nil "API_HOST")
-                          (user-error "Missing API_HOST property")))
-           (owner     (or (org-entry-get nil "REPO_OWNER")
-                          (user-error "Missing REPO_OWNER property")))
-           (repo-name (or (org-entry-get nil "REPO_NAME")
-                          (user-error "Missing REPO_NAME property")))
-           (chart     (or (buffer-file-name)
-                          (user-error "Buffer not visiting a file — save it first")))
-           (mr-pos    (point))
-           (api-path  (format "/projects/%s%%2F%s/merge_requests/%s"
-                              (url-hexify-string owner)
-                              (url-hexify-string repo-name)
-                              mr-number))
-           (discussions
-            (ghub-request "GET" (concat api-path "/discussions")
-                          nil :forge 'gitlab :auth 'forge :host api-host
-                          :unpaginate t))
-           (diff-map
-            (let ((h (make-hash-table :test #'equal)))
-              (dolist (c (alist-get 'changes
-                           (ghub-request "GET" (concat api-path "/changes")
-                                         nil :forge 'gitlab :auth 'forge
-                                         :host api-host)))
-                (let ((p (or (alist-get 'new_path c) (alist-get 'old_path c)))
-                      (d (alist-get 'diff c)))
-                  (when (and p d) (puthash p d h))))
-              h)))
-      (org-entry-put nil "LAST_SYNCED" (format-time-string "%Y-%m-%dT%H:%M:%S"))
-      (let ((counts (bebop-gitlab--do-sync discussions diff-map mr-pos)))
-        (save-buffer)
-        (message "MR !%s re-synced: %d new, %d updated"
-                 mr-number (car counts) (cdr counts))))))
-
-(with-eval-after-load 'org
-  (define-key org-mode-map (kbd "C-c g") #'bebop-gitlab-sync-from-chart))
-#+end_src
-
-*** Main command
-
-#+begin_src emacs-lisp
-(defun bebop-gitlab-mr-to-chart (session-name)
-  "Sync the forge MR at point to SESSION-NAME's chart.
-First call creates the MR section; subsequent calls sync idempotently."
-  (interactive
-   (list (completing-read "Session: " (bebop--session-names) nil t)))
-  (let* ((pr    (or (forge-pullreq-at-point) (user-error "No MR at point")))
-         (repo  (forge-get-repository pr))
-         (url   (format "https://%s/%s/%s/-/merge_requests/%s"
-                        (oref repo githost)
-                        (oref repo owner)
-                        (oref repo name)
-                        (oref pr number)))
-         (chart (or (bebop--session-chart session-name)
-                    (user-error "Session \"%s\" has no chart" session-name)))
-         (result (bebop-gitlab--sync-mr-comments pr repo url chart)))
-    (message "MR !%s synced: %d new, %d updated"
-             (oref pr number) (car result) (cdr result))))
-#+end_src
-
-*** Footer
-
-#+begin_src emacs-lisp
-(provide 'bebop-gitlab)
-
-;;; bebop-gitlab.el ends here
-#+end_src

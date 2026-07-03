@@ -418,6 +418,27 @@ Returns the absolute path."
          (choice (completing-read "Org doc: " display nil t)))
     (expand-file-name choice root)))
 
+;; Only called from org-mode buffers, where org is already loaded —
+;; no hard (require 'org) needed.
+(declare-function org-at-heading-p "org")
+(declare-function org-back-to-heading "org")
+(declare-function org-end-of-subtree "org")
+
+(defun bebop--subtree-text ()
+  "Return the full org subtree at point as a string.
+Signals a user error if point is not within a heading.
+(Rehomed from the retired bebop-cue module — still used by the
+\"from heading\" chart option in `bebop-new-session'.)"
+  (save-excursion
+    (condition-case _
+        (progn
+          (unless (org-at-heading-p)
+            (org-back-to-heading t))
+          (let* ((beg (point))
+                 (end (progn (org-end-of-subtree t t) (point))))
+            (buffer-substring-no-properties beg end)))
+      (error (user-error "Point is not within an org heading")))))
+
 (defun bebop--cue-to-chart (subtree chart-path)
   "Append SUBTREE text to the end of the chart at CHART-PATH."
   (with-current-buffer (find-file-noselect chart-path)
@@ -675,7 +696,7 @@ creates the per-session composition buffer, and starts in pending mode."
     (when (and chart-path (file-exists-p chart-path))
       (find-file-noselect chart-path))
     (bebop--render)
-    (message "Bebop session \"%s\" created. Cue context with C-c C-p, then jam with C-c C-j." name)))
+    (message "Bebop session \"%s\" created." name)))
 
 (defun bebop-new-session ()
   "Create a new Bebop session.
@@ -732,7 +753,7 @@ current subtree to its * Overture section.
          (chart-path
           (cond
            ((equal chart-choice "from heading")
-            (let ((subtree (bebop-cue--subtree-text))
+            (let ((subtree (bebop--subtree-text))
                   (path    (bebop--create-new-chart name)))
               (bebop--cue-to-chart subtree path)
               path))
@@ -924,194 +945,6 @@ Note: does not move the running Claude process's working directory."
 (define-key bebop-dashboard-mode-map (kbd "V") #'bebop-associate-venue-at-point)
 (define-key bebop-dashboard-mode-map (kbd "W") #'bebop-dissociate-venue-at-point)
 (define-key bebop-dashboard-mode-map (kbd "!") #'bebop-toggle-docker)
-
-(defvar-local bebop-jira--overlays nil
-  "Overlays added to this buffer by `bebop-jira-apply-overlays'.")
-
-(defun bebop-jira--ticket-in-name-p (ticket-id name)
-  "Return non-nil if TICKET-ID appears in NAME (case-insensitive)."
-  (string-match-p (regexp-quote (upcase ticket-id))
-                  (upcase (file-name-base name))))
-
-(defun bebop-jira--has-chart-p (ticket-id)
-  "Return non-nil if a chart file in `bebop-charts-dir' references TICKET-ID."
-  (let ((dir (expand-file-name bebop-charts-dir)))
-    (and (file-directory-p dir)
-         (seq-some (lambda (f) (bebop-jira--ticket-in-name-p ticket-id f))
-                   (directory-files dir)))))
-
-(defun bebop-jira--has-venue-p (ticket-id)
-  "Return non-nil if a venue directory in `bebop-venues-dir' references TICKET-ID."
-  (let ((dir (expand-file-name bebop-venues-dir)))
-    (and (file-directory-p dir)
-         (seq-some (lambda (f) (bebop-jira--ticket-in-name-p ticket-id f))
-                   (directory-files dir)))))
-
-(defun bebop-jira--active-session-name (ticket-id)
-  "Return the name of a live (running) session referencing TICKET-ID, or nil.
-Checks `bebop--live-sessions' so on-deck sessions don't show a dot."
-  (car (seq-find (lambda (pair)
-                   (bebop-jira--ticket-in-name-p ticket-id (car pair)))
-                 bebop--live-sessions)))
-
-(defun bebop-jira--indicator (ticket-id)
-  "Return a fixed-width propertized indicator string for TICKET-ID.
-All three icons (● ⊞ ⎇) are always present. Inactive icons are painted
-with the default background color, making them invisible while preserving
-pixel-perfect column alignment across every heading."
-  (let* ((session (bebop-jira--active-session-name ticket-id))
-         (status  (and session
-                       (fboundp 'bebop--infer-status)
-                       (bebop--infer-status session)))
-         (chart   (bebop-jira--has-chart-p ticket-id))
-         (venue   (bebop-jira--has-venue-p ticket-id))
-         (bg      (face-attribute 'default :background nil t)))
-    (concat
-     "  "   ; two spaces between slug and icons
-     (propertize "●" 'face
-                 (if session
-                     (pcase status
-                       ("active"                'bebop-dot-active-face)
-                       ((or "waiting" "blocked") 'bebop-dot-waiting-face)
-                       (_                        'bebop-dot-degraded-face))
-                   `(:foreground ,bg)))
-     (propertize "⊞" 'face
-                 (if chart 'bebop-dot-degraded-face `(:foreground ,bg)))
-     (propertize "⎇" 'face
-                 (if venue 'bebop-dot-degraded-face `(:foreground ,bg)))
-     "  ")))
-
-(defun bebop-jira-apply-overlays ()
-  "Add session/chart/venue indicators to JIRA ticket headings in current buffer.
-Uses a replacing overlay that substitutes the whitespace padding between the
-ticket slug and the description with the compact indicator string. This keeps
-the description column consistent across tickets of different ID lengths, and
-eliminates the excess whitespace that org-jira inserts between slug and title."
-  (interactive)
-  (mapc #'delete-overlay bebop-jira--overlays)
-  (setq bebop-jira--overlays nil)
-  (org-map-entries
-   (lambda ()
-     (let ((ticket-id (or (org-entry-get nil "CUSTOM_ID")
-                          (org-entry-get nil "ID"))))
-       (when (and ticket-id (string-match-p "^[A-Z]+-[0-9]+$" ticket-id))
-         (let ((indicator (bebop-jira--indicator ticket-id)))
-           (save-excursion
-             (let* ((bol  (line-beginning-position))
-                    (line (buffer-substring-no-properties bol (line-end-position)))
-                    (id-pos (string-match (regexp-quote ticket-id) line)))
-               (when id-pos
-                 (let* ((id-end     (+ id-pos (length ticket-id)))
-                        (desc-start (string-match "[^ ]" line id-end))
-                        ;; Pad shorter slugs so icons always land at the same column.
-                        ;; ROOST-XXXX is 10 chars (the longest slug format).
-                        (slug-pad   (make-string (max 0 (- 10 (length ticket-id))) ?\s))
-                        (display-str (concat slug-pad indicator)))
-                   (when (and desc-start (> (- desc-start id-end) 0))
-                     (let ((ov (make-overlay (+ bol id-end)
-                                             (+ bol desc-start))))
-                       (overlay-put ov 'display display-str)
-                       (push ov bebop-jira--overlays)))))))))))
-   nil 'file))
-
-(defvar-local bebop-jira--reapply-timer nil
-  "Idle timer for debounced overlay reapplication after buffer changes.")
-
-(defun bebop-jira--schedule-reapply (&rest _)
-  "Schedule `bebop-jira-apply-overlays' to run after a short idle period.
-Debounces rapid buffer changes (e.g. during jira-sync rewrite) so overlays
-are reapplied once the content settles, not on every inserted character."
-  (when (timerp bebop-jira--reapply-timer)
-    (cancel-timer bebop-jira--reapply-timer))
-  (setq bebop-jira--reapply-timer
-        (run-with-idle-timer 1 nil #'bebop-jira-apply-overlays)))
-
-(defun bebop-jira--maybe-setup ()
-  "Enable JIRA overlays if the current buffer is JIRA.org."
-  (when (and buffer-file-name
-             (string-equal (file-name-nondirectory buffer-file-name) "JIRA.org"))
-    (display-line-numbers-mode -1)
-    (bebop-jira-apply-overlays)
-    ;; Reapply after saves and after any buffer change (covers jira-sync rewrites
-    ;; that may not trigger after-save-hook).
-    (add-hook 'after-save-hook   #'bebop-jira-apply-overlays nil t)
-    (add-hook 'after-change-functions #'bebop-jira--schedule-reapply nil t)))
-
-(add-hook 'org-mode-hook #'bebop-jira--maybe-setup)
-
-;; Refresh JIRA overlays whenever the dashboard re-renders (i.e. each poll
-;; cycle). The idle-timer debounce in bebop-jira--schedule-reapply means this
-;; only fires once the dashboard settles, not on every status flicker.
-(with-eval-after-load 'bebop-dashboard
-  (advice-add 'bebop--render :after
-              (lambda (&rest _)
-                (when-let ((buf (get-buffer "JIRA.org")))
-                  (with-current-buffer buf
-                    (bebop-jira--schedule-reapply))))))
-
-(defun bebop--jira-heading-ticket-id ()
-  "Return the JIRA ticket ID for the heading at point, or nil.
-Checks CUSTOM_ID and ID properties first; falls back to parsing [TICKET-ID]
-from the heading text."
-  (or (org-entry-get nil "CUSTOM_ID")
-      (org-entry-get nil "ID")
-      (when-let ((title (org-get-heading t t t t)))
-        (when (string-match "\\[\\([A-Z]+-[0-9]+\\)\\]" title)
-          (match-string 1 title)))))
-
-(defun bebop-new-session-from-jira-heading ()
-  "Create a Bebop session from the JIRA ticket heading at point.
-
-Extracts the ticket ID from the heading at point (via CUSTOM_ID / ID property
-or [TICKET-ID] text), prompts for a repo, pre-fills the branch with the ticket
-ID and the session name with REPO--TICKET-ID, creates a git worktree, creates
-a chart from the subtree, and calls `bebop--create-session'."
-  (interactive)
-  (unless (derived-mode-p 'org-mode)
-    (user-error "Not in an org-mode buffer"))
-  (unless (ignore-errors (save-excursion (org-back-to-heading t) t))
-    (user-error "Point is not at an org heading"))
-  (save-excursion
-    (org-back-to-heading t)
-    (let* ((ticket-id  (or (bebop--jira-heading-ticket-id)
-                           (user-error "No JIRA ticket ID found at this heading")))
-           ;; ── Repo ──────────────────────────────────────────────────────────
-           (repos      (bebop--list-repos))
-           (_          (unless repos
-                         (user-error "No repositories found in %s" bebop-repos-dir)))
-           (repo       (completing-read "Repository: " repos nil t))
-           (repo-path  (expand-file-name repo (expand-file-name bebop-repos-dir)))
-           ;; ── Branch ────────────────────────────────────────────────────────
-           (branches   (bebop--list-branches repo-path))
-           (branch     (read-string "Branch: " ticket-id))
-           (_          (when (string-empty-p (string-trim branch))
-                         (user-error "Branch name cannot be empty")))
-           ;; ── Session name ──────────────────────────────────────────────────
-           (worktree-name (format "%s--%s" repo (bebop--sanitize-name branch)))
-           (name       (read-string "Session name: " worktree-name))
-           (_          (bebop--assert-name-available name))
-           ;; ── Worktree ──────────────────────────────────────────────────────
-           (venues-dir (bebop--ensure-dir bebop-venues-dir))
-           (venue-path (expand-file-name worktree-name venues-dir))
-           (_          (when (file-directory-p venue-path)
-                         (user-error "Worktree already exists: %s" venue-path)))
-           (_          (if (member branch branches)
-                           (unless (eq 0 (call-process "git" nil nil nil
-                                                       "-C" repo-path
-                                                       "worktree" "add"
-                                                       venue-path branch))
-                             (user-error "git worktree add failed for branch: %s" branch))
-                         (unless (eq 0 (call-process "git" nil nil nil
-                                                     "-C" repo-path
-                                                     "worktree" "add" "-b" branch
-                                                     venue-path "HEAD"))
-                           (user-error "git worktree add -b failed: %s" branch))))
-           ;; ── Chart from subtree ────────────────────────────────────────────
-           (subtree    (bebop-cue--subtree-text))
-           (chart-path (bebop--create-new-chart name)))
-      (bebop--cue-to-chart subtree chart-path)
-      (message "Created worktree: %s" venue-path)
-      (bebop--create-session name venue-path chart-path))))
 
 (provide 'bebop-session)
 

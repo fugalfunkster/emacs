@@ -21,7 +21,6 @@
 (setq projectile-known-projects-file (my-local-emacs-file "projectile-bookmarks.eld"))
 (setq package-user-dir (my-local-emacs-file "elpa/"))
 (setq custom-file (my-local-emacs-file "custom.el"))
-(setq forge-database-file (my-local-emacs-file "forge-database.sqlite"))
 (setq keyfreq-file (my-local-emacs-file "keyfreq"))
 (setq keyfreq-file-lock (my-local-emacs-file "keyfreq.lock"))
 

@@ -35,14 +35,7 @@
           ("IN-REVIEW"       . (:foreground "#89ddff" :weight bold))
           ("READY-TO-DEPLOY" . (:foreground "#c3e88d" :weight bold))
           ("DONE"            . (:foreground "#555555" :weight normal))
-          ("CLOSED"          . (:foreground "#555555" :weight normal))
-          ;; GitLab MR review states (bebop-gitlab.el)
-          ("OPEN"            . (:foreground "#ff9e64" :weight bold))
-          ("RESOLVED"        . (:foreground "#555555" :weight normal))))
-
-  ;; GitLab MR review states must be registered as TODO keywords so that
-  ;; org-todo, org-get-todo-state, and heading fontification all work.
-  (add-to-list 'org-todo-keywords '(sequence "OPEN" "|" "RESOLVED") t)
+          ("CLOSED"          . (:foreground "#555555" :weight normal))))
 
   ;; org-jira switches to the project buffer at the end of every render.
   ;; Wrap it so the window configuration is restored when the callback completes,
@@ -137,20 +130,3 @@ Re-collapses ticket subtrees after sorting so descriptions stay hidden."
 
   (with-eval-after-load 'org
     (define-key org-mode-map (kbd "C-c S") #'jira-sort)))
-
-;; GitLab — forge
-
-;; Magit extension with native GitLab (and GitHub) support. Surfaces MRs, issues,
-;; and review comments as Magit sections; supports commenting, approving, and
-;; merging from within Emacs.
-
-;; Add an entry to =~/.authinfo.gpg= (the =^forge= suffix is required):
-
-;; : machine gitlab.com login YOUR_USERNAME^forge password YOUR_PERSONAL_ACCESS_TOKEN
-
-;; Token needs at minimum =api= scope.
-
-
-(use-package forge
-  :ensure t
-  :after magit)

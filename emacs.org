@@ -107,7 +107,6 @@ Keep volatile state off Dropbox to avoid sync churn and conflicted copies.
 (setq projectile-known-projects-file (my-local-emacs-file "projectile-bookmarks.eld"))
 (setq package-user-dir (my-local-emacs-file "elpa/"))
 (setq custom-file (my-local-emacs-file "custom.el"))
-(setq forge-database-file (my-local-emacs-file "forge-database.sqlite"))
 (setq keyfreq-file (my-local-emacs-file "keyfreq"))
 (setq keyfreq-file-lock (my-local-emacs-file "keyfreq.lock"))
 
@@ -1014,7 +1013,7 @@ Callable via emacsclient: emacsclient --eval \"(tangle-and-reload)\""
   (let ((lisp-dir (expand-file-name "lisp/" user-emacs-directory)))
     (dolist (f '("bebop-core.el" "bebop-passthrough.el" "bebop-dashboard.el"
                  "bebop-session.el" "bebop-backline.el" "bebop-set.el"
-                 "bebop-api.el" "bebop-cue.el" "bebop-frame.el" "bebop-gitlab.el"))
+                 "bebop-api.el" "bebop-frame.el"))
       (load (expand-file-name f lisp-dir) 'noerror 'nomessage)))
   ;; Re-apply Conductor frame-local face settings (fringe, borders, dividers)
   ;; since module reloads reset them.
@@ -1040,9 +1039,7 @@ Callable via emacsclient: emacsclient --eval \"(tangle-and-reload)\""
 (require 'bebop-backline)
 (require 'bebop-set)
 (require 'bebop-api)
-(require 'bebop-cue)
 (require 'bebop-frame)
-(require 'bebop-gitlab)
 #+end_src
 
 *** Load customizations
@@ -1072,53 +1069,3 @@ tangle target. The file lives in =~/.emacs.d-local/custom.el=.
 (load custom-file 'noerror)
 #+end_src
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Bebop implementation — Phases 3 and 4 complete
-# Added 2026-03-05
-#
-# What was implemented:
-#
-#   Phase 3 — Sessions, Cueing, and Jamming
-#     bebop-session.el  In-memory session registry; bebop-new-session (3-step
-#                       flow: venue → name → chart); per-session *bebop-session:
-#                       NAME* composition buffers; tmux window creation and
-#                       Claude launch; chart file creation and archiving; venue
-#                       worktree creation; gathering state; bebop-kill-session
-#                       with full cleanup.
-#     bebop-cue.el      bebop-cue-mode minor mode; C-c C-p / C-c C-P (cue) and
-#                       C-c C-j / C-c C-J (jam); add-hook for org-mode.
-#     bebop-dashboard   bebop-repos-dir updated to ~/Code/Repos/;
-#                       bebop-dot-pending-face added (yellow/amber);
-#                       bebop--infer-status checks bebop gathering state first;
-#                       bebop--insert-session-line renders yellow dot for
-#                       gathering status.
-#
-#   Phase 4 — Startup + Frame
-#     bebop-frame.el    M-x bebop opens the Conductor frame (locked 3-window
-#                       layout: chart left, *bebop* top-right,
-#                       *bebop-session: NAME* bottom-right); session switch
-#                       updates chart and composition windows; M-x bebop-solo
-#                       NAME opens/focuses a per-session Solo frame (treemacs
-#                       sidebar left, eshell top-right, magit-status
-#                       bottom-right); M-x bebop handles startup — no eshell
-#                       ritual required.
-#
-# Decisions not explicitly specified in the spec:
-#   - bebop-repos-dir default changed in-place in the Customization block
-#     (not a separate patch).
-#   - bebop--jam-subtree is defined in bebop-cue.el (not bebop-session.el)
-#     because it is exclusively used by the cue module; bebop-session.el only
-#     defines bebop--cue-to-chart which is the chart-write side.
-#   - The Solo layout center window is NOT dedicated (set-window-dedicated-p);
-#     only the sidebar windows are locked. The user edits files in the center.
-#   - Subtree heading levels are NOT adjusted when cueing/jamming — they are
-#     inserted as-is into the chart section. Level conflicts may occur if a
-#     top-level (* Heading) org entry is cued, but in practice cueable content
-#     is typically nested.
-#   - bebop-frame.el requires bebop-session (explicitly) but not bebop-cue
-#     (load order in init.el ensures cue is loaded first).
-#
-# ─────────────────────────────────────────────────────────────────────────────
-# Run M-x tangle-and-restart to apply. After restart, test with:
-#   M-x bebop-new-session
-# ─────────────────────────────────────────────────────────────────────────────

@@ -70,11 +70,15 @@ design spec and vocabulary are in `bebop.org` — read that first for any non-tr
 |--------|---------------|
 | `bebop-core.el` | Shared primitives: tmux send pattern, buffer/face setup, eshell hook |
 | `bebop-passthrough.el` | Keyboard passthrough to agent's tmux pane (`M-a`); handles TUI dialogs |
-| `bebop-dashboard.el` | `*bebop*` buffer — session pool, status dots, lifecycle commands |
-| `bebop-session.el` | Session creation/resume/kill/archive; chart and venue management; JIRA.org overlays (`bebop-jira-apply-overlays`, hooks on `org-mode-hook` + `after-save-hook`) |
-| `bebop-cue.el` | Cue/jam commands (`C-c C-p` / `C-c C-j`) routing org headings to charts and agents |
+| `bebop-dashboard.el` | `*bebop*` buffer — render skeleton (magit-section mode), status polling, pair lifecycle |
+| `bebop-session.el` | Session creation/resume/kill/archive; chart and venue management |
+| `bebop-backline.el` | Venue work shells (`backline--SLUG` tmux windows); port ownership via lsof + process ancestry |
+| `bebop-set.el` | Sets, shelving, the setlist dashboard tree; persists choices to `bebop-state.json` v2 |
+| `bebop-api.el` | JSON citizen surface for agents over the emacs server (`bebop-session-info`, exile proposals) |
 | `bebop-frame.el` | Conductor and Solo frame layouts |
-| `bebop-gitlab.el` | GitLab MR sync into org (optional dep — see External Services below) |
+
+(Retired 2026-07: `bebop-cue.el`, `bebop-gitlab.el`, and the JIRA sync hooks —
+replaced by agent-side MCP/CLI tooling. See git history.)
 
 **Key entry points** (from `bebop.org` Implementation Notes):
 - `bebop-send-buffer` — the tmux send pattern all jam/composition sends use
@@ -130,12 +134,7 @@ Most org documents (specs, notes, Rodeo config) live in `~/code/org/`.
 
 ## External Services (`customizations/external-services.el`)
 
-- **org-jira**: fully configured and working
-- **forge**: config block is present but commented out — see TODO comment in
-  the file. As of early 2026 there is a magit/transient version incompatibility
-  that makes forge unusable. Re-enable when a compatible forge release appears:
-  1. Verify `M-x package-install RET forge` compiles without errors
-  2. Add `machine gitlab.com login USERNAME^forge password TOKEN` to `~/.authinfo.gpg`
-  3. Run `git config --global gitlab.user USERNAME`
-  4. Uncomment the forge block in `emacs.org` and run `tangle-and-restart`
-  5. Verify with `M-x forge-pull` in a Magit buffer
+- **org-jira**: configured (jira.org sync + status overlays); Jira access for
+  agents goes through the Atlassian MCP, not org-jira
+- **forge**: removed 2026-07 (was broken by a magit/transient incompatibility
+  and unused — GitLab work goes through `glab` CLI and skills)
