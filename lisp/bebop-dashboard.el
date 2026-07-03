@@ -485,6 +485,13 @@ list when they add keybindings.")
     map)
   "Keymap for `bebop-dashboard-mode'.")
 
+;; Explicit, unconditional: `define-derived-mode' only sets the keymap
+;; parent when the map has none, and `defvar' does not reinitialize on
+;; hot-reload — so a live session that predates the magit-section
+;; derivation would keep the stale parent and TAB would never reach
+;; `magit-section-toggle'.
+(set-keymap-parent bebop-dashboard-mode-map magit-section-mode-map)
+
 (define-derived-mode bebop-dashboard-mode magit-section-mode "BebopDash"
   "Major mode for the Bebop multi-agent dashboard.
 Derived from `magit-section-mode' for section folding (TAB) with
