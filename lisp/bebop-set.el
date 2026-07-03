@@ -273,10 +273,18 @@ Declared-but-empty sets render in :sets with no children."
                              (cond ((and la (not lb)) t)
                                    ((and lb (not la)) nil)
                                    (t (string< (car a) (car b)))))))))
-      (list :sets sets
-            :ungrouped (bebop-set--sort-ungrouped (nreverse ungrouped))
-            :shelf (sort (nreverse shelf)
-                         (lambda (a b) (string< (car a) (car b))))))))
+      (let* ((sorted-un (bebop-set--sort-ungrouped (nreverse ungrouped)))
+             ;; Running-but-ungrouped sessions are active work, not inbox
+             ;; items — they render as a flat strip above the sets rather
+             ;; than disappearing into the collapsed Ungrouped section.
+             (live-un (seq-filter (lambda (r) (and (plist-get r :live)
+                                                   (not (plist-get r :shelved))))
+                                  sorted-un)))
+        (list :live-ungrouped live-un
+              :sets sets
+              :ungrouped (seq-remove (lambda (r) (memq r live-un)) sorted-un)
+              :shelf (sort (nreverse shelf)
+                           (lambda (a b) (string< (car a) (car b)))))))))
 
 (defun bebop-set--sort-ungrouped (rows)
   "Sort ungrouped ROWS: live first, ticket-slug clusters together,
@@ -458,11 +466,14 @@ column off screen; over-long names simply overflow their cell."
             (bebop-set--insert-row r width "    ")))))))
 
 (defun bebop-set--render-body ()
-  "Insert the setlist tree — the dashboard body."
+  "Insert the setlist tree — the dashboard body.
+Order: live ungrouped sessions (flat strip), sets, Ungrouped, Shelf."
   (let* ((rows (bebop-set--rows))
          (groups (bebop-set--group rows))
          (width (bebop-set--name-width rows)))
     (magit-insert-section (bebop-setlist)
+      (dolist (r (plist-get groups :live-ungrouped))
+        (bebop-set--insert-row r width ""))
       (dolist (g (plist-get groups :sets))
         (bebop-set--insert-set g width))
       (when-let ((un (plist-get groups :ungrouped)))
