@@ -264,22 +264,30 @@ Declared-but-empty sets render in :sets with no children."
                    (seq-every-p (lambda (r) (plist-get r :shelved)) members))
               (push (cons name members) shelf)
             (push (cons name members) sets))))
-      ;; Sets with a live session first, then alphabetical.
-      (let ((live-in (lambda (g)
-                       (seq-some (lambda (r) (plist-get r :live)) (cdr g)))))
+      ;; Sets sort by ticket number descending (newest epics first);
+      ;; ticketless sets follow, alphabetical.
+      (let ((num (lambda (g)
+                   (and (string-match "\\`[A-Z]+-\\([0-9]+\\)" (car g))
+                        (string-to-number (match-string 1 (car g)))))))
         (setq sets (sort (nreverse sets)
                          (lambda (a b)
-                           (let ((la (funcall live-in a)) (lb (funcall live-in b)))
-                             (cond ((and la (not lb)) t)
-                                   ((and lb (not la)) nil)
+                           (let ((na (funcall num a)) (nb (funcall num b)))
+                             (cond ((and na nb) (> na nb))
+                                   (na t)
+                                   (nb nil)
                                    (t (string< (car a) (car b)))))))))
       (let* ((sorted-un (bebop-set--sort-ungrouped (nreverse ungrouped)))
              ;; Running-but-ungrouped sessions are active work, not inbox
              ;; items — they render as a flat strip above the sets rather
              ;; than disappearing into the collapsed Ungrouped section.
-             (live-un (seq-filter (lambda (r) (and (plist-get r :live)
-                                                   (not (plist-get r :shelved))))
-                                  sorted-un)))
+             ;; The strip is plain-alphabetical.
+             (live-un (sort (seq-filter
+                             (lambda (r) (and (plist-get r :live)
+                                              (not (plist-get r :shelved))))
+                             sorted-un)
+                            (lambda (a b)
+                              (string< (plist-get a :name)
+                                       (plist-get b :name))))))
         (list :live-ungrouped live-un
               :sets sets
               :ungrouped (seq-remove (lambda (r) (memq r live-un)) sorted-un)
