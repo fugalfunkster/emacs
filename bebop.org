@@ -4054,11 +4054,18 @@ Order: live ungrouped sessions (flat strip), sets, Ungrouped, Shelf."
          (groups (bebop-set--group rows))
          (width (bebop-set--name-width rows)))
     (magit-insert-section (bebop-setlist)
-      (dolist (r (plist-get groups :live-ungrouped))
-        (bebop-set--insert-row r width ""))
+      ;; Separator blank lines are inserted here in the ROOT section's
+      ;; scope, between child sections — never inside a child, where
+      ;; they would become foldable content and shift on toggle.
+      (let ((strip (plist-get groups :live-ungrouped)))
+        (dolist (r strip)
+          (bebop-set--insert-row r width ""))
+        (when (and strip (plist-get groups :sets))
+          (insert "\n")))
       (dolist (g (plist-get groups :sets))
         (bebop-set--insert-set g width))
       (when-let ((un (plist-get groups :ungrouped)))
+        (insert "\n")
         (magit-insert-section (bebop-ungrouped "Ungrouped" t)
           (magit-insert-heading
             (concat (bebop-set--stop 7)
@@ -4068,6 +4075,7 @@ Order: live ungrouped sessions (flat strip), sets, Ungrouped, Shelf."
           (dolist (r un)
             (bebop-set--insert-row r width "    "))))
       (when-let ((shelf (plist-get groups :shelf)))
+        (insert "\n")
         (magit-insert-section (bebop-shelf "Shelf" t)
           (magit-insert-heading
             (concat (bebop-set--stop 7)
