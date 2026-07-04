@@ -3764,6 +3764,28 @@ choice is persisted the moment it is made.
   (bebop--render)
   (message "Set \"%s\" declared" name))
 
+(defun bebop-remove-set (name)
+  "Remove the empty set NAME from the registry.
+Refuses if any session (running or on deck) still belongs to it —
+reassign or exile members first. Removal is cheap: declarations are
+self-healing, since enrichment re-creates a set the next time a
+ticket matches its epic."
+  (interactive
+   (list (completing-read "Remove set: " (bebop-set--names) nil t)))
+  (when (seq-some (lambda (r) (equal (plist-get r :set) name))
+                  (bebop-set--rows))
+    (user-error "Set %s still has members — reassign or exile them first"
+                name))
+  (setq bebop--sets (assoc-delete-all name bebop--sets))
+  ;; Clear any stale meta references (sessions whose artifacts are gone
+  ;; but whose choice entries linger).
+  (dolist (cell bebop--session-meta)
+    (when (equal (plist-get (cdr cell) :set) name)
+      (setcdr cell (plist-put (cdr cell) :set nil))))
+  (bebop-set--save)
+  (bebop--render)
+  (message "Set \"%s\" removed" name))
+
 (defun bebop--entry-name-at-point ()
   "Return the session or on-deck entry name at point, or nil."
   (or (get-text-property (point) 'bebop-session-name)
