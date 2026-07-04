@@ -32,7 +32,8 @@ Fields: session, set, chart, venue, ticket, siblings
               (list :live t
                     :busy (if (plist-get st :busy) t :false)
                     :command (or (plist-get st :command) :null)
-                    :ports (vconcat (plist-get st :ports)))))))
+                    :ports (vconcat (plist-get st :ports))))))
+         (mr (bebop-mr--entry name)))
     (json-serialize
      (list :session name
            :set (or set :null)
@@ -40,7 +41,12 @@ Fields: session, set, chart, venue, ticket, siblings
            :venue (or venue :null)
            :ticket (or (bebop--on-deck-ticket-slug name) :null)
            :siblings (or siblings (vector))
-           :backline (or backline :null)))))
+           :backline (or backline :null)
+           :mr (if mr
+                   (list :state (or (plist-get mr :state) :null)
+                         :unresolved (or (plist-get mr :unresolved) 0)
+                         :iid (or (plist-get mr :iid) :null))
+                 :null)))))
 
 (defun bebop-list-sessions ()
   "Return a JSON array of all sessions, running and on deck."

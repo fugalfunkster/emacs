@@ -296,6 +296,116 @@ pinned utility names (emacs, bebop, claude) last."
    ((memq status '(unknown degraded)) 'bebop-dot-degraded-face)
    (t 'bebop-dot-active-face)))
 
+;; MR review status — the two-speed dashboard's slow lane. The left
+;; gutter is local and live (every render); MR status is external
+;; (GitLab), so it is fetched out of band by roundup, cached to a
+;; sidecar, and only READ here. A cached status older than
+;; `bebop-mr-stale-hours' renders dimmed so a stale snapshot never
+;; masquerades as current.
+
+(defcustom bebop-mr-cache-file (locate-user-emacs-file "bebop-mr-cache.json")
+  "Sidecar file caching per-session MR review status.
+Populated out of band by roundup; read-only from the render path."
+  :type 'file
+  :group 'bebop)
+
+(defcustom bebop-mr-stale-hours 24
+  "Hours after which a cached MR status renders dimmed rather than colored."
+  :type 'number
+  :group 'bebop)
+
+(defvar bebop--mr-cache nil
+  "Alist of (SESSION . PLIST). PLIST keys: :state :unresolved :iid :at.")
+
+(defun bebop-mr--load ()
+  "Load the MR status cache from `bebop-mr-cache-file'."
+  (setq bebop--mr-cache nil)
+  (when (file-exists-p bebop-mr-cache-file)
+    (condition-case nil
+        (let ((doc (with-temp-buffer
+                     (insert-file-contents bebop-mr-cache-file)
+                     (json-parse-buffer))))
+          (maphash
+           (lambda (name e)
+             (push (cons name
+                         (list :state (gethash "state" e)
+                               :unresolved (or (gethash "unresolved" e) 0)
+                               :iid (gethash "iid" e)
+                               :at (gethash "at" e)))
+                   bebop--mr-cache))
+           doc))
+      (error (setq bebop--mr-cache nil)))))
+
+(defun bebop-mr--save ()
+  "Persist the MR status cache."
+  (let ((doc (make-hash-table :test #'equal)))
+    (dolist (cell bebop--mr-cache)
+      (let ((e (make-hash-table :test #'equal))
+            (p (cdr cell)))
+        (when (plist-get p :state) (puthash "state" (plist-get p :state) e))
+        (puthash "unresolved" (or (plist-get p :unresolved) 0) e)
+        (when (plist-get p :iid) (puthash "iid" (plist-get p :iid) e))
+        (when (plist-get p :at) (puthash "at" (plist-get p :at) e))
+        (puthash (car cell) e doc)))
+    (with-temp-file bebop-mr-cache-file
+      (insert (json-serialize doc)))))
+
+(defun bebop-mr-cache-set (session state unresolved &optional iid)
+  "Cache MR STATE (\"draft\"|\"open\"|\"merged\") and UNRESOLVED count for SESSION.
+The citizen write verb roundup calls as a byproduct of its GitLab
+fetch — the render path only reads. Stamps the current time."
+  (let ((cell (assoc session bebop--mr-cache)))
+    (unless cell
+      (setq cell (cons session nil))
+      (push cell bebop--mr-cache))
+    (setcdr cell (list :state state
+                       :unresolved (or unresolved 0)
+                       :iid iid
+                       :at (bebop--now-string))))
+  (bebop-mr--save)
+  (format "mr cached: %s" session))
+
+(defun bebop-mr-clear (session)
+  "Drop SESSION's cached MR status (e.g. after exile)."
+  (interactive
+   (list (completing-read "Clear MR status: "
+                          (mapcar #'car bebop--mr-cache) nil t)))
+  (setq bebop--mr-cache (assoc-delete-all session bebop--mr-cache))
+  (bebop-mr--save))
+
+(defun bebop-mr--entry (session)
+  "Return SESSION's cached MR plist, or nil."
+  (cdr (assoc session bebop--mr-cache)))
+
+(defun bebop-mr--stale-p (entry)
+  "Return non-nil if ENTRY's timestamp is older than `bebop-mr-stale-hours'.
+Unparseable or missing timestamps count as stale — dim if unsure."
+  (condition-case nil
+      (let ((at (plist-get entry :at)))
+        (or (null at)
+            (> (- (float-time) (float-time (date-to-time at)))
+               (* bebop-mr-stale-hours 3600))))
+    (error t)))
+
+(defun bebop-mr--glyph (session)
+  "Return the propertized MR glyph for SESSION, or nil if uncached.
+Red ◆N = N unresolved teammate comments (you are needed); green ✓ =
+merged; dim ✎ = draft; dim ◇ = open, nothing for you. Stale entries
+render dim regardless of state."
+  (when-let ((e (bebop-mr--entry session)))
+    (let* ((state (plist-get e :state))
+           (unresolved (or (plist-get e :unresolved) 0))
+           (stale (bebop-mr--stale-p e))
+           (spec (cond
+                  ((> unresolved 0) (cons (format "◆%d" unresolved)
+                                          'bebop-dot-waiting-face))
+                  ((equal state "merged") (cons "✓" 'bebop-dot-active-face))
+                  ((equal state "draft")  (cons "✎" 'shadow))
+                  ((equal state "open")   (cons "◇" 'shadow))
+                  (t nil))))
+      (when spec
+        (bebop-set--prop (car spec) (if stale 'shadow (cdr spec)))))))
+
 (defun bebop-set--prop (string face)
   "Propertize STRING with FACE as both `face' and `font-lock-face'.
 font-lock is active in magit-section buffers and strips plain `face'
@@ -352,11 +462,19 @@ column off screen; over-long names simply overflow their cell."
       (insert (bebop-set--gutter row))
       (insert indent)
       (insert (bebop-set--prop name face))
-      (when ports
-        (insert (make-string (max 1 (- width (length name) (length indent))) ?\s))
-        (insert (bebop-set--prop
-                 (mapconcat (lambda (p) (format ":%d" p)) ports " ")
-                 'shadow)))
+      ;; Right region, anchored off the name column so it forms a true
+      ;; table down the tree: MR glyph at a fixed stop, ports trailing.
+      ;; A line whose name overruns the stop simply appends with no gap.
+      (let ((mr (bebop-mr--glyph name))
+            (right (+ 7 width)))
+        (when (or mr ports)
+          (insert (bebop-set--stop right))
+          (when mr (insert mr))
+          (insert (bebop-set--stop (+ right 3)))
+          (when ports
+            (insert (bebop-set--prop
+                     (mapconcat (lambda (p) (format ":%d" p)) ports " ")
+                     'shadow)))))
       (insert "\n")
       (add-text-properties
        start (point)
@@ -479,6 +597,7 @@ Order: live ungrouped sessions (flat strip), sets, Ungrouped."
 (define-key bebop-dashboard-mode-map (kbd "m") #'bebop-assign-set)
 
 (bebop-set--load)
+(bebop-mr--load)
 
 (provide 'bebop-set)
 
