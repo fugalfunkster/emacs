@@ -168,7 +168,7 @@ Callable via emacsclient: emacsclient --eval \"(tangle-and-reload)\""
   (let ((lisp-dir (expand-file-name "lisp/" user-emacs-directory)))
     (dolist (f '("bebop-core.el" "bebop-passthrough.el" "bebop-dashboard.el"
                  "bebop-session.el" "bebop-backline.el" "bebop-set.el"
-                 "bebop-api.el" "bebop-frame.el"))
+                 "bebop-api.el" "bebop-call.el" "bebop-frame.el"))
       (load (expand-file-name f lisp-dir) 'noerror 'nomessage)))
   ;; Re-apply Conductor frame-local face settings (fringe, borders, dividers)
   ;; since module reloads reset them.
@@ -190,7 +190,12 @@ Callable via emacsclient: emacsclient --eval \"(tangle-and-reload)\""
 (require 'bebop-backline)
 (require 'bebop-set)
 (require 'bebop-api)
+(require 'bebop-call)
 (require 'bebop-frame)
+
+;; Answer cross-machine calls when a Dropbox mailbox is available.
+(when bebop-call-dir
+  (bebop-call-mode 1))
 
 (load "local-state.el")
 (load "navigation.el")
