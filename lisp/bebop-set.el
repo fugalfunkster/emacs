@@ -429,6 +429,14 @@ cell, so literal-space padding drifts; pixel column stops keep the
 gutter grid exact on every line."
   (propertize " " 'display `(space :align-to ,column)))
 
+(defconst bebop-set--name-col 8
+  "Column where the name field begins, after the four-glyph gutter.
+Each gutter glyph (dot 0, chart 2, venue 4, MR 6) gets a two-column
+slot because the glyphs run wider than one character cell — a
+one-column slot lets a wide glyph overrun its stop and shove the name
+right, breaking alignment between rows that have the glyph and rows
+that don't. All right-region anchors are measured from here.")
+
 (defun bebop-set--gutter (row)
   "Return the fixed-column gutter string for ROW, or blank stops if nil.
 Dot at column 0, chart glyph at 2, venue glyph at 4, MR glyph at 6,
@@ -436,7 +444,7 @@ text begins at 7. The MR column is the gutter's one cached, stale-able
 member — everything left of it is live and derived; it dims when its
 snapshot ages out (see `bebop-mr--gutter-glyph')."
   (if (null row)
-      (bebop-set--stop 7)
+      (bebop-set--stop bebop-set--name-col)
     (let* ((live (plist-get row :live))
            (dot (if live
                     (bebop-set--prop "●" (bebop-set--dot-face
@@ -450,7 +458,7 @@ snapshot ages out (see `bebop-mr--gutter-glyph')."
       (concat dot (bebop-set--stop 2)
               (or chart "") (bebop-set--stop 4)
               (or venue "") (bebop-set--stop 6)
-              (or mr "") (bebop-set--stop 7)))))
+              (or mr "") (bebop-set--stop bebop-set--name-col)))))
 
 (defun bebop-set--name-width (rows set-names)
   "Return the shared name-column width anchoring the right region.
@@ -485,7 +493,7 @@ lone outlier past the cap simply overflows its own line."
       ;; they form a true column down the tree. (MR status now lives in
       ;; the left gutter alongside the other per-session glyphs.)
       (when ports
-        (insert (bebop-set--stop (+ 7 width)))
+        (insert (bebop-set--stop (+ bebop-set--name-col width)))
         (insert (bebop-set--prop
                  (mapconcat (lambda (p) (format ":%d" p)) ports " ")
                  'shadow)))
@@ -506,7 +514,7 @@ length; a crowded cell overflows its stop with a single space keeping
 it separated from the next. Counts are disjoint — a waiting session
 is not also counted as running."
   (if (null rows)
-      (concat (bebop-set--stop (+ 7 width))
+      (concat (bebop-set--stop (+ bebop-set--name-col width))
               (bebop-set--prop "(empty)" 'shadow))
     (let* ((waiting (seq-count
                      (lambda (r)
@@ -517,7 +525,7 @@ is not also counted as running."
            (active (- (seq-count (lambda (r) (plist-get r :live)) rows)
                       waiting))
            (deck (seq-count (lambda (r) (not (plist-get r :live))) rows))
-           (base (+ 7 width))
+           (base (+ bebop-set--name-col width))
            (col 0)
            (parts nil))
       (dolist (cell (list (list active ?● 'bebop-dot-active-face)
@@ -592,7 +600,7 @@ Order: live ungrouped sessions (flat strip), sets, Ungrouped."
         (insert "\n")
         (magit-insert-section (bebop-ungrouped "Ungrouped" t)
           (magit-insert-heading
-            (concat (bebop-set--stop 7)
+            (concat (bebop-set--stop bebop-set--name-col)
                     (bebop-set--prop "Ungrouped" '(:inherit shadow :weight bold))
                     (bebop-set--prop (format " (%s)" (bebop-set--counts un))
                                      'shadow)))
