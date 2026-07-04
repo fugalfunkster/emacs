@@ -30,6 +30,7 @@ The canonical terms. Everything in the spec and implementation uses these.
 | *Session*   | A named agent: tmux window + composition buffer + chart + optional venue                                         |
 | *Chart*     | Org doc holding a session's accumulated context; persists after session ends                                     |
 | *Venue*     | Git worktree for a session; optional; persists independently                                                     |
+| *Jam*       | Send text to a session agent; a citizen API verb (born a keybinding, retired, resurrected for machines)          |
 | *Backline*  | Venue-owned work shell (tmux window) for long-running processes: dev servers, watch builds; hot-seat attachable  |
 | *Set*       | Attention-level grouping of sessions; lazy attributes; sometimes wraps a Jira epic, sometimes ticketless         |
 | *Conductor* | Role/layout: high-level view across all sessions                                                                 |
@@ -191,9 +192,12 @@ Two kinds of headings:
 - *Task templates* — structured task frames (Investigate, Plan, Implement, etc.)
 - *Development standards* — how-to-work guidance (TDD, debugging, code review, etc.)
 
-(Historical note: cue/jam — elisp commands that routed org subtrees into
-charts and agents — were retired in the setlist transition. Agents fetch
-their own context now via MCP, CLI tooling, and orientation.)
+(Historical note: cue/jam — elisp keybindings that routed org subtrees
+into charts and agents — were retired in the setlist transition; agents
+fetch their own context now via MCP, CLI tooling, and orientation. Jam
+was later resurrected as a citizen API verb — see =bebop-jam= — because
+fleet orchestration needs "send text to agent NAME" as a machine
+operation. Same verb, different caller.)
 
 * Venues
 
@@ -2294,6 +2298,33 @@ Session accessor for chart path.
     (and info (plist-get info :chart))))
 #+end_src
 
+Jam, resurrected. The original jam was a human keybinding that routed org
+subtrees to agents; it retired when agents learned to fetch their own
+context. This jam is a citizen verb: skills, sibling agents, and remote
+machines cue an agent by name through the API. Same verb, different
+caller — the implementation delta is the distinction.
+
+#+begin_src emacs-lisp
+(defun bebop-jam (name text)
+  "Send TEXT to session NAME's agent as a prompt.
+Citizen verb: callable over the emacs server by skills, sibling
+agents, and remote machines (e.g. the cross-machine handoff relay).
+Uses the same load-buffer → paste-buffer → C-m pattern as
+`bebop-send-buffer' so multi-line TEXT arrives as a single prompt.
+Signals if NAME has no live tmux window."
+  (let* ((window (bebop--tmux-window-name name))
+         (pane (bebop--tmux-pane-id-for window)))
+    (unless pane
+      (user-error "bebop-jam: no live session named %s" name))
+    (with-temp-buffer
+      (insert text)
+      (call-process-region (point-min) (point-max)
+                           "tmux" nil nil nil "load-buffer" "-"))
+    (call-process "tmux" nil nil nil "paste-buffer" "-d" "-t" pane)
+    (call-process "tmux" nil nil nil "send-keys" "-t" pane "C-m")
+    (format "jammed: %s" name)))
+#+end_src
+
 Session accessor for venue (worktree) path.
 
 #+begin_src emacs-lisp
@@ -4058,7 +4089,7 @@ the emacs server (=emacsclient --eval=). Everything here returns JSON
 strings so callers never parse elisp. Agents must go through these
 functions — never poke internals — so skills survive elisp refactors.
 
-The mutating verbs (=bebop-assign-set=, =bebop-new-set=,
+The mutating verbs (=bebop-assign-set=, =bebop-new-set=, =bebop-jam=,
 =bebop-backline-run= …) already live in their owning modules and are
 equally part of the contract; this module adds the read/orientation side
 plus the exile-proposal queue.

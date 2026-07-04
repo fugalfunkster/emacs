@@ -254,6 +254,25 @@ with no argument."
   (let ((info (bebop--session-info name)))
     (and info (plist-get info :chart))))
 
+(defun bebop-jam (name text)
+  "Send TEXT to session NAME's agent as a prompt.
+Citizen verb: callable over the emacs server by skills, sibling
+agents, and remote machines (e.g. the cross-machine handoff relay).
+Uses the same load-buffer → paste-buffer → C-m pattern as
+`bebop-send-buffer' so multi-line TEXT arrives as a single prompt.
+Signals if NAME has no live tmux window."
+  (let* ((window (bebop--tmux-window-name name))
+         (pane (bebop--tmux-pane-id-for window)))
+    (unless pane
+      (user-error "bebop-jam: no live session named %s" name))
+    (with-temp-buffer
+      (insert text)
+      (call-process-region (point-min) (point-max)
+                           "tmux" nil nil nil "load-buffer" "-"))
+    (call-process "tmux" nil nil nil "paste-buffer" "-d" "-t" pane)
+    (call-process "tmux" nil nil nil "send-keys" "-t" pane "C-m")
+    (format "jammed: %s" name)))
+
 (defun bebop--session-venue (name)
   "Return the venue (worktree) path for session NAME, or nil."
   (let ((info (bebop--session-info name)))
