@@ -387,24 +387,33 @@ Unparseable or missing timestamps count as stale — dim if unsure."
                (* bebop-mr-stale-hours 3600))))
     (error t)))
 
-(defun bebop-mr--glyph (session)
-  "Return the propertized MR glyph for SESSION, or nil if uncached.
-Red ◆N = N unresolved teammate comments (you are needed); green ✓ =
+(defun bebop-mr--gutter-glyph (session)
+  "Return the single-char MR gutter glyph for SESSION, or nil if uncached.
+Red ◆ = unresolved teammate comments (you are needed); green ✓ =
 merged; dim ✎ = draft; dim ◇ = open, nothing for you. Stale entries
-render dim regardless of state."
+render dim regardless. The exact unresolved count and MR number live
+in the glyph's tooltip (`help-echo`) — the gutter stays one char wide."
   (when-let ((e (bebop-mr--entry session)))
     (let* ((state (plist-get e :state))
            (unresolved (or (plist-get e :unresolved) 0))
            (stale (bebop-mr--stale-p e))
            (spec (cond
-                  ((> unresolved 0) (cons (format "◆%d" unresolved)
-                                          'bebop-dot-waiting-face))
+                  ((> unresolved 0) (cons "◆" 'bebop-dot-waiting-face))
                   ((equal state "merged") (cons "✓" 'bebop-dot-active-face))
                   ((equal state "draft")  (cons "✎" 'shadow))
                   ((equal state "open")   (cons "◇" 'shadow))
-                  (t nil))))
+                  (t nil)))
+           (fc (if stale 'shadow (cdr spec))))
       (when spec
-        (bebop-set--prop (car spec) (if stale 'shadow (cdr spec)))))))
+        (propertize (car spec)
+                    'face fc 'font-lock-face fc
+                    'help-echo (format "MR !%s · %s%s%s"
+                                       (or (plist-get e :iid) "?")
+                                       (or state "?")
+                                       (if (> unresolved 0)
+                                           (format " · %d unresolved" unresolved)
+                                         "")
+                                       (if stale " · stale" "")))))))
 
 (defun bebop-set--prop (string face)
   "Propertize STRING with FACE as both `face' and `font-lock-face'.
@@ -422,7 +431,10 @@ gutter grid exact on every line."
 
 (defun bebop-set--gutter (row)
   "Return the fixed-column gutter string for ROW, or blank stops if nil.
-Dot at column 0, chart glyph at 2, venue glyph at 4, text begins at 7."
+Dot at column 0, chart glyph at 2, venue glyph at 4, MR glyph at 6,
+text begins at 7. The MR column is the gutter's one cached, stale-able
+member — everything left of it is live and derived; it dims when its
+snapshot ages out (see `bebop-mr--gutter-glyph')."
   (if (null row)
       (bebop-set--stop 7)
     (let* ((live (plist-get row :live))
@@ -433,19 +445,26 @@ Dot at column 0, chart glyph at 2, venue glyph at 4, text begins at 7."
            (chart (when (plist-get row :chart)
                     (bebop-set--prop "⊞" 'shadow)))
            (venue (when (plist-get row :venue)
-                    (bebop-set--prop "⎇" 'shadow))))
+                    (bebop-set--prop "⎇" 'shadow)))
+           (mr (bebop-mr--gutter-glyph (plist-get row :name))))
       (concat dot (bebop-set--stop 2)
               (or chart "") (bebop-set--stop 4)
-              (or venue "") (bebop-set--stop 7)))))
+              (or venue "") (bebop-set--stop 6)
+              (or mr "") (bebop-set--stop 7)))))
 
-(defun bebop-set--name-width (rows)
-  "Return the name column width for ROWS.
-Capped so a single long outlier name cannot push the annotation
-column off screen; over-long names simply overflow their cell."
+(defun bebop-set--name-width (rows set-names)
+  "Return the shared name-column width anchoring the right region.
+Must clear the longest thing on any line so the rollup/ports column
+forms a clean vertical edge — including folded set headings. Session
+rows sit under a 4-column indent, so they count as name+4; set-heading
+names sit at the gutter edge, so they count as-is. Capped at 44; a
+lone outlier past the cap simply overflows its own line."
   (min 44
-       (max 24 (+ 2 (apply #'max 0 (mapcar (lambda (r)
-                                             (length (plist-get r :name)))
-                                           rows))))))
+       (max 24
+            (+ 2 (max (apply #'max 0
+                             (mapcar (lambda (r) (+ 4 (length (plist-get r :name))))
+                                     rows))
+                      (apply #'max 0 (mapcar #'length set-names)))))))
 
 (defun bebop-set--insert-row (row width indent)
   "Insert one session line for ROW with name column WIDTH and INDENT."
@@ -462,19 +481,14 @@ column off screen; over-long names simply overflow their cell."
       (insert (bebop-set--gutter row))
       (insert indent)
       (insert (bebop-set--prop name face))
-      ;; Right region, anchored off the name column so it forms a true
-      ;; table down the tree: MR glyph at a fixed stop, ports trailing.
-      ;; A line whose name overruns the stop simply appends with no gap.
-      (let ((mr (bebop-mr--glyph name))
-            (right (+ 7 width)))
-        (when (or mr ports)
-          (insert (bebop-set--stop right))
-          (when mr (insert mr))
-          (insert (bebop-set--stop (+ right 3)))
-          (when ports
-            (insert (bebop-set--prop
-                     (mapconcat (lambda (p) (format ":%d" p)) ports " ")
-                     'shadow)))))
+      ;; Right region: backline ports, anchored off the name column so
+      ;; they form a true column down the tree. (MR status now lives in
+      ;; the left gutter alongside the other per-session glyphs.)
+      (when ports
+        (insert (bebop-set--stop (+ 7 width)))
+        (insert (bebop-set--prop
+                 (mapconcat (lambda (p) (format ":%d" p)) ports " ")
+                 'shadow)))
       (insert "\n")
       (add-text-properties
        start (point)
@@ -562,7 +576,7 @@ is not also counted as running."
 Order: live ungrouped sessions (flat strip), sets, Ungrouped."
   (let* ((rows (bebop-set--rows))
          (groups (bebop-set--group rows))
-         (width (bebop-set--name-width rows)))
+         (width (bebop-set--name-width rows (bebop-set--names))))
     (magit-insert-section (bebop-setlist)
       ;; Separator blank lines are inserted here in the ROOT section's
       ;; scope, between child sections — never inside a child, where
