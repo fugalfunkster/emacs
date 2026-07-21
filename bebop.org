@@ -325,7 +325,8 @@ per machine, each with exactly one writer (so file sync never conflicts):
 
 Each machine's Emacs runs =bebop-call-mode=: a timer polls its own call
 file and dispatches requests through a strict verb allowlist —
-=list-sessions=, =list-sets=, =session-info=, =exile-proposals=, =jam=.
+=list-sessions=, =list-sets=, =session-info=, =exile-proposals=, =jam=,
+=relay-done=.
 Never arbitrary elisp: the mailbox is Dropbox-writable, and while the
 threat model already includes Dropbox (settings and hooks sync through
 it), the allowlist keeps the mailbox from widening it.
@@ -345,6 +346,238 @@ Round-trip latency is Dropbox sync (~5–20s) — right for orchestration,
 wrong for live steering. If interactive cross-machine control is ever
 needed, that is ssh/Tailscale territory; the verb plumbing here carries
 over unchanged.
+
+** Two-machine protocol (v2)
+
+The first real relay (2026-07-04, mmm → mmm-2) surfaced four gaps: jammed
+agents that stall silently (a permission prompt on the far machine looks
+identical to "still working"), no host discovery (the mailbox was empty
+until the first call), venues diverging across machines with nothing
+watching, and no way for the far machine to learn a relay happened. The
+v2 additions close these while keeping the founding constraints: one
+writer per file, a strict verb allowlist, and *git as the only medium
+for code state* — bebop observes and narrates; it never owns branches,
+never transfers ownership, never resolves divergence. Flags are for
+humans (or a future reconciliation skill); the fix is always plain git.
+
+Three stores, three jobs:
+
+- *Charts* — human narrative, written only by the session's own agent:
+  handoff briefings, =* Handoff blocked: reason= when the agent cannot
+  comply (chart-first: narrate before attempting the push, so failure is
+  never silent).
+- *Mailbox* — machine state, one writer per file: presence heartbeats,
+  the proposals ledger, call/response.
+- *Origin* — code truth. Ahead/behind against origin is the only
+  divergence signal bebop reports; prose is never treated as code state.
+
+Two per-host files join the mailbox, both readable by everyone, each
+written only by its own host:
+
+- =HOST.presence.json= — heartbeat written on a slow cadence
+  (=bebop-presence-interval=, default 5 min) while =bebop-call-mode= is
+  on: timestamp plus a digest of live sessions and their statuses.
+  Answers "is the far Emacs awake", "what's running there", and "is
+  anything blocked" without a call round-trip — and gives relay its
+  host discovery.
+- =HOST.proposals.json= — the ledger. A proposal lives in the ledger of
+  the machine that will *act* on it, created there and status-updated
+  there (=pending= → =approved= / =rejected= / =done=). Remote status
+  costs nothing: read the other host's file off Dropbox. Entry kinds so
+  far: =retire= (a relayed-away session, seeded by the =relay-done=
+  verb) and =divergence= (a venue whose branch state differs from
+  origin in both directions, written by roundup's cron pass). The
+  in-memory exile queue (=bebop--exile-proposals=) predates the ledger
+  and may fold into it later.
+
+One verb joins the allowlist: =relay-done SESSION FROM-HOST= — the
+relaying machine's ack after recreating a venue. Its handler only
+appends a =retire= proposal to the *receiving* machine's own ledger;
+the human rules on it at the next roundup checkpoint. Remote input
+stages, it never executes — the same stance as cron roundup.
+
+** Two-machine playbook
+
+The rhythm, assuming =bebop-call-mode= on both machines (both must have
+tangled a config that includes this section — the org file syncs, the
+=.el= does not):
+
+1. /Leaving a machine/: nothing required. Push what you'd hate to lose;
+   presence and charts carry the rest. The relay can always jam agents
+   later for anything you forgot.
+2. /Sitting down at the other machine/: =/bebop-relay=. It reads
+   presence to see whether the far Emacs is awake and what's live,
+   surveys, jams chart-first handoffs, recreates venues from origin,
+   and acks each with =relay-done=.
+3. /Reading the far machine without a round trip/: its
+   =presence.json= (awake? what's live? anything blocked?) and its
+   =proposals.json= (did it act on the retire proposals?) are plain
+   files in the mailbox — read, don't call.
+4. /Divergence/: if both machines advanced the same branch, relay and
+   cron roundup flag it to the ledger and stop. The fix is always plain
+   git by a human — fetch, look, merge or rebase by hand. Nothing in
+   bebop will ever do this for you; that is a feature.
+5. /Hygiene/: each machine's roundup checkpoint surfaces its own
+   pending proposals — retire entries from relays, divergence flags
+   from cron. Rule on them there; statuses sync out automatically.
+
+Failure modes and what they look like now: far Emacs asleep → stale
+presence timestamp, relay says so immediately. Far agent stuck on a
+permission prompt → fresh presence but no handoff; the chart-first jam
+means at minimum a =* Handoff= briefing (or =** Push blocked:= notice)
+tells you exactly what's stranded. Both machines edited a branch →
+=divergence= ledger entry names the venue and the ahead/behind counts.
+
+* Live Remote (design)
+
+A live remote is a broadcast from the venue: the band plays the club,
+the listener tunes in from home. Bebop's version inverts it — the band
+plays at home (the iMac, resident host, always on), and you tune in
+from wherever the laptop happens to be.
+
+This is the ssh/Tailscale territory the Call and Response section
+reserved. The mailbox stays what it is — async orchestration at Dropbox
+latency, no network required. Live Remote is the *interactive* channel:
+your MacBook Emacs drives the iMac's sessions as if it were sitting at
+the iMac, at conversation speed, over a network you don't trust to stay
+up.
+
+** Why the brain stays home
+
+Every Bebop contract is a local shell-out on one host: Emacs drives
+agents via =tmux load-buffer/paste-buffer/send-keys=, backline detects
+ports with local =lsof=, and — the load-bearing one — agents orient at
+birth by calling =emacsclient --eval= into the Emacs server *on their
+own machine*. Move the Emacs and the agents go blind; drop the wifi and
+they're orphaned mid-task.
+
+So the whole stack stays on the host: Emacs, the =claude= tmux session,
+venues, charts, agents. Nothing about the host's configuration changes.
+The remote is a *thin client* — it renders locally, edits locally, and
+executes verbs over ssh. If the cafe wifi dies, nothing on the host
+even notices; the client just goes quiet until the link returns.
+
+Three transports, three speeds, one verb surface:
+
+| Channel     | Latency   | Job                                     |
+|-------------+-----------+-----------------------------------------|
+| Dropbox     | ~5–20s    | Charts sync both ways; mailbox verbs    |
+| ssh         | ~100ms    | Live verbs, sends, dashboard refresh    |
+| mosh + tmux | keystroke | Watching a TTY live; the escape hatch   |
+
+The founding constraints carry over unchanged: git is the only medium
+for code state, charts are written by the session's own agent, the
+client stages and asks — it never owns.
+
+** Architecture
+
+A new module, =bebop-remote.el=, loaded on the client machine. It
+provides:
+
+- =bebop-remote--eval EXPR= — the transport primitive: run
+  =ssh HOST emacsclient --eval EXPR= and parse the JSON reply. Every
+  call is stateless; a dropped connection fails one refresh, not a
+  session.
+- A remote dashboard — the =*bebop*= buffer rendered from
+  =list-sessions= / =session-info= JSON instead of local tmux
+  discovery. Same faces, same dots, same keybindings where the verb
+  exists remotely.
+- Remote composition buffers — =*bebop-session: NAME*= buffers exactly
+  as today (org-mode, =bebop-composition-mode=, 2× font), except
+  =C-c C-c= pipes the buffer over =ssh HOST tmux load-buffer -= and
+  then =paste-buffer= / =send-keys C-m= — the same send pattern as
+  =bebop-send-buffer=, one hop longer.
+- Chart access needs nothing new: Dropbox already syncs
+  =~/Code/Org/charts/= to the client, so you read and cue from your
+  local copy at native speed. The 5–20s sync lag only matters for
+  *reading what an agent just wrote* — acceptable; the dashboard's
+  status column is the live signal, not the chart.
+
+The verb surface is =bebop-api='s citizen surface, reused verbatim.
+Over ssh the allowlist is no longer a security boundary (ssh
+authenticates you as the user; you could run anything), but it stays
+the *design* boundary: the client speaks only verbs, so host and
+client can evolve independently and the mailbox/ssh transports stay
+interchangeable. New verbs earn their place by being useful to both.
+
+Transport details: the ssh config uses Tailscale for reachability and
+=ControlMaster= for speed — one persistent multiplexed connection, so
+each verb is ~100ms instead of a full handshake. Before the first call,
+the client checks the host's =presence.json= (already in Dropbox) —
+"is the far Emacs awake" is answered without touching the network at
+all.
+
+** Ports: localhost must mean localhost
+
+Auth whitelists and OAuth redirects in the dev stack assume
+=localhost=. A bare Tailscale hostname breaks that; ssh local
+forwarding preserves it: =LocalForward 3000 localhost:3000= makes the
+client browser's =localhost:3000= *be* the host's =localhost:3000= —
+Host and Origin headers included.
+
+Backline already knows which ports each venue owns. The remote
+dashboard renders the same port annotations, and because the ssh
+connection is multiplexed, forwards can be added live without
+reconnecting: =ssh -O forward -L PORT:localhost:PORT HOST=. A =P= key
+on a dashboard session — "forward this session's ports here" — is the
+whole feature.
+
+** The escape hatch
+
+Live TTY interaction — watching an agent think, answering a permission
+prompt, hot-seating a backline shell — does not go through verbs. It
+goes through =mosh HOST= + =tmux attach -t claude=, which is built for
+exactly the cafe-wifi case: survives roaming, IP changes, and
+suspend/resume. The client offers this as a jump
+(=bebop-remote-attach=, or =RET= on a session) rather than reimplementing
+a terminal. Passthrough-over-ssh might work at Tailscale latency; it is
+explicitly out of scope until the verb loop proves insufficient.
+
+** Host duties
+
+The iMac earns resident-host status with three settings, none of them
+Bebop's code:
+
+- =sudo pmset -a sleep 0 displaysleep 10= — an asleep host is a dead
+  target; this is the number-one failure mode.
+- Remote Login (sshd) on, Tailscale up.
+- Emacs running with the server started (already unconditional in
+  =init.el=).
+
+** Phases
+
+1. /Plumbing/ — ssh config (Tailscale host entry, ControlMaster),
+   =bebop-remote--eval=, reachability check (presence file, then ssh
+   ping). Prove: =list-sessions= from the MacBook in under 200ms.
+2. /Read-only/ — remote dashboard rendering the far session pool.
+   Prove: dashboard refresh on a timer, statuses and dots correct.
+3. /Steering/ — remote composition buffers and the ssh send path;
+   =jam= parity. Prove: full compose → send → agent-acts loop from the
+   cafe.
+4. /Ports/ — backline port annotations remote-side, live =ssh -O
+   forward= from the dashboard. Prove: =localhost:3000= in a MacBook
+   browser hits the venue's dev server, auth intact.
+5. /Comforts/ — mosh attach jump, remote session creation
+   (needs enumeration verbs: repos, branches, charts — the
+   completing-read data), presence-aware degradation to mailbox verbs
+   when ssh is unreachable.
+
+** Open questions
+
+- /Naming/: =bebop-remote= (module) and Live Remote (concept) — or fold
+  the transport into =bebop-call= as a second carrier for the same
+  verbs? Leaning separate module, shared verb registry.
+- /Dual-role machines/: the MacBook still runs full local Bebop when
+  offline. Is remote a *mode* (one dashboard, host switchable) or a
+  *parallel surface* (=*bebop-remote*= alongside =*bebop*=)? Leaning
+  parallel surface first — simpler, honest about what's where — with
+  merge as a later possibility.
+- /Verb gaps/: dashboard parity likely wants a richer =list-sessions=
+  (statuses, ports, MR glyphs in one call) to avoid N round-trips.
+  One =dashboard-info= verb returning the whole pool may be the move.
+- /RAM/: 32GB hosts the fleet today; if concurrent Java builds +
+  dev servers + sessions start swapping, 2×16GB DDR4-2666 (~$200,
+  post-spike pricing) takes it to 64GB. Wait for evidence.
 
 * Environment
 
@@ -4477,15 +4710,23 @@ nil disables call-and-response on this machine."
   :type 'integer
   :group 'bebop)
 
+(defcustom bebop-presence-interval 300
+  "Seconds between presence heartbeat writes (see `* Two-machine protocol')."
+  :type 'integer
+  :group 'bebop)
+
 (defconst bebop-call-verbs
   '(("list-sessions"   . bebop-list-sessions)
     ("list-sets"       . bebop-list-sets)
     ("session-info"    . bebop-session-info)
     ("exile-proposals" . bebop-exile-proposals)
-    ("jam"             . bebop-jam))
+    ("jam"             . bebop-jam)
+    ("relay-done"      . bebop-relay-done))
   "Verb allowlist for incoming calls.
 Never dispatch arbitrary elisp from the mailbox: the call file is
-Dropbox-writable, and the allowlist is what keeps that acceptable.")
+Dropbox-writable, and the allowlist is what keeps that acceptable.
+`relay-done' stays within that stance: it only stages a proposal in
+this machine's own ledger; a human executes it at a roundup checkpoint.")
 #+end_src
 
 *** Mailbox files and state
@@ -4559,7 +4800,128 @@ malformed read is retried on the next poll rather than erroring."
 (defun bebop-call--poll ()
   (when (and bebop-call-dir (file-directory-p bebop-call-dir))
     (mapc #'bebop-call--dispatch
-          (append (bebop-call--read-json (bebop-call--call-file)) nil))))
+          (append (bebop-call--read-json (bebop-call--call-file)) nil))
+    (bebop-call--maybe-presence)))
+#+end_src
+
+*** Presence
+
+The heartbeat rides the poll timer but writes on its own slow cadence —
+the poll runs every 15 seconds, and writing presence that often would
+churn Dropbox for nothing. Staleness is the liveness signal: a reader
+that finds =at= older than a couple of intervals should assume this
+Emacs is asleep. Written once eagerly when the mode turns on, never
+deleted on disable.
+
+#+begin_src emacs-lisp
+(defvar bebop-call--presence-at nil
+  "Time of the last presence write, or nil before the first.")
+
+(defun bebop-call--presence-file (&optional host)
+  (expand-file-name (format "%s.presence.json" (or host bebop-call-host))
+                    bebop-call-dir))
+
+(defun bebop-call--write-presence ()
+  "Write this host's presence heartbeat to the mailbox."
+  (let* ((rows (bebop-set--rows))
+         (live (seq-filter (lambda (r) (plist-get r :live)) rows)))
+    (with-temp-file (bebop-call--presence-file)
+      (insert (json-serialize
+               (list :host bebop-call-host
+                     :at (bebop--now-string)
+                     :live (length live)
+                     :sessions
+                     (vconcat
+                      (mapcar (lambda (r)
+                                (list :name (plist-get r :name)
+                                      :status (symbol-name
+                                               (or (plist-get (plist-get r :live) :status)
+                                                   'unknown))))
+                              live))))))
+    (setq bebop-call--presence-at (current-time))))
+
+(defun bebop-call--maybe-presence ()
+  (when (or (null bebop-call--presence-at)
+            (>= (float-time (time-subtract (current-time) bebop-call--presence-at))
+                bebop-presence-interval))
+    (bebop-call--write-presence)))
+#+end_src
+
+*** Proposals ledger
+
+Each host owns =HOST.proposals.json= — the only writer is HOST itself,
+so a proposal always lives in the ledger of the machine that will act
+on it, and any other machine reads status for free off Dropbox. Entries
+carry =kind= (=retire=, =divergence=), =session=, optional =detail=,
+and a =status= lifecycle (=pending= → =approved= / =rejected= /
+=done=). Adding is idempotent while a matching entry is still pending,
+so cron roundup can re-flag the same divergence every run without
+growing the file. Capped at the most recent 100 entries, same as the
+response file.
+
+#+begin_src emacs-lisp
+(defun bebop-ledger--file (&optional host)
+  (expand-file-name (format "%s.proposals.json" (or host bebop-call-host))
+                    bebop-call-dir))
+
+(defun bebop-ledger--entries (&optional host)
+  (append (bebop-call--read-json (bebop-ledger--file host)) nil))
+
+(defun bebop-ledger--write (entries)
+  "Write ENTRIES to this host's own ledger, keeping the last 100."
+  (when (> (length entries) 100)
+    (setq entries (nthcdr (- (length entries) 100) entries)))
+  (with-temp-file (bebop-ledger--file)
+    (insert (json-serialize (vconcat entries)))))
+
+(defun bebop-ledger-read (&optional host)
+  "Return HOST's ledger (default: this host) as a JSON string."
+  (json-serialize (vconcat (bebop-ledger--entries host))))
+
+(defun bebop-ledger-add (kind session &optional detail)
+  "Queue a pending KIND proposal for SESSION in this host's ledger.
+Idempotent while a matching proposal is pending: re-adding refreshes
+DETAIL and the timestamp instead of duplicating. Returns the ledger as
+JSON."
+  (let* ((entries (bebop-ledger--entries))
+         (dup (seq-find (lambda (e)
+                          (and (equal (gethash "kind" e) kind)
+                               (equal (gethash "session" e) session)
+                               (equal (gethash "status" e) "pending")))
+                        entries)))
+    (if dup
+        (progn
+          (when detail (puthash "detail" detail dup))
+          (puthash "updated-at" (bebop--now-string) dup))
+      (let ((h (make-hash-table :test #'equal)))
+        (puthash "id" (format "%s-%s-%s-%s" bebop-call-host kind session
+                              (format-time-string "%s"))
+                 h)
+        (puthash "kind" kind h)
+        (puthash "session" session h)
+        (puthash "detail" (or detail :null) h)
+        (puthash "status" "pending" h)
+        (puthash "proposed-at" (bebop--now-string) h)
+        (puthash "updated-at" (bebop--now-string) h)
+        (setq entries (append entries (list h)))))
+    (bebop-ledger--write entries)
+    (bebop-ledger-read)))
+
+(defun bebop-ledger-set-status (id status)
+  "Set proposal ID in this host's ledger to STATUS. Returns the ledger as JSON."
+  (let ((entries (bebop-ledger--entries)))
+    (dolist (e entries)
+      (when (equal (gethash "id" e) id)
+        (puthash "status" status e)
+        (puthash "updated-at" (bebop--now-string) e)))
+    (bebop-ledger--write entries)
+    (bebop-ledger-read)))
+
+(defun bebop-relay-done (session to-host)
+  "Record that SESSION was relayed away to TO-HOST.
+Stages a retire proposal in this host's own ledger for the next roundup
+checkpoint; executes nothing."
+  (bebop-ledger-add "retire" session (format "relayed to %s" to-host)))
 #+end_src
 
 *** Mode
@@ -4576,6 +4938,7 @@ malformed read is retried on the next poll rather than erroring."
           (user-error "bebop-call: no Dropbox directory found"))
         (make-directory bebop-call-dir t)
         (bebop-call--seed-seen)
+        (bebop-call--write-presence)
         (setq bebop-call--timer
               (run-at-time bebop-call-poll-interval
                            bebop-call-poll-interval
