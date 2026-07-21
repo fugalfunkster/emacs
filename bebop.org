@@ -390,11 +390,15 @@ written only by its own host:
   in-memory exile queue (=bebop--exile-proposals=) predates the ledger
   and may fold into it later.
 
-One verb joins the allowlist: =relay-done SESSION FROM-HOST= — the
-relaying machine's ack after recreating a venue. Its handler only
-appends a =retire= proposal to the *receiving* machine's own ledger;
-the human rules on it at the next roundup checkpoint. Remote input
-stages, it never executes — the same stance as cron roundup.
+One verb joins the allowlist: =relay-done SESSION TO-HOST= — the
+relaying machine's ack after recreating a venue elsewhere. TO-HOST is
+where the session was relayed *to* (the machine running the relay). The
+call is dropped into the *source* machine's call file — the one still
+holding the now-relayed-away session — so its handler runs there and
+appends a =retire= proposal to that source machine's own ledger, the
+machine that must retire the leftover. The human rules on it at the
+next roundup checkpoint. Remote input stages, it never executes — the
+same stance as cron roundup.
 
 ** Two-machine playbook
 
