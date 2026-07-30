@@ -583,6 +583,164 @@ Bebop's code:
   dev servers + sessions start swapping, 2×16GB DDR4-2666 (~$200,
   post-spike pricing) takes it to 64GB. Wait for evidence.
 
+* HUD (design)
+
+The dashboard has grown from a session list into the place attention
+gets allocated — and the setlist tree made the pool *organized*
+without making it *legible*. Structure answers "where does this
+session live"; it does not answer "what changed while I was
+heads-down." The HUD work makes the dashboard answer the second
+question at a glance, on the way to eventually answering it from the
+mode-line without looking at all.
+
+Two principles govern everything below:
+
+- *Structure for navigation, salience for attention.* Sections and
+  sets say where things are; brightness says what needs you. The two
+  systems never trade jobs, so folding a set can organize without
+  concealing.
+- *Spend darkness, not brightness.* The steady state of a healthy
+  pool is a dim buffer. Merged MRs, green pipelines, idle sessions —
+  quiet gray. If everything nominal is muted, the three bright cells
+  in the buffer are the three things needing you, and you stop
+  reading and start seeing.
+
+** Two speeds, two owners
+
+The two-speed pattern the MR gutter established generalizes to the
+whole HUD:
+
+| Lane | Source                                 | Cadence | Storage                        |
+|------+----------------------------------------+---------+--------------------------------|
+| Fast | tmux poll (=bebop--poll-all=)          | seconds | in-memory                      |
+| Slow | out-of-band fetchers (roundup, pulse)  | minutes | sidecar JSON, render-path-read |
+
+Orthogonal to lanes is an ownership split that keeps the files
+honest: sidecars hold *observed* state and only fetchers write them;
+=bebop-state.json= holds *your relationship to* that state — ack
+snapshots, activity timestamps — and only the dashboard writes it.
+A fetcher never knows what you've seen; the dashboard never fakes
+what GitLab said.
+
+** Glyph taxonomy
+
+The gutter today: dot 0, chart 2, venue 4, MR 6, name at 8. It grows
+one slot — pipeline at 8, name to 10.
+
+| Col | Glyph    | Kind    | Attention states     | Nominal states          |
+|-----+----------+---------+----------------------+-------------------------|
+|   0 | ● / ○    | dynamic | waiting, blocked     | active, on deck         |
+|   2 | ⊞ chart  | static  | —                    | present (dim)           |
+|   4 | ⎇ venue  | static  | —                    | present (dim)           |
+|   6 | MR       | dynamic | ◆ unresolved         | ✎ draft ◇ open ✓ merged |
+|   8 | pipeline | dynamic | ✗ failed             | ⟳ running ✓ passed      |
+
+Under the darkness discipline, pipeline-passed renders dim — and the
+MR merged ✓ demotes from green to dim with it. Green celebration
+reads as signal; a merged MR asks nothing of you.
+
+** Transitions outrank states
+
+A red pipeline you have already seen and one that flipped red since
+you last looked are different objects. Every dynamic glyph therefore
+renders against an *ack snapshot*: the per-session record of glyph
+states as of your last visit, persisted in =bebop-state.json= session
+meta so an Emacs restart doesn't re-flash the world as new. A glyph
+matching its snapshot renders its normal (usually dim) self; a glyph
+that differs renders emphasized — bright, bold — until acked.
+
+Acking is zero-ceremony: *visiting a session acks all its glyphs*
+(=RET= / selection — the same gesture that was already "I'm looking
+at this now"). One dashboard key marks everything seen for the
+mornings where the whole pool changed overnight. No per-glyph
+acknowledgment; that is ceremony to resent.
+
+** Recency
+
+The fast lane starts keeping time: status transitions (from the poll
+loop's edge detection) and sends (jam) stamp a =:last-activity= in
+session meta. That buys, in order:
+
+- An age column at the right margin — =5m=, =2h=, =3d= — the answer
+  to "which of these did I touch today."
+- Whole-row dimming past =bebop-hud-quiet-hours= (default 4): the dot
+  keeps its status color, the name drops to shadow. On-deck rows
+  already live dim; this extends the gradient to live-but-quiet, so
+  row brightness tracks recency of attention rather than mere
+  liveness.
+
+** The marquee
+
+The attention lane — the sign outside the club saying who's on
+tonight. A section above the live strip listing every session with an
+unacked attention state (agent waiting, ◆ unresolved comments, ✗
+failed pipeline), regardless of set membership or fold state. It is a
+*projection, not a move*: the row still renders in its home section;
+the marquee is a second listing whose =RET= lands in the same place.
+Renders only when non-empty, ordered worst-first then most-recent.
+This solves the fold problem directly — a waiting session inside a
+collapsed set cannot hide.
+
+Set headings reinforce rather than substitute:
+=bebop-set--heading-counts= gains a fourth column tallying unacked
+attention states in red, so even the fold line admits what it's
+sitting on.
+
+** Pulse
+
+Roundup =--cron= owns the deep audit — Jira joins, recommendations,
+chart writes. The HUD wants a slimmer, more frequent heartbeat.
+*Pulse* is that fetcher: walk the live venues' branches, ask GitLab
+for MR state and head-pipeline status, write the sidecar through
+citizen verbs, every ~10 minutes. No Jira, no chart writes, no
+opinions.
+
+The sidecar generalizes: =bebop-mr-cache.json= becomes an
+external-status cache holding =mr= and =pipeline= entries per session
+(schema extension in place or a renamed file — implementation's
+choice), and the verb surface gains the pipeline write to match
+=bebop-mr-cache-set=. Roundup keeps writing through the same verbs;
+pulse and roundup are two clients of one surface.
+
+Location matters for later: a sidecar under the Dropbox-synced org
+tree (rather than =user-emacs-directory=) is readable by the Live
+Remote client for free — fetch once at home, render at the cafe.
+
+** Periphery
+
+Deferred until the marquee proves the membership rules: a mode-line
+lighter with the counts (=● 2 ◆ 1 ✗ 1=) visible from every buffer and
+Solo frame — the dashboard becomes where attention gets *resolved*,
+not discovered — and notifications for chosen transitions (pipeline
+flips red, new MR comment), one =bebop--notify-waiting= cousin away.
+
+** Phases
+
+1. /Timekeeping/ — activity timestamps in the fast lane, age column,
+   quiet-hours dimming. Prove: a glance separates this-hour sessions
+   from yesterday's.
+2. /Seen-unseen/ — ack snapshots in session meta, emphasis rendering,
+   visit-acks, mark-all-seen key. Prove: an MR flips while you're
+   away → bright ◆; visit the session; return to a dim glyph.
+3. /Marquee/ — the lane plus the heading attention column. Prove: a
+   waiting session inside a folded set surfaces on top.
+4. /Pulse/ — pipeline fetch, sidecar generalization, pipeline glyph.
+   Prove: a red pipeline appears within ten minutes, promotes to the
+   marquee, acks away on visit.
+5. /Periphery/ — mode-line counts, transition notifications.
+
+** Open questions
+
+- Mark-all-seen key: =g= is taken by refresh; =.= is the current
+  candidate.
+- Sidecar location: move under the synced org tree now (Live Remote
+  reads it free) or at phase 4.
+- The right region on narrow frames: ports and the age column may
+  crowd; age likely wins and ports fall back to the detail view.
+- Whether marquee membership is exactly "unacked attention state" or
+  needs a snooze verb once real usage shows a chronically red
+  pipeline you've decided not to care about yet.
+
 * Environment
 
 | Path                                    | Purpose                                  |
