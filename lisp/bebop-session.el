@@ -271,6 +271,7 @@ Signals if NAME has no live tmux window."
                            "tmux" nil nil nil "load-buffer" "-"))
     (call-process "tmux" nil nil nil "paste-buffer" "-d" "-t" pane)
     (call-process "tmux" nil nil nil "send-keys" "-t" pane "C-m")
+    (run-hook-with-args 'bebop-session-activity-functions name 'send)
     (format "jammed: %s" name)))
 
 (defun bebop--session-venue (name)
@@ -566,7 +567,9 @@ to `bebop-exile-session'.  Otherwise falls through to the interactive prompt."
 (defun bebop-composition-send ()
   "Send this composition buffer to its Claude session."
   (interactive)
-  (bebop-send-buffer))
+  (bebop-send-buffer)
+  (when-let ((name (or bebop--composition-session bebop--active-session)))
+    (run-hook-with-args 'bebop-session-activity-functions name 'send)))
 
 (defun bebop-composition--enable ()
   "Activate composition-buffer settings in the current buffer."

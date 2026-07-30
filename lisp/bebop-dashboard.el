@@ -121,6 +121,14 @@ PINFO is a plist with keys :window :status :pane-id.")
 (defvar bebop--last-status-details nil
   "Alist of (SESSION-NAME . plist) with recent status inference details.")
 
+(defvar bebop-session-activity-functions nil
+  "Abnormal hook run with (NAME EVENT) when a session shows real activity.
+EVENT is a symbol: `transition' (the agent crossed between working and
+waiting, per the poll loop's edge detection) or `send' (a prompt went
+to the agent — composition buffer or jam). Downstream modules subscribe
+to keep time; the dashboard itself stores nothing. This is the HUD's
+timekeeping signal — see the HUD design section.")
+
 (defun bebop--tmux-window-name (pair-name)
   "Return the tmux window name for PAIR-NAME.
 If PAIR-NAME starts with /, the window name is everything after the /."
@@ -618,7 +626,15 @@ fold state preserved across poll re-renders via the visibility cache.
                   (plist-put info :status new-status)
                   (setq changed t)
                   (when (memq new-status '(waiting blocked))
-                    (bebop--notify-waiting name)))
+                    (bebop--notify-waiting name))
+                  ;; Activity means the agent crossed between working and
+                  ;; waiting. A nil old-status is discovery (first poll
+                  ;; after restart), and degraded/unknown edges are infra
+                  ;; noise — neither says the agent did anything.
+                  (when (and (memq old-status '(active waiting blocked))
+                             (memq new-status '(active waiting blocked)))
+                    (run-hook-with-args 'bebop-session-activity-functions
+                                        name 'transition)))
                 (when (and (eq new-status 'unknown)
                            (not (eq old-status 'unknown)))
                   (message "Bebop: %s status uncertain (%s)" name reason)))))))

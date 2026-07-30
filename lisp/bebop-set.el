@@ -22,7 +22,8 @@ in later phases; a set is at minimum a name.")
 
 (defvar bebop--session-meta nil
   "Alist of (SESSION-NAME . PLIST) persisting per-session choices.
-PLIST keys: :set (string or nil).
+PLIST keys: :set (string or nil), :last-activity (ISO timestamp
+string, stamped by the HUD's timekeeping — see below).
 Keyed by name, independent of liveness — applies equally to running
 sessions and on-deck artifacts.")
 
@@ -45,6 +46,8 @@ consumed interactively. Persisted with the other choices.")
       (let ((entry (make-hash-table :test #'equal)))
         (when-let ((s (plist-get (cdr cell) :set)))
           (puthash "set" s entry))
+        (when-let ((a (plist-get (cdr cell) :last-activity)))
+          (puthash "last-activity" a entry))
         (when (> (hash-table-count entry) 0)
           (puthash (car cell) entry sessions))))
     (puthash "version" 2 doc)
@@ -77,8 +80,11 @@ format was written by a retired implementation and never read)."
             (when-let ((sessions (gethash "sessions" doc)))
               (maphash (lambda (name entry)
                          (push (cons name
-                                     (when-let ((s (gethash "set" entry)))
-                                       (list :set s)))
+                                     (append
+                                      (when-let ((s (gethash "set" entry)))
+                                        (list :set s))
+                                      (when-let ((a (gethash "last-activity" entry)))
+                                        (list :last-activity a))))
                                bebop--session-meta))
                        sessions))
             (setq bebop--sets (nreverse bebop--sets)
@@ -122,6 +128,47 @@ format was written by a retired implementation and never read)."
    (append (mapcar #'car bebop--sets)
            (delq nil (mapcar (lambda (c) (plist-get (cdr c) :set))
                              bebop--session-meta)))))
+
+(defcustom bebop-hud-quiet-hours 4
+  "Hours without activity after which a live row's name dims to shadow.
+The dot keeps its status color; only the name quiets. Row brightness
+tracks recency of attention, not mere liveness."
+  :type 'number
+  :group 'bebop)
+
+(defun bebop-set--stamp-activity (name _event)
+  "Stamp NAME's :last-activity with now. Hook target."
+  (bebop-set--update-session-meta name :last-activity (bebop--now-string)))
+
+(add-hook 'bebop-session-activity-functions #'bebop-set--stamp-activity)
+
+(defun bebop-set--last-activity (name)
+  "Return NAME's persisted :last-activity ISO string, or nil."
+  (plist-get (bebop-set--session-meta name) :last-activity))
+
+(defun bebop-set--age-seconds (iso)
+  "Return seconds elapsed since ISO timestamp, or nil if unparseable."
+  (when iso
+    (condition-case nil
+        (max 0 (- (float-time) (float-time (date-to-time iso))))
+      (error nil))))
+
+(defun bebop-set--age-string (iso)
+  "Render ISO timestamp's age compactly: \"5m\", \"2h\", \"3d\".
+Nil when ISO is nil or unparseable — no stamp, no column."
+  (when-let ((secs (bebop-set--age-seconds iso)))
+    (cond
+     ((< secs 3600)  (format "%dm" (floor secs 60)))
+     ((< secs 86400) (format "%dh" (floor secs 3600)))
+     (t              (format "%dd" (floor secs 86400))))))
+
+(defun bebop-set--quiet-p (name)
+  "Return non-nil if NAME's last activity is older than the quiet threshold.
+No recorded activity is not quiet — never-stamped sessions stay bright
+until their first real edge, rather than the whole pool dimming on the
+feature's first render."
+  (when-let ((secs (bebop-set--age-seconds (bebop-set--last-activity name))))
+    (> secs (* bebop-hud-quiet-hours 3600))))
 
 (defun bebop-new-set (name)
   "Declare a new set NAME — the manual path for ticketless groupings."
@@ -481,22 +528,28 @@ lone outlier past the cap simply overflows its own line."
          (face (cond
                 ((and live (equal name bebop--active-session))
                  'bebop-selected-face)
+                ((and live (bebop-set--quiet-p name)) 'shadow)
                 (live 'bebop-session-face)
                 (t 'shadow)))
          (ports (bebop-set--backline-ports (plist-get row :venue)))
+         (age (bebop-set--age-string (bebop-set--last-activity name)))
          (start (point)))
     (magit-insert-section (bebop-session-row name)
       (insert (bebop-set--gutter row))
       (insert indent)
       (insert (bebop-set--prop name face))
-      ;; Right region: backline ports, anchored off the name column so
-      ;; they form a true column down the tree. (MR status now lives in
-      ;; the left gutter alongside the other per-session glyphs.)
+      ;; Right region: backline ports anchored off the name column so
+      ;; they form a true column down the tree; the age column hangs on
+      ;; the window's right edge — the HUD's answer to "which of these
+      ;; did I touch today." (MR status lives in the left gutter.)
       (when ports
         (insert (bebop-set--stop (+ bebop-set--name-col width)))
         (insert (bebop-set--prop
                  (mapconcat (lambda (p) (format ":%d" p)) ports " ")
                  'shadow)))
+      (when age
+        (insert (bebop-set--stop '(- right 5)))
+        (insert (bebop-set--prop (format "%4s" age) 'shadow)))
       (insert "\n")
       (add-text-properties
        start (point)
