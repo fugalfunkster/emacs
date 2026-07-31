@@ -287,6 +287,62 @@ ISO timestamps compare lexicographically; never-stamped rows sink."
       (string> (or (bebop-set--last-activity (plist-get a :name)) "")
                (or (bebop-set--last-activity (plist-get b :name)) "")))))
 
+(defun bebop-hud--notify (fmt &rest args)
+  "Ding and message — `bebop--notify-waiting''s cousin for external edges."
+  (ding t)
+  (message "Bebop: %s" (apply #'format fmt args)))
+
+(defvar bebop-hud--periphery nil
+  "Cached mode-line segment, or nil while the marquee is dark.
+Recomputed by `bebop-hud--update-periphery' at render time.")
+
+(defun bebop-hud--update-periphery (rows)
+  "Recompute the periphery counts from ROWS and refresh mode-lines."
+  (let ((dots 0) (pipes 0) (mrs 0))
+    (dolist (r rows)
+      (let* ((name (plist-get r :name))
+             (live (plist-get r :live))
+             (status (and live (plist-get live :status))))
+        (when (and (memq status '(waiting blocked))
+                   (bebop-set--unseen-status-p name status))
+          (setq dots (1+ dots)))
+        (let ((p (bebop-pipeline--entry name)))
+          (when (and p (equal (plist-get p :status) "failed")
+                     (not (bebop-pipeline--stale-p p))
+                     (bebop-set--unseen-pipeline-p
+                      name (bebop-pipeline--key p)))
+            (setq pipes (1+ pipes))))
+        (let ((e (bebop-mr--entry name)))
+          (when (and e (> (or (plist-get e :unresolved) 0) 0)
+                     (not (bebop-mr--stale-p e))
+                     (bebop-set--unseen-mr-p name (bebop-mr--key e)))
+            (setq mrs (1+ mrs))))))
+    (setq bebop-hud--periphery
+          (when (> (+ dots pipes mrs) 0)
+            (concat " "
+                    (mapconcat
+                     #'identity
+                     (delq nil
+                           (list
+                            (when (> dots 0)
+                              (bebop-set--prop (format "● %d" dots)
+                                               'bebop-dot-waiting-face))
+                            (when (> pipes 0)
+                              (bebop-set--prop (format "✗ %d" pipes)
+                                               'bebop-dot-waiting-face))
+                            (when (> mrs 0)
+                              (bebop-set--prop (format "◆ %d" mrs)
+                                               'bebop-dot-waiting-face))))
+                     "  ")
+                    " "))))
+  (force-mode-line-update t))
+
+(defun bebop-hud--modeline ()
+  "Return the periphery segment for `global-mode-string'."
+  (or bebop-hud--periphery ""))
+
+(add-to-list 'global-mode-string '(:eval (bebop-hud--modeline)) t)
+
 (defun bebop-new-set (name)
   "Declare a new set NAME — the manual path for ticketless groupings."
   (interactive "sNew set name: ")
@@ -582,23 +638,36 @@ doesn't exist yet, fold the old one in and write it."
 (defun bebop-mr-cache-set (session state unresolved &optional iid)
   "Cache MR STATE (\"draft\"|\"open\"|\"merged\") and UNRESOLVED count for SESSION.
 Citizen write verb — pulse and roundup call it as a byproduct of
-their GitLab fetches; the render path only reads. Stamps now."
-  (let ((cell (bebop-external--cell session)))
+their GitLab fetches; the render path only reads. Stamps now.
+A rising unresolved count dings (see Periphery); a first observation
+never does — a transition needs a before."
+  (let* ((cell (bebop-external--cell session))
+         (prior (plist-get (cdr cell) :mr))
+         (old (and prior (or (plist-get prior :unresolved) 0)))
+         (new (or unresolved 0)))
     (setcdr cell (plist-put (cdr cell) :mr
                             (list :state state
-                                  :unresolved (or unresolved 0)
+                                  :unresolved new
                                   :iid iid
-                                  :at (bebop--now-string)))))
+                                  :at (bebop--now-string))))
+    (when (and old (> new old))
+      (bebop-hud--notify "new MR comment on %s (%d unresolved)"
+                         session new)))
   (bebop-external--save)
   (format "mr cached: %s" session))
 
 (defun bebop-pipeline-cache-set (session status)
   "Cache head-pipeline STATUS (\"success\"|\"failed\"|\"running\"|...) for SESSION.
-Citizen write verb, `bebop-mr-cache-set's pipeline twin. Stamps now."
-  (let ((cell (bebop-external--cell session)))
+Citizen write verb, `bebop-mr-cache-set's pipeline twin. Stamps now.
+A flip to failed dings (see Periphery); a first observation never
+does."
+  (let* ((cell (bebop-external--cell session))
+         (old (plist-get (plist-get (cdr cell) :pipeline) :status)))
     (setcdr cell (plist-put (cdr cell) :pipeline
                             (list :status status
-                                  :at (bebop--now-string)))))
+                                  :at (bebop--now-string))))
+    (when (and old (not (equal old "failed")) (equal status "failed"))
+      (bebop-hud--notify "pipeline failed — %s" session)))
   (bebop-external--save)
   (format "pipeline cached: %s" session))
 
@@ -927,6 +996,7 @@ RET reads, so activation works from either listing."
       ;; they would become foldable content and shift on toggle. The
       ;; marquee label is likewise a plain line, not a section heading —
       ;; folding away attention would defeat the lane.
+      (bebop-hud--update-periphery rows)
       (let ((marquee (sort (seq-filter #'bebop-set--marquee-p rows)
                            #'bebop-set--marquee<)))
         (when marquee
