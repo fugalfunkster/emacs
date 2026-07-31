@@ -436,15 +436,15 @@ tells you exactly what's stranded. Both machines edited a branch →
 
 A live remote is a broadcast from the venue: the band plays the club,
 the listener tunes in from home. Bebop's version inverts it — the band
-plays at home (the iMac, resident host, always on), and you tune in
-from wherever the laptop happens to be.
+plays at home (the Mac Pro, resident host, always on), and you tune in
+from wherever your Emacs happens to be: the iMac cockpit at the desk,
+the MacBook at the cafe.
 
 This is the ssh/Tailscale territory the Call and Response section
 reserved. The mailbox stays what it is — async orchestration at Dropbox
 latency, no network required. Live Remote is the *interactive* channel:
-your MacBook Emacs drives the iMac's sessions as if it were sitting at
-the iMac, at conversation speed, over a network you don't trust to stay
-up.
+a client Emacs drives the Mac Pro's sessions as if seated at it, at
+conversation speed, over a network you don't trust to stay up.
 
 ** Why the brain stays home
 
@@ -539,14 +539,36 @@ explicitly out of scope until the verb loop proves insufficient.
 
 ** Host duties
 
-The iMac earns resident-host status with three settings, none of them
-Bebop's code:
+The Mac Pro earns resident-host status with three settings, none of
+them Bebop's code:
 
 - =sudo pmset -a sleep 0 displaysleep 10= — an asleep host is a dead
   target; this is the number-one failure mode.
-- Remote Login (sshd) on, Tailscale up.
+- Remote Login (sshd) on, Tailscale up. /Status: sshd is on; the Pro
+  is *not* on the tailnet yet — today's reach is LAN-only, so the
+  cafe story waits on Tailscale enrollment./
 - Emacs running with the server started (already unconditional in
   =init.el=).
+
+** In production (2026-07-31)
+
+Development moved to the Mac Pro today — sessions relayed over the
+mailbox, the Pro is the resident host, and the iMac became the
+cockpit: the first thin client, ahead of any =bebop-remote.el=. What
+carries the traffic until the verb loop exists:
+
+- =~/.ssh/config.local= — a =macpro= host block with =ControlMaster=,
+  so repeated connections ride one multiplexed channel.
+- =mosh macpro= + =tmux attach -t claude= — the escape hatch from
+  this design, promoted to the whole show for now. mosh is in the
+  dotfiles Brewfile, so every machine grows the client.
+- The HUD's per-host status sidecar
+  (=~/Code/Org/.bebop/HOST.status.json=, phase 4) is already the
+  first Live Remote artifact in production: the host fetches GitLab
+  once, Dropbox carries the snapshot, and any client reads the host's
+  MR and pipeline state at native speed without holding a GitLab
+  credential. The read-at-the-cafe pattern works before a single verb
+  crosses the wire.
 
 ** Phases
 
@@ -571,11 +593,12 @@ Bebop's code:
 - /Naming/: =bebop-remote= (module) and Live Remote (concept) — or fold
   the transport into =bebop-call= as a second carrier for the same
   verbs? Leaning separate module, shared verb registry.
-- /Dual-role machines/: the MacBook still runs full local Bebop when
-  offline. Is remote a *mode* (one dashboard, host switchable) or a
-  *parallel surface* (=*bebop-remote*= alongside =*bebop*=)? Leaning
-  parallel surface first — simpler, honest about what's where — with
-  merge as a later possibility.
+- /Dual-role machines/: no longer hypothetical — the iMac is
+  dual-role today, hosting its own local sessions while cockpiting
+  the Pro over mosh. Practice so far favors the parallel-surface
+  answer (local =*bebop*= for local sessions, a separate window into
+  the Pro's world), which is also the simpler build: keep leaning
+  that way, merge as a later possibility.
 - /Verb gaps/: dashboard parity likely wants a richer =list-sessions=
   (statuses, ports, MR glyphs in one call) to avoid N round-trips.
   One =dashboard-info= verb returning the whole pool may be the move.
