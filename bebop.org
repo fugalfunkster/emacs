@@ -734,8 +734,9 @@ flips red, new MR comment), one =bebop--notify-waiting= cousin away.
 ** Open questions
 
 - Mark-all-seen key: decided in phase 2 — =.= (=g= is refresh).
-- Sidecar location: move under the synced org tree now (Live Remote
-  reads it free) or at phase 4.
+- Sidecar location: decided at phase 4 — =~/Code/Org/.bebop/HOST.status.json=,
+  per-host, Dropbox-synced; the old MR sidecar migrates in on first
+  load.
 - The right region on narrow frames: ports and the age column may
   crowd; age likely wins and ports fall back to the detail view.
 - Whether marquee membership is exactly "unacked attention state" or
@@ -964,6 +965,7 @@ not a Bebop problem. The fix lives in =emacs.org=.
   - [[*Bebop — API (bebop-api.el)][Bebop API]] (=bebop-api.el=) — JSON citizen surface for agents
   - [[*Bebop — Call (bebop-call.el)][Bebop Call]] (=bebop-call.el=) — cross-machine mailbox over Dropbox
   - [[*Bebop — Frame (bebop-frame.el)][Bebop Frame]] (=bebop-frame.el=) — Conductor and Solo frame layouts
+  - [[*Pulse (bin/bebop-pulse.py)][Pulse]] (=bin/bebop-pulse.py=) — slow-lane fetcher: MR + pipeline status via glab, on cron
 
 * Implementation
 
@@ -4072,9 +4074,9 @@ in later phases; a set is at minimum a name.")
 (defvar bebop--session-meta nil
   "Alist of (SESSION-NAME . PLIST) persisting per-session choices.
 PLIST keys: :set (string or nil), :last-activity (ISO timestamp
-string, stamped by the HUD's timekeeping), :acked-status and
-:acked-mr (the seen-unseen ack snapshot — glyph states as of the
-last visit).
+string, stamped by the HUD's timekeeping), :acked-status, :acked-mr,
+and :acked-pipeline (the seen-unseen ack snapshot — glyph states as
+of the last visit).
 Keyed by name, independent of liveness — applies equally to running
 sessions and on-deck artifacts.")
 
@@ -4103,6 +4105,8 @@ consumed interactively. Persisted with the other choices.")
           (puthash "acked-status" a entry))
         (when-let ((a (plist-get (cdr cell) :acked-mr)))
           (puthash "acked-mr" a entry))
+        (when-let ((a (plist-get (cdr cell) :acked-pipeline)))
+          (puthash "acked-pipeline" a entry))
         (when (> (hash-table-count entry) 0)
           (puthash (car cell) entry sessions))))
     (puthash "version" 2 doc)
@@ -4143,7 +4147,9 @@ format was written by a retired implementation and never read)."
                                       (when-let ((a (gethash "acked-status" entry)))
                                         (list :acked-status a))
                                       (when-let ((a (gethash "acked-mr" entry)))
-                                        (list :acked-mr a))))
+                                        (list :acked-mr a))
+                                      (when-let ((a (gethash "acked-pipeline" entry)))
+                                        (list :acked-pipeline a))))
                                bebop--session-meta))
                        sessions))
             (setq bebop--sets (nreverse bebop--sets)
@@ -4298,6 +4304,12 @@ an MR appearing after an ack still reads as a change."
   (when-let ((acked (bebop-set--acked name :acked-mr)))
     (not (equal acked (or key "none")))))
 
+(defun bebop-set--unseen-pipeline-p (name key)
+  "Non-nil if NAME's pipeline KEY differs from its acked snapshot.
+Same \"none\" convention as `bebop-set--unseen-mr-p'."
+  (when-let ((acked (bebop-set--acked name :acked-pipeline)))
+    (not (equal acked (or key "none")))))
+
 (defun bebop-set-ack-session (name)
   "Snapshot NAME's dynamic glyph states as seen."
   (let ((live (cdr (assoc name bebop--live-sessions))))
@@ -4305,7 +4317,9 @@ an MR appearing after an ack still reads as a change."
      name
      :acked-status (when-let ((s (and live (plist-get live :status))))
                      (symbol-name s))
-     :acked-mr (or (bebop-mr--key (bebop-mr--entry name)) "none"))))
+     :acked-mr (or (bebop-mr--key (bebop-mr--entry name)) "none")
+     :acked-pipeline (or (bebop-pipeline--key (bebop-pipeline--entry name))
+                         "none"))))
 
 (defun bebop-set--ack-on-select (&rest _)
   "Ack the newly active session — visiting is the ack gesture."
@@ -4328,13 +4342,14 @@ an MR appearing after an ack still reads as a change."
 Phase 3 of the HUD design: the attention lane — the sign outside the
 club saying who's on tonight. Membership is /unacked attention
 state/: an agent that flipped to waiting or blocked since you last
-visited, or unresolved MR comments you haven't seen (stale MR data
-never qualifies — old news doesn't earn the lane). A projection, not
-a move: the row still renders in its home section; the marquee is a
-second listing whose =RET= lands in the same place. Visiting acks,
-acking leaves the lane — the amber dot or ◆ stays in the tree, so
-nothing is forgotten, only quieted. Ordered worst-first (blocked,
-waiting, comments), most-recent within a rank.
+visited, a pipeline that failed, or unresolved MR comments you
+haven't seen (stale external data never qualifies — old news doesn't
+earn the lane). A projection, not a move: the row still renders in
+its home section; the marquee is a second listing whose =RET= lands
+in the same place. Visiting acks, acking leaves the lane — the dot,
+✗, or ◆ stays in the tree, so nothing is forgotten, only quieted.
+Ordered worst-first (blocked, waiting, failed pipeline, comments),
+most-recent within a rank.
 
 #+begin_src emacs-lisp
 (defun bebop-set--marquee-p (row)
@@ -4344,6 +4359,11 @@ waiting, comments), most-recent within a rank.
          (status (and live (plist-get live :status))))
     (or (and (memq status '(waiting blocked))
              (bebop-set--unseen-status-p name status))
+        (let ((p (bebop-pipeline--entry name)))
+          (and p
+               (equal (plist-get p :status) "failed")
+               (not (bebop-pipeline--stale-p p))
+               (bebop-set--unseen-pipeline-p name (bebop-pipeline--key p))))
         (let ((e (bebop-mr--entry name)))
           (and e
                (> (or (plist-get e :unresolved) 0) 0)
@@ -4351,15 +4371,21 @@ waiting, comments), most-recent within a rank.
                (bebop-set--unseen-mr-p name (bebop-mr--key e)))))))
 
 (defun bebop-set--marquee-rank (row)
-  "Return ROW's severity rank for marquee ordering — lower is worse."
+  "Return ROW's severity rank for marquee ordering — lower is worse.
+Blocked, waiting, failed pipeline, then comments."
   (let* ((name (plist-get row :name))
          (live (plist-get row :live))
-         (status (and live (plist-get live :status))))
+         (status (and live (plist-get live :status)))
+         (p (bebop-pipeline--entry name)))
     (cond ((and (eq status 'blocked)
                 (bebop-set--unseen-status-p name status)) 0)
           ((and (eq status 'waiting)
                 (bebop-set--unseen-status-p name status)) 1)
-          (t 2))))
+          ((and p (equal (plist-get p :status) "failed")
+                (not (bebop-pipeline--stale-p p))
+                (bebop-set--unseen-pipeline-p name (bebop-pipeline--key p)))
+           2)
+          (t 3))))
 
 (defun bebop-set--marquee< (a b)
   "Order marquee rows worst-first, then most recent activity first.
@@ -4563,16 +4589,23 @@ set's own session, by naming convention); otherwise the gutter is blank.
    ((memq status '(unknown degraded)) 'bebop-dot-degraded-face)
    (t 'bebop-dot-active-face)))
 
-;; MR review status — the two-speed dashboard's slow lane. The left
-;; gutter is local and live (every render); MR status is external
-;; (GitLab), so it is fetched out of band by roundup, cached to a
-;; sidecar, and only READ here. A cached status older than
-;; `bebop-mr-stale-hours' renders dimmed so a stale snapshot never
-;; masquerades as current.
+;; External status — the two-speed dashboard's slow lane. The left
+;; gutter is local and live (every render); MR review and pipeline
+;; status are external (GitLab), so they are fetched out of band —
+;; pulse on its heartbeat, roundup during its audit — written through
+;; the citizen verbs, and only READ here. A cached status older than
+;; its stale threshold renders dimmed so an old snapshot never
+;; masquerades as current. The sidecar lives under the Dropbox-synced
+;; org tree, named for this host: a Live Remote client can read the
+;; host's snapshot at native speed without touching GitLab.
 
-(defcustom bebop-mr-cache-file (locate-user-emacs-file "bebop-mr-cache.json")
-  "Sidecar file caching per-session MR review status.
-Populated out of band by roundup; read-only from the render path."
+(defcustom bebop-external-cache-file
+  (expand-file-name
+   (format "%s.status.json" (car (split-string (system-name) "\\.")))
+   "~/Code/Org/.bebop/")
+  "Sidecar caching per-session external status (MR review, pipeline).
+Written by out-of-band fetchers through the citizen verbs; read-only
+from the render path."
   :type 'file
   :group 'bebop)
 
@@ -4581,68 +4614,142 @@ Populated out of band by roundup; read-only from the render path."
   :type 'number
   :group 'bebop)
 
-(defvar bebop--mr-cache nil
-  "Alist of (SESSION . PLIST). PLIST keys: :state :unresolved :iid :at.")
+(defcustom bebop-pipeline-stale-hours 2
+  "Hours after which a cached pipeline status renders dimmed.
+Short by design: pipelines move fast, and a dim glyph doubles as the
+signal that pulse has stopped beating."
+  :type 'number
+  :group 'bebop)
 
-(defun bebop-mr--load ()
-  "Load the MR status cache from `bebop-mr-cache-file'."
-  (setq bebop--mr-cache nil)
-  (when (file-exists-p bebop-mr-cache-file)
+(defvar bebop--external-cache nil
+  "Alist of (SESSION . PLIST). PLIST keys: :mr :pipeline.
+:mr is (:state :unresolved :iid :at); :pipeline is (:status :at).")
+
+(defun bebop-external--load ()
+  "Load the external-status cache, importing the old MR sidecar once.
+The pre-pulse cache lived at bebop-mr-cache.json under
+`user-emacs-directory' and held bare MR entries; if the new file
+doesn't exist yet, fold the old one in and write it."
+  (setq bebop--external-cache nil)
+  (cond
+   ((file-exists-p bebop-external-cache-file)
+    (condition-case nil
+        (let* ((doc (with-temp-buffer
+                      (insert-file-contents bebop-external-cache-file)
+                      (json-parse-buffer)))
+               (sessions (gethash "sessions" doc)))
+          (when sessions
+            (maphash
+             (lambda (name e)
+               (push (cons name
+                           (append
+                            (when-let ((m (gethash "mr" e)))
+                              (list :mr
+                                    (list :state (gethash "state" m)
+                                          :unresolved (or (gethash "unresolved" m) 0)
+                                          :iid (gethash "iid" m)
+                                          :at (gethash "at" m))))
+                            (when-let ((p (gethash "pipeline" e)))
+                              (list :pipeline
+                                    (list :status (gethash "status" p)
+                                          :at (gethash "at" p))))))
+                     bebop--external-cache))
+             sessions)))
+      (error (setq bebop--external-cache nil))))
+   ((file-exists-p (locate-user-emacs-file "bebop-mr-cache.json"))
     (condition-case nil
         (let ((doc (with-temp-buffer
-                     (insert-file-contents bebop-mr-cache-file)
+                     (insert-file-contents
+                      (locate-user-emacs-file "bebop-mr-cache.json"))
                      (json-parse-buffer))))
           (maphash
            (lambda (name e)
              (push (cons name
-                         (list :state (gethash "state" e)
-                               :unresolved (or (gethash "unresolved" e) 0)
-                               :iid (gethash "iid" e)
-                               :at (gethash "at" e)))
-                   bebop--mr-cache))
-           doc))
-      (error (setq bebop--mr-cache nil)))))
+                         (list :mr
+                               (list :state (gethash "state" e)
+                                     :unresolved (or (gethash "unresolved" e) 0)
+                                     :iid (gethash "iid" e)
+                                     :at (gethash "at" e))))
+                   bebop--external-cache))
+           doc)
+          (bebop-external--save))
+      (error (setq bebop--external-cache nil))))))
 
-(defun bebop-mr--save ()
-  "Persist the MR status cache."
-  (let ((doc (make-hash-table :test #'equal)))
-    (dolist (cell bebop--mr-cache)
-      (let ((e (make-hash-table :test #'equal))
-            (p (cdr cell)))
-        (when (plist-get p :state) (puthash "state" (plist-get p :state) e))
-        (puthash "unresolved" (or (plist-get p :unresolved) 0) e)
-        (when (plist-get p :iid) (puthash "iid" (plist-get p :iid) e))
-        (when (plist-get p :at) (puthash "at" (plist-get p :at) e))
-        (puthash (car cell) e doc)))
-    (with-temp-file bebop-mr-cache-file
+(defun bebop-external--save ()
+  "Persist the external-status cache."
+  (let ((sessions (make-hash-table :test #'equal))
+        (doc (make-hash-table :test #'equal)))
+    (dolist (cell bebop--external-cache)
+      (let ((e (make-hash-table :test #'equal)))
+        (when-let ((m (plist-get (cdr cell) :mr)))
+          (let ((h (make-hash-table :test #'equal)))
+            (when (plist-get m :state) (puthash "state" (plist-get m :state) h))
+            (puthash "unresolved" (or (plist-get m :unresolved) 0) h)
+            (when (plist-get m :iid) (puthash "iid" (plist-get m :iid) h))
+            (when (plist-get m :at) (puthash "at" (plist-get m :at) h))
+            (puthash "mr" h e)))
+        (when-let ((p (plist-get (cdr cell) :pipeline)))
+          (let ((h (make-hash-table :test #'equal)))
+            (when (plist-get p :status) (puthash "status" (plist-get p :status) h))
+            (when (plist-get p :at) (puthash "at" (plist-get p :at) h))
+            (puthash "pipeline" h e)))
+        (when (> (hash-table-count e) 0)
+          (puthash (car cell) e sessions))))
+    (puthash "version" 1 doc)
+    (puthash "sessions" sessions doc)
+    (make-directory (file-name-directory bebop-external-cache-file) t)
+    (with-temp-file bebop-external-cache-file
       (insert (json-serialize doc)))))
+
+(defun bebop-external--cell (session)
+  "Return SESSION's cache cell, creating it if absent."
+  (or (assoc session bebop--external-cache)
+      (let ((cell (cons session nil)))
+        (push cell bebop--external-cache)
+        cell)))
 
 (defun bebop-mr-cache-set (session state unresolved &optional iid)
   "Cache MR STATE (\"draft\"|\"open\"|\"merged\") and UNRESOLVED count for SESSION.
-The citizen write verb roundup calls as a byproduct of its GitLab
-fetch — the render path only reads. Stamps the current time."
-  (let ((cell (assoc session bebop--mr-cache)))
-    (unless cell
-      (setq cell (cons session nil))
-      (push cell bebop--mr-cache))
-    (setcdr cell (list :state state
-                       :unresolved (or unresolved 0)
-                       :iid iid
-                       :at (bebop--now-string))))
-  (bebop-mr--save)
+Citizen write verb — pulse and roundup call it as a byproduct of
+their GitLab fetches; the render path only reads. Stamps now."
+  (let ((cell (bebop-external--cell session)))
+    (setcdr cell (plist-put (cdr cell) :mr
+                            (list :state state
+                                  :unresolved (or unresolved 0)
+                                  :iid iid
+                                  :at (bebop--now-string)))))
+  (bebop-external--save)
   (format "mr cached: %s" session))
 
-(defun bebop-mr-clear (session)
-  "Drop SESSION's cached MR status (e.g. after exile)."
+(defun bebop-pipeline-cache-set (session status)
+  "Cache head-pipeline STATUS (\"success\"|\"failed\"|\"running\"|...) for SESSION.
+Citizen write verb, `bebop-mr-cache-set's pipeline twin. Stamps now."
+  (let ((cell (bebop-external--cell session)))
+    (setcdr cell (plist-put (cdr cell) :pipeline
+                            (list :status status
+                                  :at (bebop--now-string)))))
+  (bebop-external--save)
+  (format "pipeline cached: %s" session))
+
+(defun bebop-external-clear (session)
+  "Drop SESSION's cached external status (e.g. after exile)."
   (interactive
-   (list (completing-read "Clear MR status: "
-                          (mapcar #'car bebop--mr-cache) nil t)))
-  (setq bebop--mr-cache (assoc-delete-all session bebop--mr-cache))
-  (bebop-mr--save))
+   (list (completing-read "Clear external status: "
+                          (mapcar #'car bebop--external-cache) nil t)))
+  (setq bebop--external-cache
+        (assoc-delete-all session bebop--external-cache))
+  (bebop-external--save))
+
+(defalias 'bebop-mr-clear #'bebop-external-clear
+  "Kept for callers that predate the pipeline generalization.")
 
 (defun bebop-mr--entry (session)
   "Return SESSION's cached MR plist, or nil."
-  (cdr (assoc session bebop--mr-cache)))
+  (plist-get (cdr (assoc session bebop--external-cache)) :mr))
+
+(defun bebop-pipeline--entry (session)
+  "Return SESSION's cached pipeline plist, or nil."
+  (plist-get (cdr (assoc session bebop--external-cache)) :pipeline))
 
 (defun bebop-mr--key (entry)
   "Return ENTRY's comparable state key, e.g. \"open:2\", or nil.
@@ -4652,15 +4759,28 @@ still a change worth surfacing. This is what ack snapshots store."
     (format "%s:%d" (or (plist-get entry :state) "?")
             (or (plist-get entry :unresolved) 0))))
 
-(defun bebop-mr--stale-p (entry)
-  "Return non-nil if ENTRY's timestamp is older than `bebop-mr-stale-hours'.
+(defun bebop-external--stale-p (entry hours)
+  "Return non-nil if ENTRY's :at is older than HOURS.
 Unparseable or missing timestamps count as stale — dim if unsure."
   (condition-case nil
       (let ((at (plist-get entry :at)))
         (or (null at)
             (> (- (float-time) (float-time (date-to-time at)))
-               (* bebop-mr-stale-hours 3600))))
+               (* hours 3600))))
     (error t)))
+
+(defun bebop-mr--stale-p (entry)
+  "Return non-nil if ENTRY is older than `bebop-mr-stale-hours'."
+  (bebop-external--stale-p entry bebop-mr-stale-hours))
+
+(defun bebop-pipeline--stale-p (entry)
+  "Return non-nil if ENTRY is older than `bebop-pipeline-stale-hours'."
+  (bebop-external--stale-p entry bebop-pipeline-stale-hours))
+
+(defun bebop-pipeline--key (entry)
+  "Return ENTRY's comparable state key — the raw status string, or nil.
+Status alone: a re-run that lands on the same status is not a change."
+  (plist-get entry :status))
 
 (defun bebop-mr--gutter-glyph (session)
   "Return the single-char MR gutter glyph for SESSION, or nil if uncached.
@@ -4701,6 +4821,42 @@ stays one char wide."
                                          "")
                                        (if stale " · stale" "")))))))
 
+(defun bebop-pipeline--gutter-glyph (session)
+  "Return the single-char pipeline gutter glyph for SESSION, or nil.
+✗ failed — red even when acked, because the build is still broken;
+⟳ running-ish states; ✓ passed renders dim — a green build asks
+nothing of you (it flashes green once while unseen, like a merged
+MR). Unseen changes render bold in full color until acked; stale
+entries render dim regardless, and staleness here doubles as pulse's
+own health meter. The raw status lives in the tooltip."
+  (when-let ((e (bebop-pipeline--entry session)))
+    (let* ((status (plist-get e :status))
+           (stale (bebop-pipeline--stale-p e))
+           (unseen (and (not stale)
+                        (bebop-set--unseen-pipeline-p
+                         session (bebop-pipeline--key e))))
+           (spec (cond
+                  ((equal status "failed")
+                   (cons "✗" 'bebop-dot-waiting-face))
+                  ((equal status "success")
+                   (cons "✓" (and unseen 'bebop-dot-active-face)))
+                  ((member status '("running" "pending" "created"
+                                    "preparing" "waiting_for_resource"))
+                   (cons "⟳" nil))
+                  (t nil)))
+           (fc (cond
+                (stale 'shadow)
+                (unseen (if (cdr spec)
+                            (list 'bebop-hud-unseen-face (cdr spec))
+                          'bebop-hud-unseen-face))
+                (t (or (cdr spec) 'shadow)))))
+      (when spec
+        (propertize (car spec)
+                    'face fc 'font-lock-face fc
+                    'help-echo (format "pipeline · %s%s"
+                                       (or status "?")
+                                       (if stale " · stale" "")))))))
+
 (defun bebop-set--prop (string face)
   "Propertize STRING with FACE as both `face' and `font-lock-face'.
 font-lock is active in magit-section buffers and strips plain `face'
@@ -4715,20 +4871,21 @@ cell, so literal-space padding drifts; pixel column stops keep the
 gutter grid exact on every line."
   (propertize " " 'display `(space :align-to ,column)))
 
-(defconst bebop-set--name-col 8
-  "Column where the name field begins, after the four-glyph gutter.
-Each gutter glyph (dot 0, chart 2, venue 4, MR 6) gets a two-column
-slot because the glyphs run wider than one character cell — a
-one-column slot lets a wide glyph overrun its stop and shove the name
-right, breaking alignment between rows that have the glyph and rows
-that don't. All right-region anchors are measured from here.")
+(defconst bebop-set--name-col 10
+  "Column where the name field begins, after the five-glyph gutter.
+Each gutter glyph (dot 0, chart 2, venue 4, MR 6, pipeline 8) gets a
+two-column slot because the glyphs run wider than one character cell
+— a one-column slot lets a wide glyph overrun its stop and shove the
+name right, breaking alignment between rows that have the glyph and
+rows that don't. All right-region anchors are measured from here.")
 
 (defun bebop-set--gutter (row)
   "Return the fixed-column gutter string for ROW, or blank stops if nil.
 Dot at column 0, chart glyph at 2, venue glyph at 4, MR glyph at 6,
-text begins at 7. The MR column is the gutter's one cached, stale-able
-member — everything left of it is live and derived; it dims when its
-snapshot ages out (see `bebop-mr--gutter-glyph')."
+pipeline glyph at 8, text begins at 9. The MR and pipeline columns
+are the gutter's cached, stale-able members — everything left of them
+is live and derived; they dim when their snapshots age out (see
+`bebop-mr--gutter-glyph' and `bebop-pipeline--gutter-glyph')."
   (if (null row)
       (bebop-set--stop bebop-set--name-col)
     (let* ((name (plist-get row :name))
@@ -4745,11 +4902,13 @@ snapshot ages out (see `bebop-mr--gutter-glyph')."
                     (bebop-set--prop "⊞" 'shadow)))
            (venue (when (plist-get row :venue)
                     (bebop-set--prop "⎇" 'shadow)))
-           (mr (bebop-mr--gutter-glyph name)))
+           (mr (bebop-mr--gutter-glyph name))
+           (pipe (bebop-pipeline--gutter-glyph name)))
       (concat dot (bebop-set--stop 2)
               (or chart "") (bebop-set--stop 4)
               (or venue "") (bebop-set--stop 6)
-              (or mr "") (bebop-set--stop bebop-set--name-col)))))
+              (or mr "") (bebop-set--stop 8)
+              (or pipe "") (bebop-set--stop bebop-set--name-col)))))
 
 (defun bebop-set--name-width (rows set-names)
   "Return the shared name-column width anchoring the right region.
@@ -4942,7 +5101,7 @@ RET reads, so activation works from either listing."
 (define-key bebop-dashboard-mode-map (kbd ".") #'bebop-mark-all-seen)
 
 (bebop-set--load)
-(bebop-mr--load)
+(bebop-external--load)
 #+end_src
 
 *** Footer
@@ -5010,7 +5169,8 @@ Fields: session, set, chart, venue, ticket, siblings
                     :busy (if (plist-get st :busy) t :false)
                     :command (or (plist-get st :command) :null)
                     :ports (vconcat (plist-get st :ports))))))
-         (mr (bebop-mr--entry name)))
+         (mr (bebop-mr--entry name))
+         (pipeline (bebop-pipeline--entry name)))
     (json-serialize
      (list :session name
            :set (or set :null)
@@ -5023,7 +5183,10 @@ Fields: session, set, chart, venue, ticket, siblings
                    (list :state (or (plist-get mr :state) :null)
                          :unresolved (or (plist-get mr :unresolved) 0)
                          :iid (or (plist-get mr :iid) :null))
-                 :null)))))
+                 :null)
+           :pipeline (if pipeline
+                         (or (plist-get pipeline :status) :null)
+                       :null)))))
 #+end_src
 
 *** Registry reads
@@ -5707,5 +5870,131 @@ Returns focus to the Conductor frame if one exists."
 (provide 'bebop-frame)
 
 ;;; bebop-frame.el ends here
+#+end_src
+
+** Pulse (bin/bebop-pulse.py)
+
+The HUD's slow-lane fetcher — phase 4 of the HUD design. Not elisp
+and not an agent: a plain Python script on a cron heartbeat, because
+the work is mechanical (three GitLab API calls per venue) and "no
+opinions" should also mean "no tokens." It asks the running Emacs for
+the session pool over the citizen surface, walks each live venue's
+checked-out branch, fetches MR state, unresolved-comment count, and
+head-pipeline status via =glab api= (placeholder =:id= resolves the
+project from the venue's git remote, so one code path serves every
+repo), and writes results back through the same citizen verbs roundup
+uses. Exits silently when Emacs isn't up — pulse skips a beat, the
+sidecar's timestamps age, the glyphs dim: staleness is the health
+meter, no separate monitoring needed.
+
+Registered in cron every 10 minutes, stdout/stderr to
+=~/.emacs.d/pulse.log= (overwritten each run — the log answers "what
+did the last beat do," history is not its job):
+
+#+begin_example
+*/10 * * * * /usr/bin/python3 $HOME/.emacs.d/bin/bebop-pulse.py > $HOME/.emacs.d/pulse.log 2>&1
+#+end_example
+
+(Explicit =python3= rather than the shebang — one less way for cron's
+spartan environment to disappoint.)
+
+#+begin_src python :tangle bin/bebop-pulse.py :shebang "#!/usr/bin/env python3" :mkdirp yes
+"""Pulse — bebop's slim external-status fetcher.
+
+Tangled from bebop.org (HUD design, phase 4) — do not edit directly.
+Walks the live venues' branches, asks GitLab for MR review state and
+head-pipeline status, writes the sidecar through the citizen verbs.
+No Jira, no chart writes, no opinions.
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+# cron's PATH has neither glab nor emacsclient
+os.environ["PATH"] = ("/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:"
+                      + os.environ.get("PATH", ""))
+
+
+def sh(args, cwd=None, timeout=60):
+    r = subprocess.run(args, cwd=cwd, capture_output=True,
+                       text=True, timeout=timeout)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout).strip()[:200])
+    return r.stdout.strip()
+
+
+def el(expr):
+    return sh(["emacsclient", "--eval", expr], timeout=30)
+
+
+def el_string(expr):
+    # emacsclient prints the elisp representation; a returned string
+    # arrives as a quoted literal whose escapes JSON also understands.
+    return json.loads(el(expr))
+
+
+def mr_state(mr):
+    if mr["state"] == "merged":
+        return "merged"
+    if mr["state"] == "opened":
+        return "draft" if mr.get("draft") else "open"
+    return mr["state"]
+
+
+def main():
+    try:
+        sessions = json.loads(el_string("(bebop-list-sessions)"))
+    except Exception:
+        return  # Emacs isn't up; pulse skips a beat, silently
+    beats = 0
+    for s in sessions:
+        name, venue = s.get("name"), s.get("venue")
+        if not (s.get("live") and venue and os.path.isdir(venue)):
+            continue
+        try:
+            branch = sh(["git", "-C", venue,
+                         "rev-parse", "--abbrev-ref", "HEAD"])
+            mrs = json.loads(sh(
+                ["glab", "api",
+                 "projects/:id/merge_requests"
+                 f"?source_branch={branch}&state=all&per_page=5"],
+                cwd=venue))
+            if not mrs:
+                continue
+            mr = (next((m for m in mrs if m["state"] == "opened"), None)
+                  or next((m for m in mrs if m["state"] == "merged"), None)
+                  or mrs[0])
+            iid = mr["iid"]
+            detail = json.loads(sh(
+                ["glab", "api", f"projects/:id/merge_requests/{iid}"],
+                cwd=venue))
+            discussions = json.loads(sh(
+                ["glab", "api",
+                 f"projects/:id/merge_requests/{iid}/discussions?per_page=100"],
+                cwd=venue))
+            unresolved = sum(
+                1 for d in discussions
+                if d.get("notes")
+                and d["notes"][0].get("resolvable")
+                and not d["notes"][0].get("resolved"))
+            el(f'(bebop-mr-cache-set "{name}" "{mr_state(detail)}"'
+               f' {unresolved} {iid})')
+            pipeline = (detail.get("head_pipeline") or {}).get("status")
+            if pipeline:
+                el(f'(bebop-pipeline-cache-set "{name}" "{pipeline}")')
+            beats += 1
+        except Exception as e:
+            print(f"pulse: {name}: {e}", file=sys.stderr)
+    try:
+        el("(bebop--render)")
+    except Exception:
+        pass
+    print(f"pulse: {beats} session(s) refreshed")
+
+
+if __name__ == "__main__":
+    main()
 #+end_src
 
