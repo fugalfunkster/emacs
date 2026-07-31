@@ -231,6 +231,39 @@ an MR appearing after an ack still reads as a change."
   (bebop--render)
   (message "Bebop: all sessions marked seen"))
 
+(defun bebop-set--marquee-p (row)
+  "Non-nil when ROW holds an unacked attention state."
+  (let* ((name (plist-get row :name))
+         (live (plist-get row :live))
+         (status (and live (plist-get live :status))))
+    (or (and (memq status '(waiting blocked))
+             (bebop-set--unseen-status-p name status))
+        (let ((e (bebop-mr--entry name)))
+          (and e
+               (> (or (plist-get e :unresolved) 0) 0)
+               (not (bebop-mr--stale-p e))
+               (bebop-set--unseen-mr-p name (bebop-mr--key e)))))))
+
+(defun bebop-set--marquee-rank (row)
+  "Return ROW's severity rank for marquee ordering — lower is worse."
+  (let* ((name (plist-get row :name))
+         (live (plist-get row :live))
+         (status (and live (plist-get live :status))))
+    (cond ((and (eq status 'blocked)
+                (bebop-set--unseen-status-p name status)) 0)
+          ((and (eq status 'waiting)
+                (bebop-set--unseen-status-p name status)) 1)
+          (t 2))))
+
+(defun bebop-set--marquee< (a b)
+  "Order marquee rows worst-first, then most recent activity first.
+ISO timestamps compare lexicographically; never-stamped rows sink."
+  (let ((ra (bebop-set--marquee-rank a))
+        (rb (bebop-set--marquee-rank b)))
+    (if (/= ra rb) (< ra rb)
+      (string> (or (bebop-set--last-activity (plist-get a :name)) "")
+               (or (bebop-set--last-activity (plist-get b :name)) "")))))
+
 (defun bebop-new-set (name)
   "Declare a new set NAME — the manual path for ticketless groupings."
   (interactive "sNew set name: ")
@@ -644,13 +677,15 @@ lone outlier past the cap simply overflows its own line."
 
 (defun bebop-set--heading-counts (rows width)
   "Return iconographic, column-aligned rollup counts for a set heading.
-Three fixed columns after the name field: the state icon repeated once
+Four fixed columns after the name field: the state icon repeated once
 per session — ●● for two active (dot-active face), ● waiting
-(dot-waiting face), ○○○ for three on deck; no numerals. Columns sit
-at absolute stops so every set heading tables up regardless of name
-length; a crowded cell overflows its stop with a single space keeping
-it separated from the next. Counts are disjoint — a waiting session
-is not also counted as running."
+(dot-waiting face), ○○○ for three on deck, ◉ for one unacked
+attention state (bold, so even the fold line admits what it's sitting
+on); no numerals. Columns sit at absolute stops so every set heading
+tables up regardless of name length; a crowded cell overflows its
+stop with a single space keeping it separated from the next. The
+first three counts are disjoint — a waiting session is not also
+counted as running; the unacked column overlaps them by design."
   (if (null rows)
       (concat (bebop-set--stop (+ bebop-set--name-col width))
               (bebop-set--prop "(empty)" 'shadow))
@@ -663,12 +698,16 @@ is not also counted as running."
            (active (- (seq-count (lambda (r) (plist-get r :live)) rows)
                       waiting))
            (deck (seq-count (lambda (r) (not (plist-get r :live))) rows))
+           (unacked (seq-count #'bebop-set--marquee-p rows))
            (base (+ bebop-set--name-col width))
            (col 0)
            (parts nil))
       (dolist (cell (list (list active ?● 'bebop-dot-active-face)
                           (list waiting ?● 'bebop-dot-waiting-face)
-                          (list deck ?○ 'shadow)))
+                          (list deck ?○ 'shadow)
+                          (list unacked ?◉
+                                (list 'bebop-hud-unseen-face
+                                      'bebop-dot-waiting-face))))
         (push " " parts)
         (push (bebop-set--stop (+ base (* col 6))) parts)
         (when (> (car cell) 0)
@@ -719,14 +758,29 @@ is not also counted as running."
 
 (defun bebop-set--render-body ()
   "Insert the setlist tree — the dashboard body.
-Order: live ungrouped sessions (flat strip), sets, Ungrouped."
+Order: marquee (only when lit), live ungrouped sessions (flat strip),
+sets, Ungrouped. Marquee rows are projections — the same session
+renders again in its home section; both carry the text properties
+RET reads, so activation works from either listing."
   (let* ((rows (bebop-set--rows))
          (groups (bebop-set--group rows))
          (width (bebop-set--name-width rows (bebop-set--names))))
     (magit-insert-section (bebop-setlist)
       ;; Separator blank lines are inserted here in the ROOT section's
       ;; scope, between child sections — never inside a child, where
-      ;; they would become foldable content and shift on toggle.
+      ;; they would become foldable content and shift on toggle. The
+      ;; marquee label is likewise a plain line, not a section heading —
+      ;; folding away attention would defeat the lane.
+      (let ((marquee (sort (seq-filter #'bebop-set--marquee-p rows)
+                           #'bebop-set--marquee<)))
+        (when marquee
+          (insert (concat (bebop-set--stop bebop-set--name-col)
+                          (bebop-set--prop "Marquee"
+                                           '(:inherit shadow :weight bold))
+                          "\n"))
+          (dolist (r marquee)
+            (bebop-set--insert-row r width ""))
+          (insert "\n")))
       (let ((strip (plist-get groups :live-ungrouped)))
         (dolist (r strip)
           (bebop-set--insert-row r width ""))
