@@ -23,7 +23,9 @@ in later phases; a set is at minimum a name.")
 (defvar bebop--session-meta nil
   "Alist of (SESSION-NAME . PLIST) persisting per-session choices.
 PLIST keys: :set (string or nil), :last-activity (ISO timestamp
-string, stamped by the HUD's timekeeping — see below).
+string, stamped by the HUD's timekeeping), :acked-status and
+:acked-mr (the seen-unseen ack snapshot — glyph states as of the
+last visit).
 Keyed by name, independent of liveness — applies equally to running
 sessions and on-deck artifacts.")
 
@@ -48,6 +50,10 @@ consumed interactively. Persisted with the other choices.")
           (puthash "set" s entry))
         (when-let ((a (plist-get (cdr cell) :last-activity)))
           (puthash "last-activity" a entry))
+        (when-let ((a (plist-get (cdr cell) :acked-status)))
+          (puthash "acked-status" a entry))
+        (when-let ((a (plist-get (cdr cell) :acked-mr)))
+          (puthash "acked-mr" a entry))
         (when (> (hash-table-count entry) 0)
           (puthash (car cell) entry sessions))))
     (puthash "version" 2 doc)
@@ -84,7 +90,11 @@ format was written by a retired implementation and never read)."
                                       (when-let ((s (gethash "set" entry)))
                                         (list :set s))
                                       (when-let ((a (gethash "last-activity" entry)))
-                                        (list :last-activity a))))
+                                        (list :last-activity a))
+                                      (when-let ((a (gethash "acked-status" entry)))
+                                        (list :acked-status a))
+                                      (when-let ((a (gethash "acked-mr" entry)))
+                                        (list :acked-mr a))))
                                bebop--session-meta))
                        sessions))
             (setq bebop--sets (nreverse bebop--sets)
@@ -137,8 +147,12 @@ tracks recency of attention, not mere liveness."
   :group 'bebop)
 
 (defun bebop-set--stamp-activity (name _event)
-  "Stamp NAME's :last-activity with now. Hook target."
-  (bebop-set--update-session-meta name :last-activity (bebop--now-string)))
+  "Stamp NAME's :last-activity with now. Hook target.
+The active session also self-acks: its transitions happen in front of
+you, so they never read as unseen (see Seen-unseen below)."
+  (bebop-set--update-session-meta name :last-activity (bebop--now-string))
+  (when (equal name bebop--active-session)
+    (bebop-set-ack-session name)))
 
 (add-hook 'bebop-session-activity-functions #'bebop-set--stamp-activity)
 
@@ -169,6 +183,53 @@ until their first real edge, rather than the whole pool dimming on the
 feature's first render."
   (when-let ((secs (bebop-set--age-seconds (bebop-set--last-activity name))))
     (> secs (* bebop-hud-quiet-hours 3600))))
+
+(defface bebop-hud-unseen-face
+  '((t :weight bold))
+  "Emphasis overlay for a dynamic glyph that changed since last ack.
+Composed in front of the glyph's base face; for nominal (shadow)
+states it stands alone, lifting the glyph to default foreground."
+  :group 'bebop)
+
+(defun bebop-set--acked (name key)
+  "Return NAME's persisted ack-snapshot value for KEY, or nil."
+  (plist-get (bebop-set--session-meta name) key))
+
+(defun bebop-set--unseen-status-p (name status)
+  "Non-nil if NAME's live STATUS differs from its acked snapshot."
+  (when-let ((acked (bebop-set--acked name :acked-status)))
+    (not (equal acked (symbol-name status)))))
+
+(defun bebop-set--unseen-mr-p (name key)
+  "Non-nil if NAME's MR state KEY differs from its acked snapshot.
+KEY is `bebop-mr--key' output or nil; \"none\" stands in for nil so
+an MR appearing after an ack still reads as a change."
+  (when-let ((acked (bebop-set--acked name :acked-mr)))
+    (not (equal acked (or key "none")))))
+
+(defun bebop-set-ack-session (name)
+  "Snapshot NAME's dynamic glyph states as seen."
+  (let ((live (cdr (assoc name bebop--live-sessions))))
+    (bebop-set--update-session-meta
+     name
+     :acked-status (when-let ((s (and live (plist-get live :status))))
+                     (symbol-name s))
+     :acked-mr (or (bebop-mr--key (bebop-mr--entry name)) "none"))))
+
+(defun bebop-set--ack-on-select (&rest _)
+  "Ack the newly active session — visiting is the ack gesture."
+  (when bebop--active-session
+    (bebop-set-ack-session bebop--active-session)))
+
+(advice-add 'bebop--apply-active-session :after #'bebop-set--ack-on-select)
+
+(defun bebop-mark-all-seen ()
+  "Ack every session's dynamic glyphs — the morning-after reset."
+  (interactive)
+  (dolist (row (bebop-set--rows))
+    (bebop-set-ack-session (plist-get row :name)))
+  (bebop--render)
+  (message "Bebop: all sessions marked seen"))
 
 (defun bebop-new-set (name)
   "Declare a new set NAME — the manual path for ticketless groupings."
@@ -424,6 +485,14 @@ fetch — the render path only reads. Stamps the current time."
   "Return SESSION's cached MR plist, or nil."
   (cdr (assoc session bebop--mr-cache)))
 
+(defun bebop-mr--key (entry)
+  "Return ENTRY's comparable state key, e.g. \"open:2\", or nil.
+State plus unresolved count — a new comment on an unchanged MR is
+still a change worth surfacing. This is what ack snapshots store."
+  (when entry
+    (format "%s:%d" (or (plist-get entry :state) "?")
+            (or (plist-get entry :unresolved) 0))))
+
 (defun bebop-mr--stale-p (entry)
   "Return non-nil if ENTRY's timestamp is older than `bebop-mr-stale-hours'.
 Unparseable or missing timestamps count as stale — dim if unsure."
@@ -436,21 +505,32 @@ Unparseable or missing timestamps count as stale — dim if unsure."
 
 (defun bebop-mr--gutter-glyph (session)
   "Return the single-char MR gutter glyph for SESSION, or nil if uncached.
-Red ◆ = unresolved teammate comments (you are needed); green ✓ =
-merged; dim ✎ = draft; dim ◇ = open, nothing for you. Stale entries
-render dim regardless. The exact unresolved count and MR number live
-in the glyph's tooltip (`help-echo`) — the gutter stays one char wide."
+◆ = unresolved teammate comments — colored even when acked, because
+the comments still want answers; ✓ merged, ✎ draft, ◇ open render
+dim — they ask nothing of you. A glyph whose state changed since your
+last visit renders bold in full color until acked (the seen-unseen
+mechanic; merged flashes green once, then dims). Stale entries render
+dim regardless — never emphasize old news. The exact unresolved count
+and MR number live in the glyph's tooltip (`help-echo`) — the gutter
+stays one char wide."
   (when-let ((e (bebop-mr--entry session)))
     (let* ((state (plist-get e :state))
            (unresolved (or (plist-get e :unresolved) 0))
            (stale (bebop-mr--stale-p e))
+           (unseen (and (not stale)
+                        (bebop-set--unseen-mr-p session (bebop-mr--key e))))
            (spec (cond
                   ((> unresolved 0) (cons "◆" 'bebop-dot-waiting-face))
-                  ((equal state "merged") (cons "✓" 'bebop-dot-active-face))
-                  ((equal state "draft")  (cons "✎" 'shadow))
-                  ((equal state "open")   (cons "◇" 'shadow))
+                  ((equal state "merged") (cons "✓" (and unseen 'bebop-dot-active-face)))
+                  ((equal state "draft")  (cons "✎" nil))
+                  ((equal state "open")   (cons "◇" nil))
                   (t nil)))
-           (fc (if stale 'shadow (cdr spec))))
+           (fc (cond
+                (stale 'shadow)
+                (unseen (if (cdr spec)
+                            (list 'bebop-hud-unseen-face (cdr spec))
+                          'bebop-hud-unseen-face))
+                (t (or (cdr spec) 'shadow)))))
       (when spec
         (propertize (car spec)
                     'face fc 'font-lock-face fc
@@ -492,16 +572,21 @@ member — everything left of it is live and derived; it dims when its
 snapshot ages out (see `bebop-mr--gutter-glyph')."
   (if (null row)
       (bebop-set--stop bebop-set--name-col)
-    (let* ((live (plist-get row :live))
+    (let* ((name (plist-get row :name))
+           (live (plist-get row :live))
            (dot (if live
-                    (bebop-set--prop "●" (bebop-set--dot-face
-                                          (plist-get live :status)))
+                    (let* ((status (plist-get live :status))
+                           (base (bebop-set--dot-face status)))
+                      (bebop-set--prop
+                       "●" (if (bebop-set--unseen-status-p name status)
+                               (list 'bebop-hud-unseen-face base)
+                             base)))
                   (bebop-set--prop "○" 'shadow)))
            (chart (when (plist-get row :chart)
                     (bebop-set--prop "⊞" 'shadow)))
            (venue (when (plist-get row :venue)
                     (bebop-set--prop "⎇" 'shadow)))
-           (mr (bebop-mr--gutter-glyph (plist-get row :name))))
+           (mr (bebop-mr--gutter-glyph name)))
       (concat dot (bebop-set--stop 2)
               (or chart "") (bebop-set--stop 4)
               (or venue "") (bebop-set--stop 6)
@@ -666,10 +751,11 @@ Order: live ungrouped sessions (flat strip), sets, Ungrouped."
       '("RET: select  TAB: fold"
         "n: new  k: kill  r: resume  e: exile"
         "C/D: chart  V/W: venue"
-        "N: new set  m: move to set  g: refresh"))
+        "N: new set  m: move to set  g: refresh  .: mark seen"))
 
 (define-key bebop-dashboard-mode-map (kbd "N") #'bebop-new-set)
 (define-key bebop-dashboard-mode-map (kbd "m") #'bebop-assign-set)
+(define-key bebop-dashboard-mode-map (kbd ".") #'bebop-mark-all-seen)
 
 (bebop-set--load)
 (bebop-mr--load)
