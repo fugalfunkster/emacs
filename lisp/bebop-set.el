@@ -34,9 +34,15 @@ sessions and on-deck artifacts.")
 Populated by roundup (via `bebop-propose-exile' in bebop-api);
 consumed interactively. Persisted with the other choices.")
 
+(defvar bebop-set--inhibit-save nil
+  "Non-nil while batching meta updates; `bebop-set--save' becomes a no-op.
+Bind it around a burst of `bebop-set--update-session-meta' calls and
+save once after — N acks should not mean N file writes.")
+
 (defun bebop-set--save ()
   "Persist sets and session choices to `bebop-set-state-file'."
-  (let ((sets (make-hash-table :test #'equal))
+  (unless bebop-set--inhibit-save
+    (let ((sets (make-hash-table :test #'equal))
         (sessions (make-hash-table :test #'equal))
         (doc (make-hash-table :test #'equal)))
     (dolist (cell bebop--sets)
@@ -64,7 +70,7 @@ consumed interactively. Persisted with the other choices.")
     (when bebop--exile-proposals
       (puthash "proposals" (vconcat bebop--exile-proposals) doc))
     (with-temp-file bebop-set-state-file
-      (insert (json-serialize doc)))))
+      (insert (json-serialize doc))))))
 
 (defun bebop-set--load ()
   "Load sets and session choices from `bebop-set-state-file'.
@@ -236,50 +242,61 @@ Same \"none\" convention as `bebop-set--unseen-mr-p'."
 (advice-add 'bebop--apply-active-session :after #'bebop-set--ack-on-select)
 
 (defun bebop-mark-all-seen ()
-  "Ack every session's dynamic glyphs — the morning-after reset."
+  "Ack every session's dynamic glyphs — the morning-after reset.
+Saves once, not once per session."
   (interactive)
-  (dolist (row (bebop-set--rows))
-    (bebop-set-ack-session (plist-get row :name)))
+  (let ((bebop-set--inhibit-save t))
+    (dolist (row (bebop-set--rows))
+      (bebop-set-ack-session (plist-get row :name))))
+  (bebop-set--save)
   (bebop--render)
   (message "Bebop: all sessions marked seen"))
 
-(defun bebop-set--marquee-p (row)
-  "Non-nil when ROW holds an unacked attention state."
-  (let* ((name (plist-get row :name))
-         (live (plist-get row :live))
-         (status (and live (plist-get live :status))))
-    (or (and (memq status '(waiting blocked))
-             (bebop-set--unseen-status-p name status))
-        (let ((p (bebop-pipeline--entry name)))
-          (and p
-               (equal (plist-get p :status) "failed")
-               (not (bebop-pipeline--stale-p p))
-               (bebop-set--unseen-pipeline-p name (bebop-pipeline--key p))))
-        (let ((e (bebop-mr--entry name)))
-          (and e
-               (> (or (plist-get e :unresolved) 0) 0)
-               (not (bebop-mr--stale-p e))
-               (bebop-set--unseen-mr-p name (bebop-mr--key e)))))))
+(defconst bebop-set--attention-order '(blocked waiting pipeline comments)
+  "Attention kinds, worst first — the marquee's severity scale.")
 
-(defun bebop-set--marquee-rank (row)
-  "Return ROW's severity rank for marquee ordering — lower is worse.
-Blocked, waiting, failed pipeline, then comments."
+(defun bebop-set--attention-kinds (row)
+  "Return ROW's unacked attention kinds, worst first, or nil.
+A list drawn from `bebop-set--attention-order'.  The single
+membership truth behind the marquee (non-nil = listed, car = rank),
+the set-heading ◉ tally, and the periphery counts — one predicate,
+three consumers, no drift.  Comments only count on an open or draft
+MR: a closed or merged MR's threads ask nothing of you."
   (let* ((name (plist-get row :name))
          (live (plist-get row :live))
          (status (and live (plist-get live :status)))
-         (p (bebop-pipeline--entry name)))
-    (cond ((and (eq status 'blocked)
-                (bebop-set--unseen-status-p name status)) 0)
-          ((and (eq status 'waiting)
-                (bebop-set--unseen-status-p name status)) 1)
-          ((and p (equal (plist-get p :status) "failed")
-                (not (bebop-pipeline--stale-p p))
-                (bebop-set--unseen-pipeline-p name (bebop-pipeline--key p)))
-           2)
-          (t 3))))
+         kinds)
+    (let ((e (bebop-mr--entry name)))
+      (when (and e
+                 (member (plist-get e :state) '("open" "draft"))
+                 (> (or (plist-get e :unresolved) 0) 0)
+                 (not (bebop-mr--stale-p e))
+                 (bebop-set--unseen-mr-p name (bebop-mr--key e)))
+        (push 'comments kinds)))
+    (let ((p (bebop-pipeline--entry name)))
+      (when (and p (equal (plist-get p :status) "failed")
+                 (not (bebop-pipeline--stale-p p))
+                 (bebop-set--unseen-pipeline-p
+                  name (bebop-pipeline--key p)))
+        (push 'pipeline kinds)))
+    (when (and (memq status '(waiting blocked))
+               (bebop-set--unseen-status-p name status))
+      (push (if (eq status 'blocked) 'blocked 'waiting) kinds))
+    kinds))
+
+(defun bebop-set--marquee-p (row)
+  "Non-nil when ROW holds an unacked attention state."
+  (bebop-set--attention-kinds row))
+
+(defun bebop-set--marquee-rank (row)
+  "Return ROW's severity rank — the position of its worst kind."
+  (let ((kinds (bebop-set--attention-kinds row)))
+    (if kinds
+        (seq-position bebop-set--attention-order (car kinds))
+      (length bebop-set--attention-order))))
 
 (defun bebop-set--marquee< (a b)
-  "Order marquee rows worst-first, then most recent activity first.
+  "Order marquee rows A and B worst-first, then most recent first.
 ISO timestamps compare lexicographically; never-stamped rows sink."
   (let ((ra (bebop-set--marquee-rank a))
         (rb (bebop-set--marquee-rank b)))
@@ -288,7 +305,8 @@ ISO timestamps compare lexicographically; never-stamped rows sink."
                (or (bebop-set--last-activity (plist-get b :name)) "")))))
 
 (defun bebop-hud--notify (fmt &rest args)
-  "Ding and message — `bebop--notify-waiting''s cousin for external edges."
+  "Ding and echo FMT formatted with ARGS, prefixed \"Bebop: \".
+The `bebop--notify-waiting' cousin for external edges."
   (ding t)
   (message "Bebop: %s" (apply #'format fmt args)))
 
@@ -297,26 +315,19 @@ ISO timestamps compare lexicographically; never-stamped rows sink."
 Recomputed by `bebop-hud--update-periphery' at render time.")
 
 (defun bebop-hud--update-periphery (rows)
-  "Recompute the periphery counts from ROWS and refresh mode-lines."
+  "Recompute the periphery counts from ROWS and refresh mode-lines.
+Counts come from `bebop-set--attention-kinds' — the same membership
+truth as the marquee, so the mode-line can never disagree with the
+lane."
   (let ((dots 0) (pipes 0) (mrs 0))
     (dolist (r rows)
-      (let* ((name (plist-get r :name))
-             (live (plist-get r :live))
-             (status (and live (plist-get live :status))))
-        (when (and (memq status '(waiting blocked))
-                   (bebop-set--unseen-status-p name status))
+      (let ((kinds (bebop-set--attention-kinds r)))
+        (when (or (memq 'blocked kinds) (memq 'waiting kinds))
           (setq dots (1+ dots)))
-        (let ((p (bebop-pipeline--entry name)))
-          (when (and p (equal (plist-get p :status) "failed")
-                     (not (bebop-pipeline--stale-p p))
-                     (bebop-set--unseen-pipeline-p
-                      name (bebop-pipeline--key p)))
-            (setq pipes (1+ pipes))))
-        (let ((e (bebop-mr--entry name)))
-          (when (and e (> (or (plist-get e :unresolved) 0) 0)
-                     (not (bebop-mr--stale-p e))
-                     (bebop-set--unseen-mr-p name (bebop-mr--key e)))
-            (setq mrs (1+ mrs))))))
+        (when (memq 'pipeline kinds)
+          (setq pipes (1+ pipes)))
+        (when (memq 'comments kinds)
+          (setq mrs (1+ mrs)))))
     (setq bebop-hud--periphery
           (when (> (+ dots pipes mrs) 0)
             (concat " "
@@ -528,11 +539,15 @@ pinned utility names (emacs, bebop, claude) last."
 
 (defcustom bebop-external-cache-file
   (expand-file-name
-   (format "%s.status.json" (car (split-string (system-name) "\\.")))
-   "~/Code/Org/.bebop/")
+   (format "../.bebop/%s.status.json"
+           (car (split-string (system-name) "\\.")))
+   (expand-file-name bebop-charts-dir))
   "Sidecar caching per-session external status (MR review, pipeline).
 Written by out-of-band fetchers through the citizen verbs; read-only
-from the render path."
+from the render path. Derived from `bebop-charts-dir' rather than a
+hardcoded path so it lands in the synced org tree on every machine —
+hosts mount Dropbox at different points, and an unsynced sidecar
+would silently defeat the Live Remote read-at-the-cafe pattern."
   :type 'file
   :group 'bebop)
 
@@ -658,9 +673,9 @@ never does — a transition needs a before."
 
 (defun bebop-pipeline-cache-set (session status)
   "Cache head-pipeline STATUS (\"success\"|\"failed\"|\"running\"|...) for SESSION.
-Citizen write verb, `bebop-mr-cache-set's pipeline twin. Stamps now.
-A flip to failed dings (see Periphery); a first observation never
-does."
+Citizen write verb, the pipeline twin of `bebop-mr-cache-set'.
+Stamps now. A flip to failed dings (see Periphery); a first
+observation never does."
   (let* ((cell (bebop-external--cell session))
          (old (plist-get (plist-get (cdr cell) :pipeline) :status)))
     (setcdr cell (plist-put (cdr cell) :pipeline
@@ -739,7 +754,11 @@ stays one char wide."
            (unseen (and (not stale)
                         (bebop-set--unseen-mr-p session (bebop-mr--key e))))
            (spec (cond
-                  ((> unresolved 0) (cons "◆" 'bebop-dot-waiting-face))
+                  ;; ◆ only for open/draft: comments on a closed or
+                  ;; merged MR ask nothing of you.
+                  ((and (> unresolved 0)
+                        (member state '("open" "draft")))
+                   (cons "◆" 'bebop-dot-waiting-face))
                   ((equal state "merged") (cons "✓" (and unseen 'bebop-dot-active-face)))
                   ((equal state "draft")  (cons "✎" nil))
                   ((equal state "open")   (cons "◇" nil))
@@ -766,9 +785,11 @@ stays one char wide."
 ✗ failed — red even when acked, because the build is still broken;
 ⟳ running-ish states; ✓ passed renders dim — a green build asks
 nothing of you (it flashes green once while unseen, like a merged
-MR). Unseen changes render bold in full color until acked; stale
-entries render dim regardless, and staleness here doubles as pulse's
-own health meter. The raw status lives in the tooltip."
+MR). Other statuses (canceled, skipped, manual) cache but render
+nothing — deliberate: they ask nothing and earn no ink. Unseen
+changes render bold in full color until acked; stale entries render
+dim regardless, and staleness here doubles as pulse's own health
+meter. The raw status lives in the tooltip."
   (when-let ((e (bebop-pipeline--entry session)))
     (let* ((status (plist-get e :status))
            (stale (bebop-pipeline--stale-p e))

@@ -16,6 +16,15 @@
   :type 'integer
   :group 'bebop)
 
+(defcustom bebop-idle-render-interval 60
+  "Seconds between dashboard re-renders when nothing has changed.
+The render loop normally fires only on status edges, but the HUD's
+age column drifts in real time — without an idle cadence a quiet
+dashboard shows \"12m\" forever. Coarse on purpose: ages display at
+minute granularity."
+  :type 'integer
+  :group 'bebop)
+
 (defcustom bebop-tmux-session "claude"
   "Name of the tmux session used for all agent windows."
   :type 'string
@@ -117,6 +126,9 @@ PINFO is a plist with keys :window :status :pane-id.")
 
 (defvar bebop--poll-timer nil
   "Timer object for periodic status polling.")
+
+(defvar bebop--last-idle-render 0
+  "`float-time' of the last poll-driven render — the idle-render clock.")
 
 (defvar bebop--last-status-details nil
   "Alist of (SESSION-NAME . plist) with recent status inference details.")
@@ -641,7 +653,13 @@ fold state preserved across poll re-renders via the visibility cache.
       ;; Handle orphans after iteration completes to avoid mutating the list mid-loop
       (dolist (name orphans)
         (bebop--handle-orphan name))
-      (when changed
+      ;; Render on change, and on an idle cadence so the age column
+      ;; stays honest — a HUD showing stale timestamps is worse than
+      ;; no timestamps.
+      (when (or changed
+                (>= (- (float-time) bebop--last-idle-render)
+                    bebop-idle-render-interval))
+        (setq bebop--last-idle-render (float-time))
         (bebop--render)))))
 
 (defun bebop-refresh ()

@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+from urllib.parse import quote
 
 # cron's PATH has neither glab nor emacsclient
 os.environ["PATH"] = ("/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:"
@@ -59,13 +60,16 @@ def main():
             mrs = json.loads(sh(
                 ["glab", "api",
                  "projects/:id/merge_requests"
-                 f"?source_branch={branch}&state=all&per_page=5"],
+                 f"?source_branch={quote(branch, safe='')}"
+                 "&state=all&per_page=5"],
                 cwd=venue))
-            if not mrs:
-                continue
+            # Open beats merged; closed MRs are skipped outright —
+            # bebop-mr-cache-set's contract is draft|open|merged, and
+            # a closed MR's threads ask nothing of anyone.
             mr = (next((m for m in mrs if m["state"] == "opened"), None)
-                  or next((m for m in mrs if m["state"] == "merged"), None)
-                  or mrs[0])
+                  or next((m for m in mrs if m["state"] == "merged"), None))
+            if mr is None:
+                continue
             iid = mr["iid"]
             detail = json.loads(sh(
                 ["glab", "api", f"projects/:id/merge_requests/{iid}"],
