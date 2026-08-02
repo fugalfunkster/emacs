@@ -100,6 +100,13 @@ already happened.
 (unless (file-directory-p my-local-emacs-dir)
   (make-directory my-local-emacs-dir t))
 (setq package-user-dir (expand-file-name "elpa/" my-local-emacs-dir))
+
+;; Third-party packages (org-jira, cider, …) emit benign "function not known to
+;; be defined" warnings the first time the async native-compiler builds them —
+;; the referenced functions are defined at runtime, just not visible at compile
+;; time. Log them to *Native-Comp-Log* instead of popping *Warnings* on startup.
+;; Must be set before the comp subsystem starts; a later defcustom won't override.
+(setq native-comp-async-report-warnings-errors 'silent)
 #+end_src
 
 * Local State
