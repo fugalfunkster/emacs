@@ -8,6 +8,7 @@
 # Emacs state/caches
 auto-save-list/
 backups/
+eln-cache/
 eshell/
 url/
 transient/
