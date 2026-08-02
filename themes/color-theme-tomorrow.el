@@ -138,16 +138,16 @@ names to which it refers are bound."
      (flymake-errline ((,class (:underline ,red :background ,background))))
 
      ;; Clojure errors
-     (clojure-test-failure-face ((,class (:background nil :inherit flymake-warnline))))
-     (clojure-test-error-face ((,class (:background nil :inherit flymake-errline))))
-     (clojure-test-success-face ((,class (:background nil :foreground nil :underline ,green))))
+     (clojure-test-failure-face ((,class (:background unspecified :inherit flymake-warnline))))
+     (clojure-test-error-face ((,class (:background unspecified :inherit flymake-errline))))
+     (clojure-test-success-face ((,class (:background unspecified :foreground unspecified :underline ,green))))
 
      ;; For Brian Carper's extended clojure syntax table
      (clojure-keyword ((,class (:foreground ,yellow))))
      (clojure-parens ((,class (:foreground ,foreground))))
      (clojure-braces ((,class (:foreground ,green))))
      (clojure-brackets ((,class (:foreground ,yellow))))
-     (clojure-double-quote ((,class (:foreground ,aqua :background nil))))
+     (clojure-double-quote ((,class (:foreground ,aqua :background unspecified))))
      (clojure-special ((,class (:foreground ,blue))))
      (clojure-java-call ((,class (:foreground ,purple))))
 
@@ -224,15 +224,15 @@ names to which it refers are bound."
      (show-paren-mismatch ((,class (:background ,orange :foreground ,current-line))))
 
      ;; Parenthesis matching (mic-paren)
-     (paren-face-match ((,class (:foreground nil :background nil :inherit show-paren-match))))
-     (paren-face-mismatch ((,class (:foreground nil :background nil :inherit show-paren-mismatch))))
-     (paren-face-no-match ((,class (:foreground nil :background nil :inherit show-paren-mismatch))))
+     (paren-face-match ((,class (:foreground unspecified :background unspecified :inherit show-paren-match))))
+     (paren-face-mismatch ((,class (:foreground unspecified :background unspecified :inherit show-paren-mismatch))))
+     (paren-face-no-match ((,class (:foreground unspecified :background unspecified :inherit show-paren-mismatch))))
 
      ;; Parenthesis dimming (parenface)
-     (paren-face ((,class (:foreground ,comment :background nil))))
+     (paren-face ((,class (:foreground ,comment :background unspecified))))
 
-     (sh-heredoc ((,class (:foreground nil :inherit font-lock-string-face :weight normal))))
-     (sh-quoted-exec ((,class (:foreground nil :inherit font-lock-preprocessor-face))))
+     (sh-heredoc ((,class (:foreground unspecified :inherit font-lock-string-face :weight normal))))
+     (sh-quoted-exec ((,class (:foreground unspecified :inherit font-lock-preprocessor-face))))
      (slime-highlight-edits-face ((,class (:weight bold))))
      (slime-repl-input-face ((,class (:weight normal :underline nil))))
      (slime-repl-prompt-face ((,class (:underline nil :weight bold :foreground ,purple))))
@@ -248,10 +248,10 @@ names to which it refers are bound."
      (diff-file-header ((,class (:background ,selection))))
      (diff-hunk-header ((,class (:background ,current-line :foreground ,purple))))
 
-     (ediff-even-diff-A ((,class (:foreground nil :background nil :inverse-video t))))
-     (ediff-even-diff-B ((,class (:foreground nil :background nil :inverse-video t))))
-     (ediff-odd-diff-A  ((,class (:foreground ,comment :background nil :inverse-video t))))
-     (ediff-odd-diff-B  ((,class (:foreground ,comment :background nil :inverse-video t))))
+     (ediff-even-diff-A ((,class (:foreground unspecified :background unspecified :inverse-video t))))
+     (ediff-even-diff-B ((,class (:foreground unspecified :background unspecified :inverse-video t))))
+     (ediff-odd-diff-A  ((,class (:foreground ,comment :background unspecified :inverse-video t))))
+     (ediff-odd-diff-B  ((,class (:foreground ,comment :background unspecified :inverse-video t))))
 
      (eldoc-highlight-function-argument ((,class (:foreground ,green :weight bold))))
 
@@ -279,29 +279,29 @@ names to which it refers are bound."
 
      ;; dired+
      (diredp-compressed-file-suffix ((,class (:foreground ,blue))))
-     (diredp-dir-heading ((,class (:foreground nil :background nil :inherit heading))))
-     (diredp-dir-priv ((,class (:foreground ,aqua :background nil))))
-     (diredp-exec-priv ((,class (:foreground ,blue :background nil))))
-     (diredp-executable-tag ((,class (:foreground ,red :background nil))))
+     (diredp-dir-heading ((,class (:foreground unspecified :background unspecified :inherit heading))))
+     (diredp-dir-priv ((,class (:foreground ,aqua :background unspecified))))
+     (diredp-exec-priv ((,class (:foreground ,blue :background unspecified))))
+     (diredp-executable-tag ((,class (:foreground ,red :background unspecified))))
      (diredp-file-name ((,class (:foreground ,yellow))))
      (diredp-file-suffix ((,class (:foreground ,green))))
-     (diredp-flag-mark-line ((,class (:background nil :inherit highlight))))
+     (diredp-flag-mark-line ((,class (:background unspecified :inherit highlight))))
      (diredp-ignored-file-name ((,class (:foreground ,comment))))
      (diredp-link-priv ((,class (:background unspecified :foreground ,purple))))
      (diredp-mode-line-flagged ((,class (:foreground ,red))))
      (diredp-mode-line-marked ((,class (:foreground ,green))))
-     (diredp-no-priv ((,class (:background nil))))
+     (diredp-no-priv ((,class (:background unspecified))))
      (diredp-number ((,class (:foreground ,yellow))))
-     (diredp-other-priv ((,class (:background nil :foreground ,purple))))
-     (diredp-rare-priv ((,class (:foreground ,red :background nil))))
-     (diredp-read-priv ((,class (:foreground ,green :background nil))))
+     (diredp-other-priv ((,class (:background unspecified :foreground ,purple))))
+     (diredp-rare-priv ((,class (:foreground ,red :background unspecified))))
+     (diredp-read-priv ((,class (:foreground ,green :background unspecified))))
      (diredp-symlink ((,class (:foreground ,purple))))
-     (diredp-write-priv ((,class (:foreground ,yellow :background nil))))
+     (diredp-write-priv ((,class (:foreground ,yellow :background unspecified))))
 
      ;; Magit (a patch is pending in magit to make these standard upstream)
      (magit-branch ((,class (:foreground ,green))))
      (magit-header ((,class (:inherit nil :weight bold))))
-     (magit-item-highlight ((,class (:inherit highlight :background nil))))
+     (magit-item-highlight ((,class (:inherit highlight :background unspecified))))
      (magit-log-graph ((,class (:foreground ,comment))))
      (magit-log-sha1 ((,class (:foreground ,purple))))
      (magit-log-head-label-bisect-bad ((,class (:foreground ,red))))
@@ -328,13 +328,13 @@ names to which it refers are bound."
      (grep-context-face ((,class (:foreground ,comment))))
      (grep-error-face ((,class (:foreground ,red :weight bold :underline t))))
      (grep-hit-face ((,class (:foreground ,blue))))
-     (grep-match-face ((,class (:foreground nil :background nil :inherit match))))
+     (grep-match-face ((,class (:foreground unspecified :background unspecified :inherit match))))
 
-     (regex-tool-matched-face ((,class (:foreground nil :background nil :inherit match))))
+     (regex-tool-matched-face ((,class (:foreground unspecified :background unspecified :inherit match))))
 
      ;; mark-multiple
-     (mm/master-face ((,class (:inherit region :foreground nil :background nil))))
-     (mm/mirror-face ((,class (:inherit region :foreground nil :background nil))))
+     (mm/master-face ((,class (:inherit region :foreground unspecified :background unspecified))))
+     (mm/mirror-face ((,class (:inherit region :foreground unspecified :background unspecified))))
 
      (org-agenda-structure ((,class (:foreground ,purple))))
      (org-agenda-date ((,class (:foreground ,blue :underline nil))))
@@ -374,7 +374,7 @@ names to which it refers are bound."
 
      ;; js2-mode
      (js2-warning-face ((,class (:underline ,orange))))
-     (js2-error-face ((,class (:foreground nil :underline ,red))))
+     (js2-error-face ((,class (:foreground unspecified :underline ,red))))
      (js2-external-variable-face ((,class (:foreground ,purple))))
      (js2-function-param-face ((,class (:foreground ,blue))))
      (js2-instance-member-face ((,class (:foreground ,blue))))
@@ -382,7 +382,7 @@ names to which it refers are bound."
 
      ;; js3-mode
      (js3-warning-face ((,class (:underline ,orange))))
-     (js3-error-face ((,class (:foreground nil :underline ,red))))
+     (js3-error-face ((,class (:foreground unspecified :underline ,red))))
      (js3-external-variable-face ((,class (:foreground ,purple))))
      (js3-function-param-face ((,class (:foreground ,blue))))
      (js3-jsdoc-tag-face ((,class (:foreground ,orange))))
