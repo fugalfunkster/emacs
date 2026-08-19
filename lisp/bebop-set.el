@@ -84,21 +84,28 @@ save once after — N acks should not mean N file writes.")
 (defun bebop-set--load ()
   "Load sets and session choices from `bebop-set-state-file'.
 Silently ignores missing files and pre-version-2 documents (the v1
-format was written by a retired implementation and never read)."
+format was written by a retired implementation and never read).
+
+The parse builds locals and publishes them in one step at the end. The
+registries used to be emptied first and filled as the maphash walked,
+so any error partway — a truncated write, a Dropbox conflict copy, a
+value of a shape the parse did not expect — left both nil, and the very
+next save wrote that emptiness back over the file it had failed to
+read. A load that fails must cost nothing."
   (when (file-exists-p bebop-set-state-file)
     (condition-case err
         (let* ((doc (with-temp-buffer
                       (insert-file-contents bebop-set-state-file)
                       (json-parse-buffer)))
-               (version (and (hash-table-p doc) (gethash "version" doc))))
+               (version (and (hash-table-p doc) (gethash "version" doc)))
+               parsed-sets parsed-meta)
           (when (and (numberp version) (>= version 2))
-            (setq bebop--sets nil bebop--session-meta nil)
             (when-let ((sets (gethash "sets" doc)))
               (maphash (lambda (name attrs)
                          (push (cons name
                                      (when-let ((c (gethash "created-at" attrs)))
                                        (list :created-at c)))
-                               bebop--sets))
+                               parsed-sets))
                        sets))
             (when-let ((sessions (gethash "sessions" doc)))
               (maphash (lambda (name entry)
@@ -114,11 +121,11 @@ format was written by a retired implementation and never read)."
                                         (list :acked-mr a))
                                       (when-let ((a (gethash "acked-pipeline" entry)))
                                         (list :acked-pipeline a))))
-                               bebop--session-meta))
+                               parsed-meta))
                        sessions))
-            (setq bebop--sets (nreverse bebop--sets)
-                  bebop--session-meta (nreverse bebop--session-meta))
-            (setq bebop--exile-proposals
+            (setq bebop--sets (nreverse parsed-sets)
+                  bebop--session-meta (nreverse parsed-meta)
+                  bebop--exile-proposals
                   (append (gethash "proposals" doc) nil))))
       (error (message "bebop-set: could not read %s (%s)"
                       bebop-set-state-file (error-message-string err))))))

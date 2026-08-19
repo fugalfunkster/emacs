@@ -795,7 +795,24 @@ current subtree to its * Overture section.
     (bebop--create-session name venue-path chart-path
                            (when bebop-use-docker 'docker))))
 
-(defun bebop--reap-runtime (name &optional ask-solo)
+(defun bebop--reap-buffer (buf &optional keep-prompts)
+  "Kill BUF while reaping a session; with KEEP-PROMPTS, let it ask.
+Without KEEP-PROMPTS the kill is unconditional: query functions off and
+the buffer marked unmodified first, because the caller has already
+decided to discard the whole session and there is no one present to
+consent a second time.
+
+The prompt this suppresses is not a courtesy in a server Emacs. It
+either blocks the caller forever or, answered \"no\", tells teardown
+the buffer is gone when it is not."
+  (when (buffer-live-p buf)
+    (if keep-prompts
+        (kill-buffer buf)
+      (let ((kill-buffer-query-functions nil))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf)))))
+
+(defun bebop--reap-runtime (name &optional asking)
   "Reap session NAME's runtime: tmux window, UI buffers, registries.
 Steps:
   1. Kill the tmux window (claude:NAME)
@@ -804,10 +821,11 @@ Steps:
   4. Close the chart buffer (the file itself is not touched)
   5. Drop NAME from the session registries, re-homing the active session
 
-With ASK-SOLO non-nil, an open Solo frame is closed only on
-confirmation — the kill path, where the frame's buffers may still be
-worth reading. Without it the frame goes quietly, which is what a
-discard wants and what a headless caller requires.
+With ASKING non-nil a human is at the keyboard: an open Solo frame is
+closed only on confirmation, and buffer kills prompt as they normally
+would. This is the kill path, where the frame's buffers may still be
+worth reading. Without it the frame goes quietly and no buffer asks
+anything — what a discard wants, and what a headless caller requires.
 
 Chart and venue artifacts on disk are left alone; the caller decides
 whether this is a pause or a discard."
@@ -819,31 +837,33 @@ whether this is a pause or a discard."
       (ignore-errors
         (bebop--tmux "kill-window" "-t" (plist-get pair-info :window))))
     ;; 2. Kill composition buffer
-    (let ((buf (get-buffer (format "*bebop-session: %s*" name))))
-      (when (buffer-live-p buf)
-        (kill-buffer buf)))
+    (bebop--reap-buffer (get-buffer (format "*bebop-session: %s*" name))
+                        asking)
     ;; 3. Close Solo frame if open — buffer cleanup, asked or assumed
     (let ((solo-frame (cl-find-if
                        (lambda (f) (equal (frame-parameter f 'bebop-solo-session) name))
                        (frame-list))))
       (when solo-frame
-        (if (or (null ask-solo)
+        (if (or (null asking)
                 (yes-or-no-p (format "Solo frame for \"%s\" is open. Close it and clean up buffers? " name)))
             (progn
               (dolist (buf (delete-dups (mapcar #'window-buffer (window-list solo-frame))))
                 (when (and (buffer-live-p buf)
                            (cl-every (lambda (w) (eq (window-frame w) solo-frame))
                                      (get-buffer-window-list buf nil t)))
-                  (let ((kill-buffer-query-functions
-                         (remq 'process-kill-buffer-query-function
-                               kill-buffer-query-functions)))
-                    (kill-buffer buf))))
+                  (if asking
+                      ;; The frame's own closure was just confirmed; only
+                      ;; the shell process query is redundant here.
+                      (let ((kill-buffer-query-functions
+                             (remq 'process-kill-buffer-query-function
+                                   kill-buffer-query-functions)))
+                        (kill-buffer buf))
+                    (bebop--reap-buffer buf))))
               (delete-frame solo-frame))
           (message "Solo frame left open — it will be stale after this kill."))))
     ;; 4. Close chart buffer (file remains in bebop-charts-dir)
     (when chart-path
-      (let ((buf (find-buffer-visiting chart-path)))
-        (when buf (kill-buffer buf))))
+      (bebop--reap-buffer (find-buffer-visiting chart-path) asking))
     ;; 5. Remove from registries (simple — no state transition)
     (setq bebop--sessions
           (cl-remove-if (lambda (s) (equal (car s) name)) bebop--sessions))
@@ -898,11 +918,31 @@ confirms first."
                            (directory-file-name venue))))
          (set (and (fboundp 'bebop-set--session-set)
                    (bebop-set--session-set name))))
+    ;; A name with no facets is a typo, not a session. Every step below
+    ;; no-ops on one, so the old code saved twice and reported a
+    ;; successful teardown of something that never existed.
+    (unless (or chart venue
+                (assoc name bebop--live-sessions)
+                (member name (bebop--on-deck-names)))
+      (user-error "No session named \"%s\" — nothing to tear down" name))
     (bebop--reap-runtime name)
     (when (and slug
                (fboundp 'bebop--backline-live-p)
                (bebop--backline-live-p slug))
       (bebop-backline-kill slug))
+    ;; Archiving renames the chart, so no buffer may still be visiting
+    ;; it — one that is would keep pointing at the old path and write
+    ;; the session back there on its next save. `bebop--reap-runtime'
+    ;; closes the chart it finds in the session registry, which an
+    ;; on-deck session does not have an entry in; and the on-deck chart
+    ;; is precisely the one you had open when you decided to discard it.
+    ;; So close the resolved chart's buffer here, then verify. Reaching
+    ;; the error means a kill hook errored: the runtime is already gone,
+    ;; and a second teardown after closing the buffer finishes the job.
+    (when chart (bebop--reap-buffer (find-buffer-visiting chart)))
+    (when (and chart (find-buffer-visiting chart))
+      (user-error "Chart buffer for \"%s\" survived the reap; refusing to archive %s"
+                  name chart))
     (when chart (bebop--archive-chart name chart))
     (when venue (bebop--remove-venue venue))
     ;; Observed state and recorded choices are both keyed by name, and
