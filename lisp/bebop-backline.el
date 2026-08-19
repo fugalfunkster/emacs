@@ -235,6 +235,65 @@ and an empty roster, never a broken fleet view."
   (seq-find (lambda (s) (equal (plist-get s :name) name))
             (bebop-backline-roster)))
 
+(defcustom bebop-backline-stack-sh "~/dotfiles/roost/stack.sh"
+  "Path to the roost stack launcher `bebop-backline-roster-stack-sh' reads."
+  :type 'file
+  :group 'bebop)
+
+(defconst bebop-backline--stack-start-cmds
+  '(("node" . "yarn dev")
+    ("fe-npm" . "npm run dev"))
+  "Roster :start-cmd by stack.sh service type, where the type decides it.
+fe-yarn and maven are absent on purpose — see the design section.")
+
+(defun bebop-backline-roster-stack-sh ()
+  "Parse the SERVICES table of `bebop-backline-stack-sh' into a roster.
+Skips libraries and `broken'-flagged rows: neither is a service a
+session can hold. Tolerates comments and any column spacing.
+
+Returns nil, with one message, when the file is missing or the table
+has moved: a roster source must not be the thing that breaks the fleet
+view."
+  (let ((file (expand-file-name bebop-backline-stack-sh)))
+    (cond
+     ((not (file-readable-p file))
+      (message "Backline roster: no stack.sh at %s" file) nil)
+     (t
+      (with-temp-buffer
+        (insert-file-contents file)
+        (goto-char (point-min))
+        (if (not (re-search-forward "^SERVICES=\"" nil t))
+            (progn (message "Backline roster: no SERVICES table in %s" file)
+                   nil)
+          (forward-line 1)
+          (let (roster)
+            (while (not (or (eobp) (looking-at "[ \t]*\"")))
+              (let ((line (string-trim
+                           (buffer-substring-no-properties
+                            (line-beginning-position) (line-end-position)))))
+                (unless (or (string-empty-p line) (string-prefix-p "#" line))
+                  (let* ((f (split-string line "[ \t]+" t))
+                         (name (nth 0 f)) (type (nth 1 f))
+                         (group (nth 2 f)) (port (nth 3 f)) (opts (nth 4 f)))
+                    (when (and name type
+                               (not (equal type "maven-lib"))
+                               (not (equal opts "broken")))
+                      (push (list :name name
+                                  :port (and port
+                                             (string-match-p "\\`[0-9]+\\'" port)
+                                             (string-to-number port))
+                                  :group (unless (equal group "-") group)
+                                  :start-cmd (cdr (assoc
+                                                   type
+                                                   bebop-backline--stack-start-cmds))
+                                  :machine-cmd (format "%s up %s"
+                                                       (shell-quote-argument file)
+                                                       name)
+                                  :broken nil)
+                            roster)))))
+              (forward-line 1))
+            (nreverse roster))))))))
+
 (defun bebop--pid-cwds (pids)
   "Return a hash of PID → working directory for PIDS, in one lsof call.
 lsof exits non-zero when any of PIDS has already gone; the pids that
