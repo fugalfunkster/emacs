@@ -874,13 +874,16 @@ signal that pulse has stopped beating."
 :mr is (:state :unresolved :iid :at); :pipeline is (:status :at).")
 
 (defun bebop-external--load ()
-  "Load the external-status cache, importing the old MR sidecar once.
-The pre-pulse cache lived at bebop-mr-cache.json under
-`user-emacs-directory' and held bare MR entries; if the new file
-doesn't exist yet, fold the old one in and write it."
+  "Load this host's external-status cache.
+No import path, deliberately. The sidecar is host-scoped
+\(HOST.status.json beside HOST.state.json) and the pre-pulse
+bebop-mr-cache.json it replaced was not — it sat in the Dropbox-synced
+config tree, so a fresh host with no sidecar of its own imported
+whichever machine wrote that file last, and presented weeks-old MR
+state as this machine's current view. A host whose own sidecar is
+missing has no MR history; the next pulse gives it one."
   (setq bebop--external-cache nil)
-  (cond
-   ((file-exists-p bebop-external-cache-file)
+  (when (file-exists-p bebop-external-cache-file)
     (condition-case nil
         (let* ((doc (with-temp-buffer
                       (insert-file-contents bebop-external-cache-file)
@@ -903,25 +906,7 @@ doesn't exist yet, fold the old one in and write it."
                                           :at (gethash "at" p))))))
                      bebop--external-cache))
              sessions)))
-      (error (setq bebop--external-cache nil))))
-   ((file-exists-p (locate-user-emacs-file "bebop-mr-cache.json"))
-    (condition-case nil
-        (let ((doc (with-temp-buffer
-                     (insert-file-contents
-                      (locate-user-emacs-file "bebop-mr-cache.json"))
-                     (json-parse-buffer))))
-          (maphash
-           (lambda (name e)
-             (push (cons name
-                         (list :mr
-                               (list :state (gethash "state" e)
-                                     :unresolved (or (gethash "unresolved" e) 0)
-                                     :iid (gethash "iid" e)
-                                     :at (gethash "at" e))))
-                   bebop--external-cache))
-           doc)
-          (bebop-external--save))
-      (error (setq bebop--external-cache nil))))))
+      (error (setq bebop--external-cache nil)))))
 
 (defun bebop-external--save ()
   "Persist the external-status cache."
