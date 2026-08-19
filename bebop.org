@@ -1172,6 +1172,49 @@ take effect without restarting Emacs.
   :group 'bebop)
 #+end_src
 
+*** Machine identity
+
+Two per-host filenames are built from this machine's name: the
+external-status sidecar (=HOST.status.json= under the org tree) and the
+mailbox files (=HOST.presence.json= and friends). Both used
+=(system-name)= directly, which put an untrusted value straight into a
+path — and on 2026-08-02 that produced =-¡U.status.json= in
+=~/Code/Org/.bebop/=, byte-identical to the Mac Pro's own sidecar. The
+Mac Pro's Emacs asked the machine its name, got bytes back, and wrote
+its cache to them.
+
+The name has to be validated at the one place it enters a path.
+
+#+begin_src emacs-lisp
+(defconst bebop-host-fallback "unknown-host"
+  "Host component used when this machine's name cannot be trusted.")
+
+(defun bebop--host-name ()
+  "Return this machine's short name, safe to interpolate into a filename.
+`system-name' is not trustworthy enough to paste into a path: it is
+whatever gethostname() answered when Emacs started, decoded with
+whatever locale Emacs inherited. A Mac mid-rename — DHCP, a Bonjour
+collision, a ComputerName carrying a curly apostrophe that has to be
+transliterated — can answer with bytes that are not a name at all.
+
+So: first dot-separated component, keep only the characters a hostname
+may contain, and require what is left to begin with an alphanumeric.
+That last check is the one that matters — stripping the high bytes out
+of the 2026-08-02 garbage leaves \"-U\", and a leading dash is a
+filename that most tools read as an option.
+
+The fallback is deliberately not `scutil --get LocalHostName': on this
+iMac that still answers \"mmm\", the name the machine had two renames
+ago, which is exactly how the stale mmm.* mailbox files were born. A
+wrong-but-obvious host component beats a wrong-and-invisible one."
+  (let ((short (replace-regexp-in-string
+                "[^A-Za-z0-9_-]" ""
+                (car (split-string (or (system-name) "") "\\.")))))
+    (if (string-match-p "\\`[A-Za-z0-9]" short)
+        short
+      bebop-host-fallback)))
+#+end_src
+
 *** Faces
 
 #+begin_src emacs-lisp
@@ -5167,8 +5210,7 @@ set's own session, by naming convention); otherwise the gutter is blank.
 
 (defcustom bebop-external-cache-file
   (expand-file-name
-   (format "../.bebop/%s.status.json"
-           (car (split-string (system-name) "\\.")))
+   (format "../.bebop/%s.status.json" (bebop--host-name))
    (expand-file-name bebop-charts-dir))
   "Sidecar caching per-session external status (MR review, pipeline).
 Written by out-of-band fetchers through the citizen verbs; read-only
@@ -5906,8 +5948,11 @@ nil disables call-and-response on this machine."
   :type '(choice (const nil) directory)
   :group 'bebop)
 
-(defcustom bebop-call-host (car (split-string (system-name) "\\."))
-  "This machine's name in the mailbox protocol (short hostname)."
+(defcustom bebop-call-host (bebop--host-name)
+  "This machine's name in the mailbox protocol (short hostname).
+Validated by `bebop--host-name' rather than read straight off
+`system-name': every mailbox filename is built from this, and a machine
+answering with garbage would post its presence where no peer looks."
   :type 'string
   :group 'bebop)
 
@@ -6504,6 +6549,11 @@ repo), and writes results back through the same citizen verbs roundup
 uses. Exits silently when Emacs isn't up — pulse skips a beat, the
 sidecar's timestamps age, the glyphs dim: staleness is the health
 meter, no separate monitoring needed.
+
+Note what pulse does *not* know: where the sidecar lives. It never
+touches the file or derives a host name — that is
+=bebop-external-cache-file='s job, and the reason a garbled sidecar is
+an Emacs-side bug (see =bebop--host-name=), never a fetcher bug.
 
 Registered in cron every 10 minutes, stdout/stderr to
 =~/.emacs.d/pulse.log= (overwritten each run — the log answers "what

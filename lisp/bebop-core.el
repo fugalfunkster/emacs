@@ -52,6 +52,34 @@
   :type 'boolean
   :group 'bebop)
 
+(defconst bebop-host-fallback "unknown-host"
+  "Host component used when this machine's name cannot be trusted.")
+
+(defun bebop--host-name ()
+  "Return this machine's short name, safe to interpolate into a filename.
+`system-name' is not trustworthy enough to paste into a path: it is
+whatever gethostname() answered when Emacs started, decoded with
+whatever locale Emacs inherited. A Mac mid-rename — DHCP, a Bonjour
+collision, a ComputerName carrying a curly apostrophe that has to be
+transliterated — can answer with bytes that are not a name at all.
+
+So: first dot-separated component, keep only the characters a hostname
+may contain, and require what is left to begin with an alphanumeric.
+That last check is the one that matters — stripping the high bytes out
+of the 2026-08-02 garbage leaves \"-U\", and a leading dash is a
+filename that most tools read as an option.
+
+The fallback is deliberately not `scutil --get LocalHostName': on this
+iMac that still answers \"mmm\", the name the machine had two renames
+ago, which is exactly how the stale mmm.* mailbox files were born. A
+wrong-but-obvious host component beats a wrong-and-invisible one."
+  (let ((short (replace-regexp-in-string
+                "[^A-Za-z0-9_-]" ""
+                (car (split-string (or (system-name) "") "\\.")))))
+    (if (string-match-p "\\`[A-Za-z0-9]" short)
+        short
+      bebop-host-fallback)))
+
 (defface bebop-header-face
   '((t :height 3.0 :weight bold))
   "Face for the composition buffer header text."

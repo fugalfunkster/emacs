@@ -723,8 +723,7 @@ pinned utility names (emacs, bebop, claude) last."
 
 (defcustom bebop-external-cache-file
   (expand-file-name
-   (format "../.bebop/%s.status.json"
-           (car (split-string (system-name) "\\.")))
+   (format "../.bebop/%s.status.json" (bebop--host-name))
    (expand-file-name bebop-charts-dir))
   "Sidecar caching per-session external status (MR review, pipeline).
 Written by out-of-band fetchers through the citizen verbs; read-only

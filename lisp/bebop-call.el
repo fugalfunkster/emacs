@@ -18,8 +18,11 @@ nil disables call-and-response on this machine."
   :type '(choice (const nil) directory)
   :group 'bebop)
 
-(defcustom bebop-call-host (car (split-string (system-name) "\\."))
-  "This machine's name in the mailbox protocol (short hostname)."
+(defcustom bebop-call-host (bebop--host-name)
+  "This machine's name in the mailbox protocol (short hostname).
+Validated by `bebop--host-name' rather than read straight off
+`system-name': every mailbox filename is built from this, and a machine
+answering with garbage would post its presence where no peer looks."
   :type 'string
   :group 'bebop)
 
