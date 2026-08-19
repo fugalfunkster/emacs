@@ -474,6 +474,41 @@ keystroke — only at an edge that happened while you looked away."
   (bebop--render)
   (message "Set \"%s\" declared" name))
 
+(defun bebop-set--forget-set (name)
+  "Drop set NAME from the registry and clear references to it.
+The mechanical half of removal, shared by the interactive command, the
+per-teardown prune, and the sweep. Stale meta references are cleared
+too: sessions whose artifacts are gone but whose choice entries linger
+would otherwise resurrect the set on the next load."
+  (setq bebop--sets (assoc-delete-all name bebop--sets))
+  (dolist (cell bebop--session-meta)
+    (when (equal (plist-get (cdr cell) :set) name)
+      (setcdr cell (plist-put (cdr cell) :set nil))))
+  (bebop-set--save))
+
+(defun bebop-set--forget-session (name)
+  "Drop NAME's whole choice entry: set membership, acks, activity stamps.
+Called at teardown — every key in the entry is a statement about a
+session that no longer exists."
+  (setq bebop--session-meta (assoc-delete-all name bebop--session-meta))
+  (bebop-set--save))
+
+(defun bebop-set--members (set &optional rows)
+  "Return the names of SET's members, from ROWS or a fresh row scan."
+  (mapcar (lambda (r) (plist-get r :name))
+          (seq-filter (lambda (r) (equal (plist-get r :set) set))
+                      (or rows (bebop-set--rows)))))
+
+(defun bebop-set--prune-if-empty (set)
+  "Remove SET when no session belongs to it any more. Return SET if removed.
+A set exists to hold sessions, so its last member leaving ends it —
+otherwise it lingers as an empty box on stage until someone remembers
+`bebop-remove-set'. Removal is free: enrichment re-declares the set the
+next time a ticket matches its epic."
+  (when (and set (null (bebop-set--members set)))
+    (bebop-set--forget-set set)
+    set))
+
 (defun bebop-remove-set (name)
   "Remove the empty set NAME from the registry.
 Refuses if any session (running or on deck) still belongs to it —
@@ -482,19 +517,57 @@ self-healing, since enrichment re-creates a set the next time a
 ticket matches its epic."
   (interactive
    (list (completing-read "Remove set: " (bebop-set--names) nil t)))
-  (when (seq-some (lambda (r) (equal (plist-get r :set) name))
-                  (bebop-set--rows))
+  (when (bebop-set--members name)
     (user-error "Set %s still has members — reassign or exile them first"
                 name))
-  (setq bebop--sets (assoc-delete-all name bebop--sets))
-  ;; Clear any stale meta references (sessions whose artifacts are gone
-  ;; but whose choice entries linger).
-  (dolist (cell bebop--session-meta)
-    (when (equal (plist-get (cdr cell) :set) name)
-      (setcdr cell (plist-put (cdr cell) :set nil))))
-  (bebop-set--save)
+  (bebop-set--forget-set name)
   (bebop--render)
   (message "Set \"%s\" removed" name))
+
+(defun bebop-set-prune-empty ()
+  "Remove every set with no members. Return the list of removed names.
+The backstop to `bebop-set--prune-if-empty': membership also ends in
+ways teardown never sees — a chart archived by hand, a venue removed in
+a shell, a set emptied on another machine. This enumerates every known
+set and counts, rather than reasoning forward from what just changed,
+which is exactly why pre-existing empties used to accumulate."
+  (interactive)
+  (let ((rows (bebop-set--rows))
+        removed)
+    (dolist (set (bebop-set--names))
+      (unless (bebop-set--members set rows)
+        (bebop-set--forget-set set)
+        (push set removed)))
+    (setq removed (nreverse removed))
+    (when removed (bebop--render))
+    (when (called-interactively-p 'interactive)
+      (message (if removed
+                   (format "Pruned %d empty set(s): %s"
+                           (length removed) (string-join removed ", "))
+                 "No empty sets")))
+    removed))
+
+(defun bebop-close-set (set)
+  "Close SET: tear down every member, then remove the set itself.
+The set-scale discard verb — a shipped epic is one gesture, not one per
+session. Members go through `bebop-teardown-session', so charts land in
+the archive and venues are removed; the set disappears because its last
+member left, not as a separate decision."
+  (interactive
+   (list (completing-read "Close set: " (bebop-set--names) nil t)))
+  (let ((members (bebop-set--members set)))
+    (unless (yes-or-no-p
+             (format "Close set \"%s\"? (tear down %d: %s) "
+                     set (length members)
+                     (if members (string-join members ", ") "no members")))
+      (user-error "Close cancelled"))
+    (dolist (name members)
+      (bebop-teardown-session name))
+    ;; The last teardown normally prunes the set; an already-empty set,
+    ;; or one whose members refused to leave, still needs the check.
+    (bebop-set--prune-if-empty set)
+    (bebop--render)
+    (message "Closed set \"%s\" (%d torn down)" set (length members))))
 
 (defun bebop--entry-name-at-point ()
   "Return the session or on-deck entry name at point, or nil."

@@ -103,10 +103,24 @@ Three distinct operations for ending or cleaning up a session:
 subdirectory (=~/Code/Org/charts/archive/NAME-MMDD.org=) while leaving the
 session running. Useful after a session wraps up a phase of work.
 
-*Exile* (=e= in dashboard on an On deck entry) — permanently removes an on-deck
-session: archives the chart and deletes the venue via =git worktree remove --force=
-(falling back to =rm -rf= if the parent repo is gone). The session will no longer
-appear in On deck.
+*Exile* (=e= in dashboard) — permanently discards a session. Exile asks;
+=bebop-teardown-session= does the work, and it reaps the *whole tuple*:
+tmux window, backline work shell, UI buffers, chart to the archive,
+venue via =git worktree remove --force= (falling back to =rm -rf= if the
+parent repo is gone), external-status cache entry, set membership and
+ack/activity meta — and the set itself if this was its last member. The
+session will not reappear in On deck.
+
+The pairing to hold onto: *kill is pause, exile is discard.* Kill leaves
+artifacts precisely so the session can come back; exile leaves nothing
+but the archived chart. Every facet used to have an owner and none owned
+the whole, which is how live tmux windows survived archived charts and
+empty sets accumulated on stage.
+
+*Close set* (=M-x bebop-close-set=) — exile at set scale: tear down every
+member, then the set goes with them. A shipped epic is one gesture.
+=bebop-set-prune-empty= is the sweep behind it, exposed to agents as a
+citizen verb so roundup can prune what teardown never saw.
 
 Note: git worktrees lock their branch. An unremoved venue prevents checking out
 that branch elsewhere.
@@ -3253,41 +3267,69 @@ the parent repo is gone)."
       (message "Removed venue directory: %s" venue-path))))
 #+end_src
 
-Interactive command to exile an on-deck session: archive its chart, delete its venue.
+Which artifacts a session actually has on disk is a question three
+callers ask — exile's prompt, teardown's reaping, and the confirmation
+text between them — so it gets one answer.
+
+#+begin_src emacs-lisp
+(defun bebop--session-artifacts (name)
+  "Return a plist (:chart PATH :venue PATH) of NAME's artifacts on disk.
+Registry first, then the name-derived paths: an on-deck session has
+artifacts and no registry entry, and a path in the registry may already
+be gone. Nil for either facet means nothing to reap."
+  (let ((sinfo (bebop--session-info name)))
+    (list :chart
+          (or (let ((c (and sinfo (plist-get sinfo :chart))))
+                (and c (file-exists-p c) c))
+              (let ((p (expand-file-name (concat name ".org")
+                                         (expand-file-name bebop-charts-dir))))
+                (and (file-exists-p p) p)))
+          :venue
+          (or (let ((v (and sinfo (plist-get sinfo :venue))))
+                (and v (file-directory-p v) v))
+              (let ((p (expand-file-name name
+                                         (expand-file-name bebop-venues-dir))))
+                (and (file-directory-p p) p))))))
+
+(defun bebop--teardown-desc (name)
+  "Describe what tearing NAME down will discard, for a confirmation prompt."
+  (let* ((artifacts (bebop--session-artifacts name))
+         (parts (delq nil
+                      (list (and (assoc name bebop--live-sessions)
+                                 "kill tmux window")
+                            (and (plist-get artifacts :chart) "archive chart")
+                            (and (plist-get artifacts :venue) "delete venue")))))
+    (if parts (string-join parts " + ") "no artifacts")))
+
+(defun bebop--teardown-names ()
+  "Return every session name that could be torn down: running and on deck."
+  (seq-uniq (append (mapcar #'car bebop--live-sessions)
+                    (bebop--on-deck-names))))
+#+end_src
+
+Exile is the discard verb's front door: it owns completion and consent
+and delegates the reaping to =bebop-teardown-session= (defined below,
+under Session archiving, next to the kill it is the counterweight to).
+Live sessions are offered as well as on-deck ones — teardown kills the
+tmux window, so "exile" no longer means "on deck only".
 
 #+begin_src emacs-lisp
 (defun bebop-exile-session (name)
-  "Exile on-deck session NAME: archive its chart and delete its venue.
-The session will not appear in On deck and cannot be resumed.
+  "Exile session NAME: discard its tuple, keeping only the archived chart.
+Where `bebop-kill-session' pauses a session — artifacts on disk, ready
+to resume — exile reaps it: tmux window, backline, chart to the
+archive, venue deleted, caches and set membership dropped, and the set
+itself if NAME was its last member. The session will not reappear in On
+deck and cannot be resumed.
 
-Steps:
-  1. Archive chart to the archive subdirectory (if present on disk)
-  2. Delete venue via git worktree remove --force, or rm -rf (if present)
-  3. Refresh the dashboard"
+This command asks; `bebop-teardown-session' does the work."
   (interactive
-   (list (completing-read "Exile session: "
-                          (bebop--on-deck-names) nil t)))
-  (let* ((chart-path (let ((f (expand-file-name
-                               (concat name ".org")
-                               (expand-file-name bebop-charts-dir))))
-                       (when (file-exists-p f) f)))
-         (venue-path (let ((d (expand-file-name
-                               name
-                               (expand-file-name bebop-venues-dir))))
-                       (when (file-directory-p d) d)))
-         (desc (cond
-                ((and chart-path venue-path) "archive chart + delete venue")
-                (chart-path                  "archive chart (no venue)")
-                (venue-path                  "delete venue (no chart)")
-                (t                           "(no artifacts)"))))
-    (unless (yes-or-no-p (format "Exile \"%s\"? (%s) " name desc))
-      (user-error "Exile cancelled"))
-    (when chart-path
-      (bebop--archive-chart name chart-path))
-    (when venue-path
-      (bebop--remove-venue venue-path))
-    (bebop-refresh)
-    (message "Exiled session: %s" name)))
+   (list (completing-read "Exile session: " (bebop--teardown-names) nil t)))
+  (unless (yes-or-no-p (format "Exile \"%s\"? (%s) "
+                               name (bebop--teardown-desc name)))
+    (user-error "Exile cancelled"))
+  (bebop-teardown-session name)
+  (message "Exiled session: %s" name))
 #+end_src
 
 Point-aware wrapper for =bebop-exile-session=, usable from the dashboard.
@@ -3562,28 +3604,37 @@ current subtree to its * Overture section.
 
 *** Session archiving
 
-=bebop-kill-session= cleans up all state associated with a session.
+Two verbs, deliberately different in scale. =bebop-kill-session= is
+*pause*: it reaps the runtime — tmux window, composition buffer, Solo
+frame, chart buffer — and leaves the chart and venue on disk, so the
+session drops to On deck and can be resumed. A worktree may hold
+uncommitted work or serve future sessions; deleting it on kill would be
+destructive. =bebop-teardown-session= is *discard*: it reaps the whole
+tuple, and exile is its consent-asking front door.
 
-Venue removal is intentionally decoupled from session kill.  A worktree may
-contain uncommitted work or may be shared across future sessions; deleting it
-automatically on kill would be destructive.  Instead, kill removes the session
-from the registry and closes Emacs buffers — the chart and venue files remain
-on disk and appear in On deck until the user explicitly cleans them up.
+Both share =bebop--reap-runtime=, which does the runtime half. The only
+difference is the Solo frame: kill asks before closing it (your buffers
+may be worth keeping), teardown does not (the session is going away).
 
 #+begin_src emacs-lisp
-(defun bebop-kill-session (name)
-  "Kill session NAME and clean up all associated state.
-
+(defun bebop--reap-runtime (name &optional ask-solo)
+  "Reap session NAME's runtime: tmux window, UI buffers, registries.
 Steps:
   1. Kill the tmux window (claude:NAME)
   2. Kill the *bebop-session: NAME* composition buffer
   3. Close the Solo frame for this session (if open)
-  4. Close the chart buffer (file remains in bebop-charts-dir)
+  4. Close the chart buffer (the file itself is not touched)
+  5. Drop NAME from the session registries, re-homing the active session
 
-Chart and venue artifacts are left on disk and will appear in On deck."
-  (let* ((sinfo     (bebop--session-info name))
+With ASK-SOLO non-nil, an open Solo frame is closed only on
+confirmation — the kill path, where the frame's buffers may still be
+worth reading. Without it the frame goes quietly, which is what a
+discard wants and what a headless caller requires.
+
+Chart and venue artifacts on disk are left alone; the caller decides
+whether this is a pause or a discard."
+  (let* ((sinfo      (bebop--session-info name))
          (chart-path (plist-get sinfo :chart))
-         (venue-path (plist-get sinfo :venue))
          (pair-info  (cdr (assoc name bebop--live-sessions))))
     ;; 1. Kill tmux window
     (when pair-info
@@ -3593,12 +3644,13 @@ Chart and venue artifacts are left on disk and will appear in On deck."
     (let ((buf (get-buffer (format "*bebop-session: %s*" name))))
       (when (buffer-live-p buf)
         (kill-buffer buf)))
-    ;; 3. Close Solo frame if open — offer buffer cleanup
+    ;; 3. Close Solo frame if open — buffer cleanup, asked or assumed
     (let ((solo-frame (cl-find-if
                        (lambda (f) (equal (frame-parameter f 'bebop-solo-session) name))
                        (frame-list))))
       (when solo-frame
-        (if (yes-or-no-p (format "Solo frame for \"%s\" is open. Close it and clean up buffers? " name))
+        (if (or (null ask-solo)
+                (yes-or-no-p (format "Solo frame for \"%s\" is open. Close it and clean up buffers? " name)))
             (progn
               (dolist (buf (delete-dups (mapcar #'window-buffer (window-list solo-frame))))
                 (when (and (buffer-live-p buf)
@@ -3614,7 +3666,7 @@ Chart and venue artifacts are left on disk and will appear in On deck."
     (when chart-path
       (let ((buf (find-buffer-visiting chart-path)))
         (when buf (kill-buffer buf))))
-    ;; Remove from registries (simple — no state transition)
+    ;; 5. Remove from registries (simple — no state transition)
     (setq bebop--sessions
           (cl-remove-if (lambda (s) (equal (car s) name)) bebop--sessions))
     (setq bebop--live-sessions
@@ -3622,9 +3674,87 @@ Chart and venue artifacts are left on disk and will appear in On deck."
     ;; Update active pair if needed
     (when (equal bebop--active-session name)
       (setq bebop--active-session (caar bebop--live-sessions))
-      (bebop--apply-active-session))
+      (bebop--apply-active-session))))
+
+(defun bebop-kill-session (name)
+  "Kill session NAME — pause it, keeping its artifacts.
+The runtime goes (tmux window, composition buffer, Solo frame, chart
+buffer); the chart and venue stay on disk and the session reappears in
+On deck, resumable. To discard instead, use `bebop-exile-session'."
+  (bebop--reap-runtime name t)
+  (bebop-refresh)
+  (message "Killed Bebop session: %s" name))
+#+end_src
+
+A session is a tuple of facets keyed by one name: chart, venue, tmux
+window, backline work shell, external-status cache, set membership,
+ack/activity meta, UI buffers. Every facet had an owner and none owned
+the whole, so discarding a session used to mean remembering all of
+them — and the forgotten ones (a live tmux window under an archived
+chart, a backline holding ports for a deleted venue, an empty set left
+on stage) were exactly what accumulated.
+
+=bebop-teardown-session= is the single op that reaps the tuple. It
+reaches across modules through =fboundp= guards rather than requires:
+without =bebop-set= there is no membership or cache to clear, without
+=bebop-backline= there is no work shell, and teardown simply has fewer
+facets to reap. It never prompts — consent belongs to its callers
+(=bebop-exile-session=, =bebop-close-set=, the citizen surface), and a
+prompt inside would hang the headless ones.
+
+#+begin_src emacs-lisp
+;; Set and backline facets, reached softly — see Module dependencies.
+(declare-function bebop-set--session-set "bebop-set")
+(declare-function bebop-set--forget-session "bebop-set")
+(declare-function bebop-set--prune-if-empty "bebop-set")
+(declare-function bebop-external-clear "bebop-set")
+(declare-function bebop--backline-live-p "bebop-backline")
+(declare-function bebop-backline-kill "bebop-backline")
+
+(defun bebop-teardown-session (name)
+  "Reap session NAME's whole tuple — the discard op.
+
+Steps:
+  1. Runtime — tmux window, composition buffer, Solo frame, chart buffer
+  2. Backline — the venue's work-shell window, before the venue goes
+  3. Disk — chart moved to the archive, venue removed
+  4. Caches — the external-status (MR + pipeline) entry
+  5. Choices — set membership, ack snapshots, activity stamps
+  6. The set itself, when NAME was its last member
+
+Non-interactively this never prompts; interactively it reads a name and
+confirms first."
+  (interactive
+   (list (let ((name (completing-read "Tear down session: "
+                                      (bebop--teardown-names) nil t)))
+           (if (yes-or-no-p (format "Tear down \"%s\"? (%s) "
+                                    name (bebop--teardown-desc name)))
+               name
+             (user-error "Teardown cancelled")))))
+  (let* ((artifacts (bebop--session-artifacts name))
+         (chart (plist-get artifacts :chart))
+         (venue (plist-get artifacts :venue))
+         (slug (and venue (file-name-nondirectory
+                           (directory-file-name venue))))
+         (set (and (fboundp 'bebop-set--session-set)
+                   (bebop-set--session-set name))))
+    (bebop--reap-runtime name)
+    (when (and slug
+               (fboundp 'bebop--backline-live-p)
+               (bebop--backline-live-p slug))
+      (bebop-backline-kill slug))
+    (when chart (bebop--archive-chart name chart))
+    (when venue (bebop--remove-venue venue))
+    ;; Observed state and recorded choices are both keyed by name, and
+    ;; both are statements about a session that no longer exists.
+    (when (fboundp 'bebop-external-clear)
+      (bebop-external-clear name))
+    (when (fboundp 'bebop-set--forget-session)
+      (bebop-set--forget-session name))
+    (when (and set (fboundp 'bebop-set--prune-if-empty))
+      (bebop-set--prune-if-empty set))
     (bebop-refresh)
-    (message "Killed Bebop session: %s" name)))
+    (message "Tore down session: %s" name)))
 #+end_src
 
 *** Session resume
@@ -4772,6 +4902,41 @@ keystroke — only at an edge that happened while you looked away."
   (bebop--render)
   (message "Set \"%s\" declared" name))
 
+(defun bebop-set--forget-set (name)
+  "Drop set NAME from the registry and clear references to it.
+The mechanical half of removal, shared by the interactive command, the
+per-teardown prune, and the sweep. Stale meta references are cleared
+too: sessions whose artifacts are gone but whose choice entries linger
+would otherwise resurrect the set on the next load."
+  (setq bebop--sets (assoc-delete-all name bebop--sets))
+  (dolist (cell bebop--session-meta)
+    (when (equal (plist-get (cdr cell) :set) name)
+      (setcdr cell (plist-put (cdr cell) :set nil))))
+  (bebop-set--save))
+
+(defun bebop-set--forget-session (name)
+  "Drop NAME's whole choice entry: set membership, acks, activity stamps.
+Called at teardown — every key in the entry is a statement about a
+session that no longer exists."
+  (setq bebop--session-meta (assoc-delete-all name bebop--session-meta))
+  (bebop-set--save))
+
+(defun bebop-set--members (set &optional rows)
+  "Return the names of SET's members, from ROWS or a fresh row scan."
+  (mapcar (lambda (r) (plist-get r :name))
+          (seq-filter (lambda (r) (equal (plist-get r :set) set))
+                      (or rows (bebop-set--rows)))))
+
+(defun bebop-set--prune-if-empty (set)
+  "Remove SET when no session belongs to it any more. Return SET if removed.
+A set exists to hold sessions, so its last member leaving ends it —
+otherwise it lingers as an empty box on stage until someone remembers
+`bebop-remove-set'. Removal is free: enrichment re-declares the set the
+next time a ticket matches its epic."
+  (when (and set (null (bebop-set--members set)))
+    (bebop-set--forget-set set)
+    set))
+
 (defun bebop-remove-set (name)
   "Remove the empty set NAME from the registry.
 Refuses if any session (running or on deck) still belongs to it —
@@ -4780,19 +4945,57 @@ self-healing, since enrichment re-creates a set the next time a
 ticket matches its epic."
   (interactive
    (list (completing-read "Remove set: " (bebop-set--names) nil t)))
-  (when (seq-some (lambda (r) (equal (plist-get r :set) name))
-                  (bebop-set--rows))
+  (when (bebop-set--members name)
     (user-error "Set %s still has members — reassign or exile them first"
                 name))
-  (setq bebop--sets (assoc-delete-all name bebop--sets))
-  ;; Clear any stale meta references (sessions whose artifacts are gone
-  ;; but whose choice entries linger).
-  (dolist (cell bebop--session-meta)
-    (when (equal (plist-get (cdr cell) :set) name)
-      (setcdr cell (plist-put (cdr cell) :set nil))))
-  (bebop-set--save)
+  (bebop-set--forget-set name)
   (bebop--render)
   (message "Set \"%s\" removed" name))
+
+(defun bebop-set-prune-empty ()
+  "Remove every set with no members. Return the list of removed names.
+The backstop to `bebop-set--prune-if-empty': membership also ends in
+ways teardown never sees — a chart archived by hand, a venue removed in
+a shell, a set emptied on another machine. This enumerates every known
+set and counts, rather than reasoning forward from what just changed,
+which is exactly why pre-existing empties used to accumulate."
+  (interactive)
+  (let ((rows (bebop-set--rows))
+        removed)
+    (dolist (set (bebop-set--names))
+      (unless (bebop-set--members set rows)
+        (bebop-set--forget-set set)
+        (push set removed)))
+    (setq removed (nreverse removed))
+    (when removed (bebop--render))
+    (when (called-interactively-p 'interactive)
+      (message (if removed
+                   (format "Pruned %d empty set(s): %s"
+                           (length removed) (string-join removed ", "))
+                 "No empty sets")))
+    removed))
+
+(defun bebop-close-set (set)
+  "Close SET: tear down every member, then remove the set itself.
+The set-scale discard verb — a shipped epic is one gesture, not one per
+session. Members go through `bebop-teardown-session', so charts land in
+the archive and venues are removed; the set disappears because its last
+member left, not as a separate decision."
+  (interactive
+   (list (completing-read "Close set: " (bebop-set--names) nil t)))
+  (let ((members (bebop-set--members set)))
+    (unless (yes-or-no-p
+             (format "Close set \"%s\"? (tear down %d: %s) "
+                     set (length members)
+                     (if members (string-join members ", ") "no members")))
+      (user-error "Close cancelled"))
+    (dolist (name members)
+      (bebop-teardown-session name))
+    ;; The last teardown normally prunes the set; an already-empty set,
+    ;; or one whose members refused to leave, still needs the check.
+    (bebop-set--prune-if-empty set)
+    (bebop--render)
+    (message "Closed set \"%s\" (%d torn down)" set (length members))))
 
 (defun bebop--entry-name-at-point ()
   "Return the session or on-deck entry name at point, or nil."
@@ -5523,8 +5726,9 @@ functions — never poke internals — so skills survive elisp refactors.
 
 The mutating verbs (=bebop-assign-set=, =bebop-new-set=, =bebop-jam=,
 =bebop-backline-run= …) already live in their owning modules and are
-equally part of the contract; this module adds the read/orientation side
-plus the exile-proposal queue.
+equally part of the contract; this module adds the read/orientation side,
+the exile-proposal queue, and the one housekeeping write agents may make
+unattended (=bebop-prune-empty-sets=).
 
 *** Header
 
@@ -5634,6 +5838,21 @@ Roundup queues; the human disposes. Proposing is idempotent.
   (setq bebop--exile-proposals (delete name bebop--exile-proposals))
   (bebop-set--save)
   (bebop-exile-proposals))
+#+end_src
+
+*** Housekeeping
+
+One safe write verb: pruning empty sets. Teardown prunes the set it just
+emptied, but membership also ends where teardown cannot see it — a chart
+archived in a shell, a venue removed by hand, a set emptied on another
+machine. Roundup calls this as its backstop, at the end of a cleanup
+pass, and it needs no approval: an empty set holds nothing, and
+enrichment re-declares it the moment a ticket matches its epic again.
+
+#+begin_src emacs-lisp
+(defun bebop-prune-empty-sets ()
+  "Remove every set with no members. Returns the removed names as JSON."
+  (json-serialize (vconcat (bebop-set-prune-empty))))
 #+end_src
 
 *** Footer

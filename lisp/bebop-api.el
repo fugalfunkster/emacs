@@ -90,6 +90,10 @@ Fields: session, set, chart, venue, ticket, siblings
   (bebop-set--save)
   (bebop-exile-proposals))
 
+(defun bebop-prune-empty-sets ()
+  "Remove every set with no members. Returns the removed names as JSON."
+  (json-serialize (vconcat (bebop-set-prune-empty))))
+
 (provide 'bebop-api)
 
 ;;; bebop-api.el ends here
