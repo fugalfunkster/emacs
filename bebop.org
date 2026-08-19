@@ -572,9 +572,11 @@ them Bebop's code:
 
 - =sudo pmset -a sleep 0 displaysleep 10= — an asleep host is a dead
   target; this is the number-one failure mode.
-- Remote Login (sshd) on, Tailscale up. /Status: sshd is on; the Pro
-  is *not* on the tailnet yet — today's reach is LAN-only, so the
-  cafe story waits on Tailscale enrollment./
+- Remote Login (sshd) on, Tailscale up. /Status (2026-08-19): both
+  done — the Pro is on the tailnet (=matthews-mac-pro=, direct), the
+  iMac's key is authorized, and a remote =emacsclient --eval= verb
+  round-trips in ~51ms over the multiplexed channel. Phase 1's proof
+  is met before the module exists./
 - Emacs running with the server started (already unconditional in
   =init.el=).
 
@@ -597,6 +599,19 @@ carries the traffic until the verb loop exists:
   MR and pipeline state at native speed without holding a GitLab
   credential. The read-at-the-cafe pattern works before a single verb
   crosses the wire.
+
+/Update 2026-08-19/: the Pro now earns the "resident" in resident
+host. Tailscale enrolled, key auth from the iMac, =.authinfo= and
+glab token provisioned, pulse cron registered (=*/10=, logging to the
+machine-local =~/.emacs.d-local/=), and the full backend fleet runs
+under =~/dotfiles/roost/stack.sh=: sheep (Postgres, LocalStack,
+Local-KMS) plus all twelve Spring/Node backends, ports 5001–8107.
+Frontends stay down by design — dev servers belong to active
+sessions, which is the backline redesign's per-service checkout in
+miniature. =stack.sh='s =SERVICES= table is the backline roster
+source the redesign left pending. Still missing: =mosh-server= (a
+=brew= permissions fix needs one sudo at the keyboard), and sessions
+themselves — the pool still lives on the iMac until the next relay.
 
 ** Phases
 
@@ -630,7 +645,8 @@ carries the traffic until the verb loop exists:
 - /Verb gaps/: dashboard parity likely wants a richer =list-sessions=
   (statuses, ports, MR glyphs in one call) to avoid N round-trips.
   One =dashboard-info= verb returning the whole pool may be the move.
-- /RAM/: 32GB hosts the fleet today; if concurrent Java builds +
+- /RAM/: resolved 2026-08-19 — the Pro reports 96GB, triple the
+  design's worry. Historical text: 32GB hosts the fleet today; if concurrent Java builds +
   dev servers + sessions start swapping, 2×16GB DDR4-2666 (~$200,
   post-spike pricing) takes it to 64GB. Wait for evidence.
 
