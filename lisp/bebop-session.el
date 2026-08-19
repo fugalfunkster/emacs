@@ -569,6 +569,8 @@ be gone. Nil for either facet means nothing to reap."
 (declare-function bebop-external-clear "bebop-set")
 (declare-function bebop--backline-live-p "bebop-backline")
 (declare-function bebop-backline-kill "bebop-backline")
+(declare-function bebop-backline-venue-services "bebop-backline")
+(declare-function bebop-backline-release "bebop-backline")
 
 (defun bebop--teardown-desc (name)
   "Describe what tearing NAME down will discard, for a confirmation prompt.
@@ -590,6 +592,15 @@ is a prompt that gets answered yes."
                             (and (fboundp 'bebop--backline-live-p)
                                  (bebop--backline-live-p slug)
                                  "kill backline window")
+                            (and (fboundp 'bebop-backline-venue-services)
+                                 (let ((held (bebop-backline-venue-services
+                                              slug)))
+                                   (and held
+                                        (format "release %s"
+                                                (mapconcat
+                                                 (lambda (s)
+                                                   (plist-get s :name))
+                                                 held ", ")))))
                             (and (plist-get artifacts :chart) "archive chart")
                             (and venue "delete venue")
                             "clear MR + pipeline cache"
@@ -953,10 +964,14 @@ On deck, resumable. To discard instead, use `bebop-exile-session'."
 Steps:
   1. Runtime — tmux window, composition buffer, Solo frame, chart buffer
   2. Backline — the venue's work-shell window, before the venue goes
-  3. Disk — chart moved to the archive, venue removed
-  4. Caches — the external-status (MR + pipeline) entry
-  5. Choices — set membership, ack snapshots, activity stamps
-  6. The set itself, when NAME was its last member
+  3. Fleet — every service this venue held, released back to the machine
+  4. Disk — chart moved to the archive, venue removed
+  5. Caches — the external-status (MR + pipeline) entry
+  6. Choices — set membership, ack snapshots, activity stamps
+  7. The set itself, when NAME was its last member
+
+Machine-held services are untouched: a session only ever hands back
+what it held, which is why the fleet outlives every teardown.
 
 Non-interactively this never prompts; interactively it reads a name and
 confirms first."
@@ -980,7 +995,14 @@ confirms first."
                                (directory-file-name venue)))
                    name))
          (set (and (fboundp 'bebop-set--session-set)
-                   (bebop-set--session-set name))))
+                   (bebop-set--session-set name)))
+         ;; Read the held services *before* anything dies: a holder is
+         ;; derived from a live process, and killing the backline window
+         ;; takes its processes with it. Ask afterwards and the answer is
+         ;; always "held nothing", so the machine never gets its
+         ;; services back.
+         (held (and slug (fboundp 'bebop-backline-venue-services)
+                    (bebop-backline-venue-services slug))))
     ;; A name with no facets is a typo, not a session. Every step below
     ;; no-ops on one, so the old code saved twice and reported a
     ;; successful teardown of something that never existed.
@@ -993,6 +1015,15 @@ confirms first."
                (fboundp 'bebop--backline-live-p)
                (bebop--backline-live-p slug))
       (bebop-backline-kill slug))
+    ;; Services go back to the machine one at a time, each failure named
+    ;; rather than aborting the rest: a restore command that will not run
+    ;; must not strand the chart, the venue, or the set membership.
+    (dolist (svc held)
+      (condition-case err
+          (bebop-backline-release (plist-get svc :name) slug)
+        (error (message "Teardown %s: could not release %s — %s"
+                        name (plist-get svc :name)
+                        (error-message-string err)))))
     ;; Archiving renames the chart, so no buffer may still be visiting
     ;; it — one that is would keep pointing at the old path and write
     ;; the session back there on its next save. `bebop--reap-runtime'

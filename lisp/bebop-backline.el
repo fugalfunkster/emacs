@@ -125,29 +125,72 @@ on unrecognized prefixes."
         (forward-line 1)))
     (nreverse pairs)))
 
-(defun bebop--process-ancestors (pid)
-  "Return PID's ancestor PIDs (nearest first), bounded against cycles."
+(defun bebop--process-table ()
+  "Return a hash of PID → (PPID . COMMAND) for every process, in one ps call.
+Ancestry and command line both come out of it, so a caller resolving
+sixty listeners spends one subprocess instead of several hundred."
+  (let ((table (make-hash-table :test #'eql)))
+    (with-temp-buffer
+      (when (eq 0 (call-process "ps" nil '(t nil) nil "-eo" "pid=,ppid=,command="))
+        (goto-char (point-min))
+        (while (not (eobp))
+          (when (looking-at "[ \t]*\\([0-9]+\\)[ \t]+\\([0-9]+\\)[ \t]+\\(.*\\)$")
+            (puthash (string-to-number (match-string 1))
+                     (cons (string-to-number (match-string 2))
+                           (match-string 3))
+                     table))
+          (forward-line 1))))
+    table))
+
+(defun bebop--process-ancestors (pid &optional procs)
+  "Return PID's ancestor PIDs (nearest first), bounded against cycles.
+PROCS is an optional PID → (PPID . COMMAND) table from
+`bebop--process-table'. Without one, every step up the tree costs its
+own ps call."
   (let (result (current pid) (guard 0))
     (while (and current (> current 1) (< guard 64))
       (setq guard (1+ guard))
-      (let ((ppid (with-temp-buffer
-                    (when (eq 0 (call-process "ps" nil '(t nil) nil
-                                              "-o" "ppid=" "-p"
-                                              (number-to-string current)))
-                      (let ((s (string-trim (buffer-string))))
-                        (when (string-match-p "^[0-9]+$" s)
-                          (string-to-number s)))))))
+      (let ((ppid (if procs
+                      (car (gethash current procs))
+                    (with-temp-buffer
+                      (when (eq 0 (call-process "ps" nil '(t nil) nil
+                                                "-o" "ppid=" "-p"
+                                                (number-to-string current)))
+                        (let ((s (string-trim (buffer-string))))
+                          (when (string-match-p "^[0-9]+$" s)
+                            (string-to-number s))))))))
         (setq current (and ppid (> ppid 1) ppid))
         (when current (push current result))))
     (nreverse result)))
 
-(defun bebop--backline-owning-slug (pid)
-  "Return the backline slug whose pane shell is PID or an ancestor of PID."
-  (let ((lineage (cons pid (bebop--process-ancestors pid))))
-    (seq-find (lambda (slug)
-                (let ((pane-pid (bebop--backline-pane-pid slug)))
-                  (and pane-pid (memq pane-pid lineage))))
-              (bebop--backline-slugs))))
+(defun bebop--backline-panes ()
+  "Return an alist of (SLUG . PANE-PID) for every live backline window.
+One tmux call for all of them: a backline window has a single pane, so
+its active pane's shell is the ancestor everything under it shares."
+  (delq nil
+        (mapcar
+         (lambda (line)
+           (let* ((parts (split-string line "\t"))
+                  (name (car parts))
+                  (pid (cadr parts)))
+             (when (and name pid
+                        (string-prefix-p bebop-backline-prefix name)
+                        (string-match-p "\\`[0-9]+\\'" pid))
+               (cons (substring name (length bebop-backline-prefix))
+                     (string-to-number pid)))))
+         (split-string (or (bebop--tmux-output
+                            "list-windows" "-t" bebop-tmux-session
+                            "-F" "#{window_name}\t#{pane_pid}")
+                           "")
+                       "\n" t))))
+
+(defun bebop--backline-owning-slug (pid &optional panes procs)
+  "Return the backline slug whose pane shell is PID or an ancestor of PID.
+PANES and PROCS are optional precomputed lookups — see
+`bebop--backline-panes' and `bebop--process-table'."
+  (let ((lineage (cons pid (bebop--process-ancestors pid procs))))
+    (car (seq-find (lambda (cell) (memq (cdr cell) lineage))
+                   (or panes (bebop--backline-panes))))))
 
 (defun bebop-backline-port-owner (port)
   "Return a plist describing the listener on PORT, or nil if PORT is free.
@@ -161,12 +204,14 @@ Ancestor walks are cached per PID so a process listening on several
 ports costs one ps walk, not one per port."
   (when-let ((pane-pid (bebop--backline-pane-pid slug)))
     (let ((lineages (make-hash-table :test #'eql))
+          (procs (bebop--process-table))
           ports)
       (dolist (pair (bebop--listening-pairs))
         (let* ((pid (car pair))
                (lineage (or (gethash pid lineages)
                             (puthash pid
-                                     (cons pid (bebop--process-ancestors pid))
+                                     (cons pid (bebop--process-ancestors
+                                                pid procs))
                                      lineages))))
           (when (memq pane-pid lineage)
             (push (cdr pair) ports))))
@@ -190,23 +235,32 @@ and an empty roster, never a broken fleet view."
   (seq-find (lambda (s) (equal (plist-get s :name) name))
             (bebop-backline-roster)))
 
+(defun bebop--pid-cwds (pids)
+  "Return a hash of PID → working directory for PIDS, in one lsof call.
+lsof exits non-zero when any of PIDS has already gone; the pids that
+answered are still good, so the status is not checked."
+  (let ((table (make-hash-table :test #'eql))
+        current)
+    (when pids
+      (with-temp-buffer
+        (call-process "lsof" nil '(t nil) nil
+                      "-a" "-p" (mapconcat #'number-to-string pids ",")
+                      "-d" "cwd" "-Fpn")
+        (goto-char (point-min))
+        (while (not (eobp))
+          (let ((line (buffer-substring-no-properties
+                       (line-beginning-position) (line-end-position))))
+            (cond
+             ((string-prefix-p "p" line)
+              (setq current (string-to-number (substring line 1))))
+             ((and current (string-prefix-p "n" line))
+              (puthash current (substring line 1) table))))
+          (forward-line 1))))
+    table))
+
 (defun bebop--pid-cwd (pid)
   "Return PID's working directory via lsof, or nil."
-  (with-temp-buffer
-    (when (eq 0 (call-process "lsof" nil '(t nil) nil
-                              "-a" "-p" (number-to-string pid)
-                              "-d" "cwd" "-Fn"))
-      (goto-char (point-min))
-      (when (re-search-forward "^n\\(.+\\)$" nil t)
-        (match-string 1)))))
-
-(defun bebop--pid-command (pid)
-  "Return PID's full command line via ps, or nil."
-  (with-temp-buffer
-    (when (eq 0 (call-process "ps" nil '(t nil) nil
-                              "-o" "command=" "-p" (number-to-string pid)))
-      (let ((s (string-trim (buffer-string))))
-        (unless (string-empty-p s) s)))))
+  (gethash pid (bebop--pid-cwds (list pid))))
 
 (defun bebop--backline-venue-in-path (path)
   "Return the venue directory name PATH sits under, or nil.
@@ -217,13 +271,25 @@ distinctive enough to match inside either."
       (when (string-match (concat (regexp-quote root) "\\([^/ \n]+\\)") path)
         (match-string 1 path)))))
 
-(defun bebop-backline-holder (pid)
+(defun bebop-backline--context (pids)
+  "Return the lookups the holder rule needs for PIDS, gathered once.
+Three subprocesses (tmux, ps, lsof) serve any number of pids."
+  (list :panes (bebop--backline-panes)
+        :processes (bebop--process-table)
+        :cwds (bebop--pid-cwds pids)))
+
+(defun bebop-backline-holder (pid &optional ctx)
   "Return the derived holder of PID: a venue slug, or `bebop-backline-machine'.
-Never stored, always derived — see the =* Backline= design section."
-  (or (bebop--backline-owning-slug pid)
-      (bebop--backline-venue-in-path (bebop--pid-cwd pid))
-      (bebop--backline-venue-in-path (bebop--pid-command pid))
-      bebop-backline-machine))
+Never stored, always derived — see the =* Backline= design section.
+CTX is an optional context from `bebop-backline--context'; without one
+the lookups are made for this pid alone."
+  (let* ((procs (or (plist-get ctx :processes) (bebop--process-table)))
+         (cwds (plist-get ctx :cwds)))
+    (or (bebop--backline-owning-slug pid (plist-get ctx :panes) procs)
+        (bebop--backline-venue-in-path
+         (if cwds (gethash pid cwds) (bebop--pid-cwd pid)))
+        (bebop--backline-venue-in-path (cdr (gethash pid procs)))
+        bebop-backline-machine)))
 
 (defun bebop-backline-services ()
   "Return the machine's service fleet: the roster merged with live lsof state.
@@ -238,6 +304,7 @@ One plist per service, sorted by port:
 Live listeners with no roster entry are named \"port-NNNN\": the fleet
 view stays honest about processes bebop was never told about."
   (let* ((pairs (bebop--listening-pairs))
+         (ctx (bebop-backline--context (mapcar #'car pairs)))
          claimed rows)
     (dolist (svc (bebop-backline-roster))
       (let* ((port (plist-get svc :port))
@@ -246,7 +313,7 @@ view stays honest about processes bebop was never told about."
         (push (append (list :rostered t
                             :up (and pid t)
                             :pid pid
-                            :holder (and pid (bebop-backline-holder pid)))
+                            :holder (and pid (bebop-backline-holder pid ctx)))
                       svc)
               rows)))
     (dolist (pair pairs)
@@ -258,7 +325,7 @@ view stays honest about processes bebop was never told about."
                       :rostered nil
                       :up t
                       :pid (car pair)
-                      :holder (bebop-backline-holder (car pair)))
+                      :holder (bebop-backline-holder (car pair) ctx))
                 rows))))
     (sort (nreverse rows)
           (lambda (a b)
@@ -270,12 +337,15 @@ view stays honest about processes bebop was never told about."
                     (pb nil)
                     (t (string< (plist-get a :name) (plist-get b :name)))))))))
 
-(defun bebop-backline-service-holder (name)
-  "Return the derived holder of service NAME, or nil if it is down.
+(defun bebop-backline--service-row (name)
+  "Return the fleet row named NAME, or nil.
 NAME may be a roster name or an unrostered \"port-NNNN\" row."
-  (plist-get (seq-find (lambda (r) (equal (plist-get r :name) name))
-                       (bebop-backline-services))
-             :holder))
+  (seq-find (lambda (r) (equal (plist-get r :name) name))
+            (bebop-backline-services)))
+
+(defun bebop-backline-service-holder (name)
+  "Return the derived holder of service NAME, or nil if it is down."
+  (plist-get (bebop-backline--service-row name) :holder))
 
 (defun bebop-backline-venue-services (slug)
   "Return the fleet rows whose derived holder is venue SLUG."
@@ -459,6 +529,148 @@ freed (or was already free)."
                                 port pid))
           (signal-process pid 'TERM)
           t))))))
+
+(defcustom bebop-backline-restore-on-release t
+  "Whether releasing a service asks the machine to restore it.
+When non-nil, `bebop-backline-release' runs the roster's :machine-cmd
+after the session's process is gone, fire-and-forget. Set to nil on a
+machine where a released service should simply stay down."
+  :type 'boolean
+  :group 'bebop)
+
+(defun bebop-backline--venue-in-play ()
+  "Return the venue path of the session in play, or nil.
+The session at point wins over the active one — checking a service out
+from a dashboard row should mean that row — and a buffer already
+sitting inside a venue speaks for itself."
+  (let* ((name (or (get-text-property (point) 'bebop-session-name)
+                   (get-text-property (point) 'bebop-on-deck-name)
+                   (bound-and-true-p bebop--active-session)))
+         (venue (and name (plist-get (bebop--session-artifacts name) :venue))))
+    (or venue
+        (when-let ((slug (bebop--backline-venue-in-path
+                          (expand-file-name default-directory))))
+          (expand-file-name slug (expand-file-name bebop-venues-dir))))))
+
+(defun bebop-backline--venue-repo (venue)
+  "Return the repo VENUE is a worktree of, by the REPO--BRANCH convention."
+  (let* ((slug (bebop--backline-slug-for-dir venue))
+         (prefix (bebop--on-deck-prefix slug)))
+    (if (string-empty-p prefix) slug prefix)))
+
+(defun bebop-backline--read-service (prompt)
+  "Read a fleet service name, completing over the rows worth offering."
+  (let ((names (mapcar (lambda (r) (plist-get r :name))
+                       (seq-filter #'bebop-backline--fleet-worth-showing-p
+                                   (bebop-backline-services)))))
+    (unless names
+      (user-error "No services on the fleet: nothing listening, and no roster"))
+    (completing-read prompt names nil t)))
+
+(defun bebop-backline--await-free (port &optional tries)
+  "Wait up to TRIES quarter-seconds for PORT to stop listening.
+Return non-nil if it did."
+  (let ((n (or tries 20)))
+    (catch 'free
+      (while (> n 0)
+        (unless (bebop-backline-port-owner port) (throw 'free t))
+        (setq n (1- n))
+        (sleep-for 0.25))
+      nil)))
+
+(defun bebop-backline--boot (row)
+  "Free ROW's port and return the holder that lost it, or nil.
+A backline-held process is interrupted inside its own window: that
+venue stops serving this service and keeps everything else, which is
+the whole difference between checkout and `bebop-backline-kill'."
+  (let ((pid (plist-get row :pid))
+        (port (plist-get row :port))
+        (holder (plist-get row :holder)))
+    (when pid
+      (if-let ((slug (bebop--backline-owning-slug pid)))
+          (bebop--tmux "send-keys" "-t" (bebop--backline-window-id slug) "C-c")
+        (signal-process pid 'TERM))
+      (unless (bebop-backline--await-free port)
+        (message "Backline: %s still holds :%d after the boot" holder port))
+      holder)))
+
+(defun bebop-backline-checkout (service &optional venue)
+  "Take restart authority over SERVICE for the session in play.
+VENUE defaults to the session at point, the active session, or the
+venue this buffer sits in.
+
+Boots whoever held SERVICE — naming them — then, if the roster knows a
+:start-cmd and VENUE is a worktree of SERVICE's own repo, starts it in
+VENUE's backline window. Otherwise the port is left free and the
+command you need is reported: a venue cannot serve a repo it isn't."
+  (interactive (list (bebop-backline--read-service "Check out service: ")))
+  (let* ((venue (or venue (bebop-backline--venue-in-play)
+                    (user-error "No session in play — check out from a session's row or venue")))
+         (slug (bebop--backline-slug-for-dir venue))
+         (row (or (bebop-backline--service-row service)
+                  (user-error "No such service: %s" service)))
+         (port (plist-get row :port))
+         (start (plist-get row :start-cmd))
+         (mine (equal (plist-get row :holder) slug))
+         (booted (unless mine (bebop-backline--boot row))))
+    (cond
+     ((and mine (plist-get row :up))
+      (message "Backline: %s already held by %s" service slug))
+     ((and start (equal service (bebop-backline--venue-repo venue)))
+      (bebop-backline-run venue start)
+      (message "Backline: %s checked out by %s%s — running %s"
+               service slug
+               (if booted (format " (booted %s)" booted) "")
+               start))
+     (t
+      (message "Backline: %s checked out by %s%s — %s"
+               service slug
+               (if booted (format " (booted %s)" booted) "")
+               (cond
+                ((null start) ":start-cmd unknown; start it yourself")
+                (t (format "%s is not a %s venue; run %S where it belongs"
+                           slug service start))))))
+    (list :service service :holder slug :booted booted :port port)))
+
+(defun bebop-backline--restore (row holder)
+  "Ask the machine to restore ROW's service after HOLDER let it go."
+  (let ((service (plist-get row :name))
+        (cmd (plist-get row :machine-cmd)))
+    (if (and cmd bebop-backline-restore-on-release)
+        (progn
+          (start-process-shell-command "bebop-backline-restore" nil cmd)
+          (message "Backline: %s released by %s — machine restoring (%s)"
+                   service holder cmd))
+      (message "Backline: %s released by %s%s" service holder
+               (if cmd " (restore-on-release off)" "")))))
+
+(defun bebop-backline-release (service &optional holder)
+  "Hand SERVICE back to the machine.
+HOLDER is the venue slug releasing it, defaulting to the session in
+play. Kills the process if HOLDER still holds SERVICE, then, when
+`bebop-backline-restore-on-release' and the roster knows a
+:machine-cmd, asks the machine to restore its own service —
+fire-and-forget, because a restore takes as long as it takes.
+
+A service some other venue holds is left alone and reported: releasing
+is giving a service back, and you cannot give back what you never had."
+  (interactive (list (bebop-backline--read-service "Release service: ")))
+  (let* ((holder (or holder
+                     (when-let ((v (bebop-backline--venue-in-play)))
+                       (bebop--backline-slug-for-dir v))
+                     (user-error "No session in play — release needs a holder")))
+         (row (or (bebop-backline--service-row service)
+                  (user-error "No such service: %s" service)))
+         (current (plist-get row :holder)))
+    (cond
+     ((equal current holder)
+      (bebop-backline--boot row)
+      (bebop-backline--restore row holder))
+     ((null current)
+      (bebop-backline--restore row holder))
+     (t
+      (message "Backline: %s is held by %s, not %s — checkout takes it"
+               service current holder)))))
 
 (defun bebop--backline-dir-candidates ()
   "Return alist of (LABEL . DIR) candidates for backline selection:
