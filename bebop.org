@@ -333,8 +333,8 @@ and MR number live in the glyph's tooltip. A cached status older than
 live signal, and must never pretend otherwise. Backline ports render in
 the right region, right-anchored off the name column.
 
-Set membership persists to =bebop-state.json= (version 2) — a choice, not
-derivable state. Everything else remains derived. Assignment is designed
+Set membership persists to =~/Code/Org/.bebop/HOST.state.json= (version
+2, one file per machine) — a choice, not derivable state. Everything else remains derived. Assignment is designed
 to be filled asynchronously by agents (silent Jira epic enrichment); until
 then sessions land honestly in *Ungrouped*, collapsed by default.
 
@@ -684,10 +684,18 @@ whole HUD:
 
 Orthogonal to lanes is an ownership split that keeps the files
 honest: sidecars hold *observed* state and only fetchers write them;
-=bebop-state.json= holds *your relationship to* that state — ack
+=HOST.state.json= holds *your relationship to* that state — ack
 snapshots, activity timestamps — and only the dashboard writes it.
 A fetcher never knows what you've seen; the dashboard never fakes
 what GitLab said.
+
+Both files are *host-scoped*, and for the same reason: they sit in the
+Dropbox-synced org tree so a Live Remote client can read them, and both
+are rewritten whole. =HOST.status.json= is what GitLab told *this*
+machine; =HOST.state.json= is what *you* saw on this machine. Neither is
+a claim any other host may overwrite, so neither shares a filename with
+one. The pre-host-scope state file lived at =~/.emacs.d/bebop-state.json=
+and was clobbered from both machines — the bug this naming closes.
 
 ** Glyph taxonomy
 
@@ -711,8 +719,8 @@ reads as signal; a merged MR asks nothing of you.
 A red pipeline you have already seen and one that flipped red since
 you last looked are different objects. Every dynamic glyph therefore
 renders against an *ack snapshot*: the per-session record of glyph
-states as of your last visit, persisted in =bebop-state.json= session
-meta so an Emacs restart doesn't re-flash the world as new. A glyph
+states as of your last visit, persisted in this host's =state.json=
+session meta so an Emacs restart doesn't re-flash the world as new. A glyph
 matching its snapshot renders its normal (usually dim) self; a glyph
 that differs renders emphasized — bright, bold — until acked.
 
@@ -1034,7 +1042,7 @@ the filesystem on next launch. The resume flow (=bebop-new-session= → pick
 existing venue → pick existing chart) is the recovery path.
 
 *Choices* are the exception: set declarations, set membership, and exile
-proposals persist to =bebop-state.json= (version 2, owned by =bebop-set=).
+proposals persist to =HOST.state.json= (version 2, owned by =bebop-set=).
 Never persist anything derivable — only choices.
 
 ** Module dependencies and graceful degradation
@@ -4368,8 +4376,9 @@ Two hard rules from the design:
    folding (TAB), not a stored flag.
 
 Only choices persist (set membership, declared sets, exile proposals) — to
-=bebop-state.json= as a version-2 document. Liveness, charts, and venues
-stay derived from tmux and the filesystem, as everywhere else in Bebop.
+=~/Code/Org/.bebop/HOST.state.json= as a version-2 document. Liveness,
+charts, and venues stay derived from tmux and the filesystem, as
+everywhere else in Bebop.
 
 This module plugs its renderer into =bebop--render-body-function=;
 commenting it out in =emacs.org= reverts the dashboard to the flat list.
@@ -4392,9 +4401,28 @@ commenting it out in =emacs.org= reverts the dashboard to the flat list.
 
 *** State and persistence
 
+State is per-host, and the file name says so. The state file used to sit
+at =~/.emacs.d/bebop-state.json= — inside the Dropbox-synced config tree,
+written by a function that rewrites the *whole* document. Two machines
+running Bebop meant last-writer-wins on every set, every ack, every
+activity stamp: the Pro's save would erase an afternoon of the iMac's
+seen-unseen history and nothing would report the loss. So the file is
+named for its host and lives beside the status sidecar, exactly as
+=bebop-external-cache-file= does. There is no migration code: a
+wrong-host-first migration would import the *other* machine's state over
+this one's, which is the failure the split exists to prevent.
+
 #+begin_src emacs-lisp
-(defcustom bebop-set-state-file (locate-user-emacs-file "bebop-state.json")
-  "File persisting set declarations, set membership, and exile proposals."
+(defcustom bebop-set-state-file
+  (expand-file-name
+   (format "../.bebop/%s.state.json" (bebop--host-name))
+   (expand-file-name bebop-charts-dir))
+  "File persisting set declarations, set membership, and exile proposals.
+Named for this host and derived from `bebop-charts-dir', mirroring
+`bebop-external-cache-file'. The pre-host-scope path lived under
+`user-emacs-directory', which Dropbox shares between machines, while
+`bebop-set--save' rewrites the whole document — so a second machine
+silently overwrote the first machine's sets, acks, and stamps."
   :type 'file
   :group 'bebop)
 
@@ -4452,6 +4480,7 @@ save once after — N acks should not mean N file writes.")
     (puthash "sessions" sessions doc)
     (when bebop--exile-proposals
       (puthash "proposals" (vconcat bebop--exile-proposals) doc))
+    (make-directory (file-name-directory bebop-set-state-file) t)
     (with-temp-file bebop-set-state-file
       (insert (json-serialize doc))))))
 

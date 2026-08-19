@@ -10,8 +10,16 @@
 (declare-function bebop--backline-slugs "bebop-backline")
 (declare-function bebop--backline-ports "bebop-backline")
 
-(defcustom bebop-set-state-file (locate-user-emacs-file "bebop-state.json")
-  "File persisting set declarations, set membership, and exile proposals."
+(defcustom bebop-set-state-file
+  (expand-file-name
+   (format "../.bebop/%s.state.json" (bebop--host-name))
+   (expand-file-name bebop-charts-dir))
+  "File persisting set declarations, set membership, and exile proposals.
+Named for this host and derived from `bebop-charts-dir', mirroring
+`bebop-external-cache-file'. The pre-host-scope path lived under
+`user-emacs-directory', which Dropbox shares between machines, while
+`bebop-set--save' rewrites the whole document — so a second machine
+silently overwrote the first machine's sets, acks, and stamps."
   :type 'file
   :group 'bebop)
 
@@ -69,6 +77,7 @@ save once after — N acks should not mean N file writes.")
     (puthash "sessions" sessions doc)
     (when bebop--exile-proposals
       (puthash "proposals" (vconcat bebop--exile-proposals) doc))
+    (make-directory (file-name-directory bebop-set-state-file) t)
     (with-temp-file bebop-set-state-file
       (insert (json-serialize doc))))))
 

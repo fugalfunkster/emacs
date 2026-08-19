@@ -38,6 +38,7 @@ forge-database*.sqlite
 # State files
 .mc-lists.el
 bebop-state.json
+bebop-state.json.migrated-*
 bebop-mr-cache.json
 code-review-db-file.sqlite
 code-review-error.log
