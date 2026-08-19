@@ -853,7 +853,11 @@ is live and derived; they dim when their snapshots age out (see
            (live (plist-get row :live))
            (dot (if live
                     (let* ((status (plist-get live :status))
-                           (base (bebop-set--dot-face status)))
+                           ;; Dot decay: past `bebop-hud-dot-stale-days'
+                           ;; the status color is spent, not the status.
+                           (base (if (bebop--dot-stale-p name)
+                                     'shadow
+                                   (bebop-set--dot-face status))))
                       (bebop-set--prop
                        "●" (if (bebop-set--unseen-status-p name status)
                                (list 'bebop-hud-unseen-face base)
@@ -896,7 +900,12 @@ lone outlier past the cap simply overflows its own line."
                 (live 'bebop-session-face)
                 (t 'shadow)))
          (ports (bebop-set--backline-ports (plist-get row :venue)))
-         (age (bebop-set--age-string (bebop-set--last-activity name)))
+         ;; Age earns its ink only once the row has gone quiet: a
+         ;; five-minute-old session is the normal case, not a signal.
+         ;; The two staleness cues then agree — bright name and no age,
+         ;; or shadow name and a visible age, never a mix.
+         (age (and (bebop-set--quiet-p name)
+                   (bebop-set--age-string (bebop-set--last-activity name))))
          (start (point)))
     (magit-insert-section (bebop-session-row name)
       (insert (bebop-set--gutter row))

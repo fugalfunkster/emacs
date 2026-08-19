@@ -1682,6 +1682,35 @@ condition."
   "Consecutive pane-id misses required before considering a pair orphaned."
   :type 'integer
   :group 'bebop)
+
+(defcustom bebop-hud-dot-stale-days 7
+  "Days without activity after which a status dot decays to shadow.
+The dot-level twin of `bebop-hud-quiet-hours' name dimming: a session
+untouched for a week should not glow as loud as one that flipped a
+minute ago. No state is lost — the gutter glyphs and `bebop-session-info'
+still carry it; only the dot's salience decays."
+  :type 'number
+  :group 'bebop)
+#+end_src
+
+Activity timestamps live in =bebop-set='s session meta, so the staleness
+predicate is a soft read: without the set module there is no activity
+record and no dot ever decays.
+
+#+begin_src emacs-lisp
+(declare-function bebop-set--last-activity "bebop-set")
+(declare-function bebop-set--age-seconds "bebop-set")
+
+(defun bebop--dot-stale-p (name)
+  "Non-nil if NAME's last activity predates `bebop-hud-dot-stale-days'.
+Nil whenever the answer is unknown — bebop-set unloaded, or a session
+never stamped — so the dot keeps its status color until an activity
+record proves it stale."
+  (when (and (fboundp 'bebop-set--last-activity)
+             (fboundp 'bebop-set--age-seconds))
+    (when-let ((secs (bebop-set--age-seconds
+                      (bebop-set--last-activity name))))
+      (> secs (* bebop-hud-dot-stale-days 86400)))))
 #+end_src
 
 *** Faces
@@ -2161,6 +2190,7 @@ Render a single pair line with status dot and text properties for point-based na
          (selected (equal name bebop--active-session))
          (line-face (if selected 'bebop-selected-face 'bebop-session-face))
          (dot-face (cond
+                    ((bebop--dot-stale-p name) 'shadow)
                     ((memq status '(blocked waiting)) 'bebop-dot-waiting-face)
                     ((memq status '(unknown degraded)) 'bebop-dot-degraded-face)
                     (t 'bebop-dot-active-face)))
@@ -5116,7 +5146,11 @@ is live and derived; they dim when their snapshots age out (see
            (live (plist-get row :live))
            (dot (if live
                     (let* ((status (plist-get live :status))
-                           (base (bebop-set--dot-face status)))
+                           ;; Dot decay: past `bebop-hud-dot-stale-days'
+                           ;; the status color is spent, not the status.
+                           (base (if (bebop--dot-stale-p name)
+                                     'shadow
+                                   (bebop-set--dot-face status))))
                       (bebop-set--prop
                        "●" (if (bebop-set--unseen-status-p name status)
                                (list 'bebop-hud-unseen-face base)
@@ -5159,7 +5193,12 @@ lone outlier past the cap simply overflows its own line."
                 (live 'bebop-session-face)
                 (t 'shadow)))
          (ports (bebop-set--backline-ports (plist-get row :venue)))
-         (age (bebop-set--age-string (bebop-set--last-activity name)))
+         ;; Age earns its ink only once the row has gone quiet: a
+         ;; five-minute-old session is the normal case, not a signal.
+         ;; The two staleness cues then agree — bright name and no age,
+         ;; or shadow name and a visible age, never a mix.
+         (age (and (bebop-set--quiet-p name)
+                   (bebop-set--age-string (bebop-set--last-activity name))))
          (start (point)))
     (magit-insert-section (bebop-session-row name)
       (insert (bebop-set--gutter row))

@@ -92,6 +92,29 @@ condition."
   :type 'integer
   :group 'bebop)
 
+(defcustom bebop-hud-dot-stale-days 7
+  "Days without activity after which a status dot decays to shadow.
+The dot-level twin of `bebop-hud-quiet-hours' name dimming: a session
+untouched for a week should not glow as loud as one that flipped a
+minute ago. No state is lost — the gutter glyphs and `bebop-session-info'
+still carry it; only the dot's salience decays."
+  :type 'number
+  :group 'bebop)
+
+(declare-function bebop-set--last-activity "bebop-set")
+(declare-function bebop-set--age-seconds "bebop-set")
+
+(defun bebop--dot-stale-p (name)
+  "Non-nil if NAME's last activity predates `bebop-hud-dot-stale-days'.
+Nil whenever the answer is unknown — bebop-set unloaded, or a session
+never stamped — so the dot keeps its status color until an activity
+record proves it stale."
+  (when (and (fboundp 'bebop-set--last-activity)
+             (fboundp 'bebop-set--age-seconds))
+    (when-let ((secs (bebop-set--age-seconds
+                      (bebop-set--last-activity name))))
+      (> secs (* bebop-hud-dot-stale-days 86400)))))
+
 (defface bebop-session-face
   '((t :inherit default))
   "Face for non-selected session lines in the dashboard."
@@ -457,6 +480,7 @@ list when they add keybindings.")
          (selected (equal name bebop--active-session))
          (line-face (if selected 'bebop-selected-face 'bebop-session-face))
          (dot-face (cond
+                    ((bebop--dot-stale-p name) 'shadow)
                     ((memq status '(blocked waiting)) 'bebop-dot-waiting-face)
                     ((memq status '(unknown degraded)) 'bebop-dot-degraded-face)
                     (t 'bebop-dot-active-face)))
