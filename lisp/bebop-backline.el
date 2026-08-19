@@ -10,6 +10,29 @@ Must match the prefix skipped by `bebop--discover-existing-sessions'."
   :type 'string
   :group 'bebop)
 
+(defcustom bebop-backline-roster-source nil
+  "Function returning this machine's service roster, or nil for none.
+Called with no arguments; returns a list of plists, one per service:
+
+  :name        service name (string)
+  :port        TCP port it listens on (integer, or nil)
+  :group       coarse grouping, e.g. \"fe\" / \"be\" (string or nil)
+  :start-cmd   shell command a session runs in its venue's backline
+               window to serve this service, or nil when unknown
+  :machine-cmd shell command the machine runs to restore this service
+               to its default state, or nil when unknown
+  :broken      non-nil for services known not to start
+
+nil is the honest default: with no roster the fleet view still works,
+naming live listeners `port-NNNN'. See `bebop-backline-roster-stack-sh'
+for the shipped adapter."
+  :type '(choice (const :tag "None (lsof discovery only)" nil) function)
+  :group 'bebop)
+
+(defconst bebop-backline-machine "machine"
+  "Holder name for a service no session holds — the machine's own.
+Services with this holder survive every session teardown.")
+
 (defvar bebop--backlines nil
   "Alist of (SLUG . PLIST) intent metadata for backline windows.
 PLIST keys: :dir, :last-command, :started-at.
@@ -149,6 +172,116 @@ ports costs one ps walk, not one per port."
             (push (cdr pair) ports))))
       (nreverse ports))))
 
+(defun bebop-backline-roster ()
+  "Return this machine's service roster, or nil if it has none.
+Calls `bebop-backline-roster-source'; see that variable for the shape
+of a roster entry. Fails soft: a source that errors gets one message
+and an empty roster, never a broken fleet view."
+  (when (functionp bebop-backline-roster-source)
+    (condition-case err
+        (funcall bebop-backline-roster-source)
+      (error
+       (message "Backline roster: %s failed — %s"
+                bebop-backline-roster-source (error-message-string err))
+       nil))))
+
+(defun bebop-backline-service (name)
+  "Return the roster entry named NAME, or nil."
+  (seq-find (lambda (s) (equal (plist-get s :name) name))
+            (bebop-backline-roster)))
+
+(defun bebop--pid-cwd (pid)
+  "Return PID's working directory via lsof, or nil."
+  (with-temp-buffer
+    (when (eq 0 (call-process "lsof" nil '(t nil) nil
+                              "-a" "-p" (number-to-string pid)
+                              "-d" "cwd" "-Fn"))
+      (goto-char (point-min))
+      (when (re-search-forward "^n\\(.+\\)$" nil t)
+        (match-string 1)))))
+
+(defun bebop--pid-command (pid)
+  "Return PID's full command line via ps, or nil."
+  (with-temp-buffer
+    (when (eq 0 (call-process "ps" nil '(t nil) nil
+                              "-o" "command=" "-p" (number-to-string pid)))
+      (let ((s (string-trim (buffer-string))))
+        (unless (string-empty-p s) s)))))
+
+(defun bebop--backline-venue-in-path (path)
+  "Return the venue directory name PATH sits under, or nil.
+PATH may be a directory or a whole command line: the venues root is
+distinctive enough to match inside either."
+  (when (and path (stringp path))
+    (let ((root (file-name-as-directory (expand-file-name bebop-venues-dir))))
+      (when (string-match (concat (regexp-quote root) "\\([^/ \n]+\\)") path)
+        (match-string 1 path)))))
+
+(defun bebop-backline-holder (pid)
+  "Return the derived holder of PID: a venue slug, or `bebop-backline-machine'.
+Never stored, always derived — see the =* Backline= design section."
+  (or (bebop--backline-owning-slug pid)
+      (bebop--backline-venue-in-path (bebop--pid-cwd pid))
+      (bebop--backline-venue-in-path (bebop--pid-command pid))
+      bebop-backline-machine))
+
+(defun bebop-backline-services ()
+  "Return the machine's service fleet: the roster merged with live lsof state.
+One plist per service, sorted by port:
+
+  :name :port :group :start-cmd :machine-cmd :broken  — from the roster
+  :rostered  non-nil when the row came from the roster
+  :up        non-nil when something is listening on :port
+  :pid       the listening process, or nil
+  :holder    derived holder (see `bebop-backline-holder'), nil when down
+
+Live listeners with no roster entry are named \"port-NNNN\": the fleet
+view stays honest about processes bebop was never told about."
+  (let* ((pairs (bebop--listening-pairs))
+         claimed rows)
+    (dolist (svc (bebop-backline-roster))
+      (let* ((port (plist-get svc :port))
+             (pid (and port (car (rassq port pairs)))))
+        (when pid (push port claimed))
+        (push (append (list :rostered t
+                            :up (and pid t)
+                            :pid pid
+                            :holder (and pid (bebop-backline-holder pid)))
+                      svc)
+              rows)))
+    (dolist (pair pairs)
+      (let ((port (cdr pair)))
+        (unless (memq port claimed)
+          (push port claimed)
+          (push (list :name (format "port-%d" port)
+                      :port port
+                      :rostered nil
+                      :up t
+                      :pid (car pair)
+                      :holder (bebop-backline-holder (car pair)))
+                rows))))
+    (sort (nreverse rows)
+          (lambda (a b)
+            (let ((pa (plist-get a :port)) (pb (plist-get b :port)))
+              (cond ((and pa pb (/= pa pb)) (< pa pb))
+                    ((and pa pb) (string< (plist-get a :name)
+                                          (plist-get b :name)))
+                    (pa t)
+                    (pb nil)
+                    (t (string< (plist-get a :name) (plist-get b :name)))))))))
+
+(defun bebop-backline-service-holder (name)
+  "Return the derived holder of service NAME, or nil if it is down.
+NAME may be a roster name or an unrostered \"port-NNNN\" row."
+  (plist-get (seq-find (lambda (r) (equal (plist-get r :name) name))
+                       (bebop-backline-services))
+             :holder))
+
+(defun bebop-backline-venue-services (slug)
+  "Return the fleet rows whose derived holder is venue SLUG."
+  (seq-filter (lambda (r) (equal (plist-get r :holder) slug))
+              (bebop-backline-services)))
+
 (defun bebop--backline-register (slug &rest props)
   "Merge PROPS into the intent metadata for SLUG."
   (let ((cell (assoc slug bebop--backlines)))
@@ -221,17 +354,86 @@ process — interrupt or take over explicitly first. Returns the slug."
 
 (defun bebop-backline-status (&optional slug)
   "Return a status plist for backline SLUG, or a list for all backlines.
-Keys: :slug :dir :busy :command :ports :last-command :started-at."
-  (if slug
-      (let ((meta (cdr (assoc slug bebop--backlines))))
-        (list :slug slug
-              :dir (plist-get meta :dir)
-              :busy (and (bebop--backline-busy-p slug) t)
-              :command (bebop--backline-current-command slug)
-              :ports (bebop--backline-ports slug)
-              :last-command (plist-get meta :last-command)
-              :started-at (plist-get meta :started-at)))
-    (mapcar #'bebop-backline-status (bebop--backline-slugs))))
+Keys: :slug :dir :busy :command :ports :last-command :started-at.
+
+Interactively, displays `bebop-backline-fleet' instead — a return value
+is no use at the keyboard."
+  (interactive)
+  (if (called-interactively-p 'interactive)
+      (bebop-backline-fleet)
+    (if slug
+        (let ((meta (cdr (assoc slug bebop--backlines))))
+          (list :slug slug
+                :dir (plist-get meta :dir)
+                :busy (and (bebop--backline-busy-p slug) t)
+                :command (bebop--backline-current-command slug)
+                :ports (bebop--backline-ports slug)
+                :last-command (plist-get meta :last-command)
+                :started-at (plist-get meta :started-at)))
+      (mapcar #'bebop-backline-status (bebop--backline-slugs)))))
+
+(defcustom bebop-backline-fleet-ephemeral-floor 32768
+  "Port above which an unrostered, machine-held listener is display noise.
+`bebop-backline-fleet' hides those rows and reports the count.
+`bebop-backline-services' still returns them: the fleet data is
+complete, only the table is choosy."
+  :type 'integer
+  :group 'bebop)
+
+(defun bebop-backline--fleet-worth-showing-p (row)
+  "Return non-nil if ROW earns a line in `bebop-backline-fleet'."
+  (or (plist-get row :rostered)
+      (not (equal (plist-get row :holder) bebop-backline-machine))
+      (< (or (plist-get row :port) 0) bebop-backline-fleet-ephemeral-floor)))
+
+(defun bebop-backline-fleet ()
+  "Show this machine's service fleet and its venue work shells.
+Every row is derived at read time — roster union lsof for the fleet,
+tmux for the shells — so the buffer is a snapshot, not a registry."
+  (interactive)
+  (let ((buf (get-buffer-create "*bebop-backline*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Service fleet — %s\n\n" (bebop--host-name)))
+        (insert (format "%-24s %-7s %-4s %-7s %s\n"
+                        "SERVICE" "PORT" "GRP" "STATE" "HOLDER"))
+        (let* ((all (bebop-backline-services))
+               (rows (seq-filter #'bebop-backline--fleet-worth-showing-p all))
+               (hidden (- (length all) (length rows))))
+          (if (null rows)
+              (insert "  (nothing listening, and no roster)\n")
+            (dolist (r rows)
+              (insert (format "%-24s %-7s %-4s %-7s %s\n"
+                              (plist-get r :name)
+                              (if (plist-get r :port)
+                                  (format ":%d" (plist-get r :port))
+                                "—")
+                              (or (plist-get r :group) "—")
+                              (cond ((plist-get r :up) "up")
+                                    ((plist-get r :broken) "broken")
+                                    (t "down"))
+                              (or (plist-get r :holder) "—")))))
+          (when (> hidden 0)
+            (insert (format "\n  + %d machine-held listener%s above :%d\n"
+                            hidden (if (= hidden 1) "" "s")
+                            bebop-backline-fleet-ephemeral-floor))))
+        (insert "\nVenue work shells\n\n")
+        (let ((shells (bebop-backline-status)))
+          (if (null shells)
+              (insert "  (none)\n")
+            (dolist (st shells)
+              (insert (format "%-24s %-7s %s\n"
+                              (plist-get st :slug)
+                              (if (plist-get st :busy) "busy" "idle")
+                              (let ((ports (plist-get st :ports)))
+                                (if ports
+                                    (mapconcat (lambda (p) (format ":%d" p))
+                                               ports " ")
+                                  (or (plist-get st :command) "—"))))))))
+        (goto-char (point-min))
+        (special-mode)))
+    (display-buffer buf)))
 
 (defun bebop-backline-takeover (port)
   "Free PORT after confirming with the user who currently holds it.
