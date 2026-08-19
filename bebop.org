@@ -254,6 +254,20 @@ Principles:
   =bebop-backline-run=, so human and agent watch the same process output in
   the same window and the agent's pane stays conversational.
 
+Per-project pinned ports (the exception to "no per-venue port allocation"):
+most repos are port-agnostic, so takeover-on-conflict is enough and a dev
+server can land on any free port. A few repos pin their port for reasons
+outside bebop, and there the pinned port is *load-bearing* — an auto-picked
+fallback silently breaks the app:
+
+- *commander → =:3002=.* The start script hardcodes =PORT=3002= and the
+  Cognito login flow only honors the localhost redirect URI registered for
+  =:3002=. Serve it anywhere else (e.g. a fallback =:3007=) and it compiles
+  and loads fine but the OAuth callback is rejected — auth just fails. So a
+  commander venue must take over =:3002=, never sidestep the conflict onto a
+  free port, and only one commander venue can run at a time. A fresh venue
+  worktree also has no =node_modules=; =yarn install= before first start.
+
 * Sets
 
 A set is an attention-level grouping of sessions — sometimes it wraps a Jira
@@ -765,6 +779,62 @@ flips red, new MR comment), one =bebop--notify-waiting= cousin away.
 - Whether marquee membership is exactly "unacked attention state" or
   needs a snooze verb once real usage shows a chronically red
   pipeline you've decided not to care about yet.
+
+** Second pass (design)
+
+Three refinements queued 2026-08-19, after three weeks of living with
+the full HUD. All three are the same move: spend more darkness on
+sessions that have stopped earning attention, and make the one moment
+that deserves brightness — a transition — briefly brighter.
+
+*** Age column earns its ink
+
+The age column renders unconditionally ("5m", "2h", "3d"), which makes
+fresh rows carry ink that says nothing — a five-minute-old session is
+the normal case, not a signal. Second pass: render the age only once
+it crosses =bebop-hud-quiet-hours=, the same threshold that dims the
+name to shadow. The two staleness signals then agree: a row either
+looks current (bright name, no age) or looks stale (shadow name,
+visible age), never a mix. One conditional at the render site in
+=bebop-set--row=, no new state.
+
+(First instinct was "hide under a day"; thresholding at quiet-hours
+avoids inventing a second arbitrary cutoff. If 4h proves too eager for
+the age column specifically, split it into its own defcustom then.)
+
+*** Dot decay
+
+=bebop-dot-waiting-face= holds its red forever; a session untouched
+for a week glows exactly as loud as one that flipped to waiting a
+minute ago. Second pass: after =bebop-hud-dot-stale-days= (default 7)
+without activity, the status dot renders in shadow regardless of state
+— the dot-level twin of quiet-hours name dimming. State is not lost
+(the gutter glyphs and =session-info= still carry it); only the
+salience decays. Interactions already hold: the marquee excludes stale
+entries, and a week-idle waiting session is precisely what roundup
+should be proposing for exile — the gray dot is the visual leading
+indicator of that proposal.
+
+*** Transition pulse
+
+When a session flips state, blink it — a one-shot grayscale pulse (2–3
+face swaps on a short timer, then settle), not a continuous blink.
+Continuous blinking would fight "transitions outrank states": the
+persistent form of "this changed" already exists (unseen bold + the
+marquee), so the pulse's whole job is the first half-second of
+noticing. Grayscale keeps it inside the spend-darkness budget — a
+flicker of emphasis, not a color event. Plumbing exists:
+=bebop-session-activity-functions= fires on exactly the
+working↔waiting edges, and merged-✓'s flash-then-dim is the precedent
+to generalize into a small =bebop-hud--pulse= helper (overlay face
+swap, so no per-frame re-render).
+
+*** Sequencing
+
+Age gating and dot decay are one sitting: render-site conditionals
+plus one defcustom. The pulse is its own small commit — timer
+discipline (cancel on re-render, never stack) is where the bugs will
+live. All three are iMac-testable without the Pro.
 
 * Environment
 
