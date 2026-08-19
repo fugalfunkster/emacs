@@ -495,11 +495,37 @@ The session is not killed; only the chart file is moved."
     (bebop--upsert-session name (list :chart nil))
     (message "Archived chart for session: %s" name)))
 
+(defun bebop--prune-worktrees-everywhere ()
+  "Run `git worktree prune' in every repo under `bebop-repos-dir'.
+Return the number of repos pruned. The blunt instrument for a venue
+whose directory name did not follow REPO--BRANCH and so named no repo
+to prune precisely. Prune only ever forgets registrations whose
+directories are already gone, so a wrong guess costs nothing while a
+missing prune costs a branch that cannot be checked out anywhere else."
+  (let ((root (expand-file-name bebop-repos-dir))
+        (pruned 0))
+    (when (file-directory-p root)
+      (dolist (entry (directory-files root t "\\`[^.]"))
+        (when (and (file-directory-p entry)
+                   (file-exists-p (expand-file-name ".git" entry)))
+          (call-process "git" nil nil nil "-C" entry "worktree" "prune")
+          (setq pruned (1+ pruned)))))
+    pruned))
+
 (defun bebop--remove-venue (venue-path)
   "Remove the git worktree at VENUE-PATH.
-Tries `git worktree remove --force' first to properly unregister the worktree
-from the parent repo.  Falls back to `delete-directory' if git fails (e.g.
-the parent repo is gone)."
+`git worktree remove --force' first: it takes the directory *and* the
+parent repo's registration, which is the only outcome that also frees
+the branch. When it fails the directory still goes, via
+`delete-directory' — but a worktree whose directory vanished stays in
+its parent's list, and its branch stays locked, until someone prunes.
+So the fallback prunes, which is the step it used to skip.
+
+`bebop--find-repo-for-venue' guesses the repo from the REPO--BRANCH
+name and comes back empty for venues not named that way. Those have no
+repo to prune precisely, so every repo under `bebop-repos-dir' gets
+one; the count is reported, because a venue whose registration nobody
+can locate is worth seeing in the echo area."
   (let ((repo-path (bebop--find-repo-for-venue venue-path)))
     (if (and repo-path
              (eq 0 (call-process "git" nil nil nil
@@ -507,7 +533,14 @@ the parent repo is gone)."
                                  "worktree" "remove" "--force" venue-path)))
         (message "Removed worktree: %s" venue-path)
       (delete-directory venue-path t)
-      (message "Removed venue directory: %s" venue-path))))
+      (if repo-path
+          (progn
+            (call-process "git" nil nil nil
+                          "-C" repo-path "worktree" "prune")
+            (message "Removed venue directory: %s (pruned %s)"
+                     venue-path (file-name-nondirectory repo-path)))
+        (message "Removed venue directory: %s (no repo matched its name; pruned %d repo(s))"
+                 venue-path (bebop--prune-worktrees-everywhere))))))
 
 (defun bebop--session-artifacts (name)
   "Return a plist (:chart PATH :venue PATH) of NAME's artifacts on disk.
@@ -528,14 +561,45 @@ be gone. Nil for either facet means nothing to reap."
                                          (expand-file-name bebop-venues-dir))))
                 (and (file-directory-p p) p))))))
 
+;; Set and backline facets, reached softly — see Module dependencies.
+(declare-function bebop-set--session-set "bebop-set")
+(declare-function bebop-set--sticky-p "bebop-set")
+(declare-function bebop-set--forget-session "bebop-set")
+(declare-function bebop-set--prune-if-empty "bebop-set")
+(declare-function bebop-external-clear "bebop-set")
+(declare-function bebop--backline-live-p "bebop-backline")
+(declare-function bebop-backline-kill "bebop-backline")
+
 (defun bebop--teardown-desc (name)
-  "Describe what tearing NAME down will discard, for a confirmation prompt."
+  "Describe what tearing NAME down will discard, for a confirmation prompt.
+Every facet, not the three that happen to be visible on the dashboard
+row. The prompt is the only place the backline shell, the cached MR and
+pipeline status, the ack and activity history, and the set are ever
+named before they go — and a prompt that under-reports its blast radius
+is a prompt that gets answered yes."
   (let* ((artifacts (bebop--session-artifacts name))
+         (venue (plist-get artifacts :venue))
+         (slug (or (and venue (file-name-nondirectory
+                               (directory-file-name venue)))
+                   name))
+         (set (and (fboundp 'bebop-set--session-set)
+                   (bebop-set--session-set name)))
          (parts (delq nil
                       (list (and (assoc name bebop--live-sessions)
                                  "kill tmux window")
+                            (and (fboundp 'bebop--backline-live-p)
+                                 (bebop--backline-live-p slug)
+                                 "kill backline window")
                             (and (plist-get artifacts :chart) "archive chart")
-                            (and (plist-get artifacts :venue) "delete venue")))))
+                            (and venue "delete venue")
+                            "clear MR + pipeline cache"
+                            "drop ack + activity history"
+                            (and set
+                                 (if (and (fboundp 'bebop-set--sticky-p)
+                                          (bebop-set--sticky-p set))
+                                     (format "leave set \"%s\"" set)
+                                   (format "leave set \"%s\" (removed if emptied)"
+                                           set)))))))
     (if parts (string-join parts " + ") "no artifacts")))
 
 (defun bebop--teardown-names ()
@@ -883,14 +947,6 @@ On deck, resumable. To discard instead, use `bebop-exile-session'."
   (bebop-refresh)
   (message "Killed Bebop session: %s" name))
 
-;; Set and backline facets, reached softly — see Module dependencies.
-(declare-function bebop-set--session-set "bebop-set")
-(declare-function bebop-set--forget-session "bebop-set")
-(declare-function bebop-set--prune-if-empty "bebop-set")
-(declare-function bebop-external-clear "bebop-set")
-(declare-function bebop--backline-live-p "bebop-backline")
-(declare-function bebop-backline-kill "bebop-backline")
-
 (defun bebop-teardown-session (name)
   "Reap session NAME's whole tuple — the discard op.
 
@@ -914,8 +970,15 @@ confirms first."
   (let* ((artifacts (bebop--session-artifacts name))
          (chart (plist-get artifacts :chart))
          (venue (plist-get artifacts :venue))
-         (slug (and venue (file-name-nondirectory
-                           (directory-file-name venue))))
+         ;; The backline slug is the venue's directory name, and falls
+         ;; back to the session name: a session with no venue can still
+         ;; own a backline--NAME window, and deriving the slug from a
+         ;; nil venue meant that window outlived every teardown forever.
+         ;; `bebop--backline-live-p' gates the kill either way, so the
+         ;; fallback can only ever find a window that is really there.
+         (slug (or (and venue (file-name-nondirectory
+                               (directory-file-name venue)))
+                   name))
          (set (and (fboundp 'bebop-set--session-set)
                    (bebop-set--session-set name))))
     ;; A name with no facets is a typo, not a session. Every step below

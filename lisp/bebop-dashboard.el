@@ -479,11 +479,21 @@ list when they add keybindings.")
   (let* ((status (plist-get info :status))
          (selected (equal name bebop--active-session))
          (line-face (if selected 'bebop-selected-face 'bebop-session-face))
-         (dot-face (cond
-                    ((bebop--dot-stale-p name) 'shadow)
-                    ((memq status '(blocked waiting)) 'bebop-dot-waiting-face)
-                    ((memq status '(unknown degraded)) 'bebop-dot-degraded-face)
-                    (t 'bebop-dot-active-face)))
+         (status-face
+          (cond
+           ((memq status '(blocked waiting)) 'bebop-dot-waiting-face)
+           ((memq status '(unknown degraded)) 'bebop-dot-degraded-face)
+           (t 'bebop-dot-active-face)))
+         ;; Attention outranks decay — the same ordering the setlist
+         ;; gutter uses. Staleness may only gray a status you have
+         ;; already acked, or this body shadows the one transition it
+         ;; was meant to show you. bebop-set owns the ack registry and
+         ;; this body is the bebop-set-unloaded fallback, so a missing
+         ;; predicate reads honestly as "no acks known, decay freely".
+         (dot-face (if (and (fboundp 'bebop-set--unseen-status-p)
+                            (bebop-set--unseen-status-p name status))
+                       status-face
+                     (if (bebop--dot-stale-p name) 'shadow status-face)))
          (start (point)))
     ;; Insert pieces separately so the dot keeps its color face.
     ;; Propertizing the whole formatted line at once would overwrite

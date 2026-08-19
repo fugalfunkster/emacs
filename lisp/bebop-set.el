@@ -57,6 +57,8 @@ save once after — N acks should not mean N file writes.")
       (let ((attrs (make-hash-table :test #'equal)))
         (when-let ((c (plist-get (cdr cell) :created-at)))
           (puthash "created-at" c attrs))
+        (when (plist-get (cdr cell) :sticky)
+          (puthash "sticky" t attrs))
         (puthash (car cell) attrs sets)))
     (dolist (cell bebop--session-meta)
       (let ((entry (make-hash-table :test #'equal)))
@@ -103,8 +105,11 @@ read. A load that fails must cost nothing."
             (when-let ((sets (gethash "sets" doc)))
               (maphash (lambda (name attrs)
                          (push (cons name
-                                     (when-let ((c (gethash "created-at" attrs)))
-                                       (list :created-at c)))
+                                     (append
+                                      (when-let ((c (gethash "created-at" attrs)))
+                                        (list :created-at c))
+                                      (when (eq t (gethash "sticky" attrs))
+                                        (list :sticky t))))
                                parsed-sets))
                        sets))
             (when-let ((sessions (gethash "sessions" doc)))
@@ -151,12 +156,29 @@ read. A load that fails must cost nothing."
       (setcdr cell plist)))
   (bebop-set--save))
 
-(defun bebop-set--declare (name)
-  "Declare set NAME if not already declared. Return NAME."
-  (unless (assoc name bebop--sets)
-    (push (cons name (list :created-at (bebop--now-string))) bebop--sets)
-    (bebop-set--save))
+(defun bebop-set--declare (name &optional sticky)
+  "Declare set NAME if not already declared. Return NAME.
+With STICKY, record that a person asked for this set by name, which
+exempts it from the empty-set sweep — see `bebop-set--sticky-p'. A set
+can be promoted to sticky but never demoted: enrichment touching a
+hand-built set must not hand it back to the sweep."
+  (let ((cell (assoc name bebop--sets)))
+    (cond
+     ((null cell)
+      (push (cons name (append (list :created-at (bebop--now-string))
+                               (when sticky (list :sticky t))))
+            bebop--sets)
+      (bebop-set--save))
+     ((and sticky (not (plist-get (cdr cell) :sticky)))
+      (setcdr cell (plist-put (cdr cell) :sticky t))
+      (bebop-set--save))))
   name)
+
+(defun bebop-set--sticky-p (set)
+  "Non-nil when SET was declared by hand and survives the empty sweep.
+An absent key reads as not sticky, so every set written before the flag
+existed — and every set enrichment declares — sweeps as it always did."
+  (plist-get (cdr (assoc set bebop--sets)) :sticky))
 
 (defun bebop-set--names ()
   "Return all known set names: declared plus referenced."
@@ -185,6 +207,17 @@ you, so they never read as unseen (see Seen-unseen below)."
 (defun bebop-set--last-activity (name)
   "Return NAME's persisted :last-activity ISO string, or nil."
   (plist-get (bebop-set--session-meta name) :last-activity))
+
+(defun bebop-set--activity-time (name)
+  "Return NAME's :last-activity as a Lisp time value, or nil.
+An unreadable stamp reads as nil: the sort that uses this must never be
+the thing that breaks a render. `parse-time-string' plus `encode-time'
+rather than `date-to-time', which does not signal on garbage — it fills
+the blanks it could not parse and hands back a real-looking time from
+some other decade. `encode-time' refuses a decoded time with holes in
+it, which is the check this wants."
+  (when-let ((iso (bebop-set--last-activity name)))
+    (ignore-errors (encode-time (parse-time-string iso)))))
 
 (defun bebop-set--age-seconds (iso)
   "Return seconds elapsed since ISO timestamp, or nil if unparseable."
@@ -313,12 +346,19 @@ MR: a closed or merged MR's threads ask nothing of you."
 
 (defun bebop-set--marquee< (a b)
   "Order marquee rows A and B worst-first, then most recent first.
-ISO timestamps compare lexicographically; never-stamped rows sink."
+Never-stamped rows sink. Stamps compare as *times*, not as strings:
+`bebop--now-string' writes the UTC offset into every one, so the hour
+after this machine leaves daylight time it starts writing -0800 where
+it wrote -0700, and a lexicographic compare reads the newer stamp as
+the older one for as long as the hour digits agree."
   (let ((ra (bebop-set--marquee-rank a))
         (rb (bebop-set--marquee-rank b)))
     (if (/= ra rb) (< ra rb)
-      (string> (or (bebop-set--last-activity (plist-get a :name)) "")
-               (or (bebop-set--last-activity (plist-get b :name)) "")))))
+      (let ((ta (bebop-set--activity-time (plist-get a :name)))
+            (tb (bebop-set--activity-time (plist-get b :name))))
+        (cond ((and ta tb) (time-less-p tb ta))
+              (ta t)
+              (t nil))))))
 
 (defun bebop-hud--notify (fmt &rest args)
   "Ding and echo FMT formatted with ARGS, prefixed \"Bebop: \".
@@ -395,13 +435,22 @@ is a change of emphasis, not a new state worth a color."
 Holds only in-flight pulses; entries delete themselves on their last
 frame, so a quiet dashboard carries no pulse state at all.")
 
+(defun bebop-hud--pulse-erase (state)
+  "Delete the wash overlay STATE holds and forget it.
+The one place an overlay leaves a pulse. Every path that stops washing
+a row goes through here, because the overlay is the only part of a
+pulse that is visible after the pulse is gone: a stranded one is a gray
+band across a row that nothing will ever repaint."
+  (when (overlayp (plist-get state :overlay))
+    (delete-overlay (plist-get state :overlay)))
+  (plist-put state :overlay nil))
+
 (defun bebop-hud--pulse-clear (name)
   "End NAME's pulse: cancel its timer, delete its overlay, drop its entry."
   (when-let ((state (cdr (assoc name bebop-hud--pulses))))
     (when (timerp (plist-get state :timer))
       (cancel-timer (plist-get state :timer)))
-    (when (overlayp (plist-get state :overlay))
-      (delete-overlay (plist-get state :overlay)))
+    (bebop-hud--pulse-erase state)
     (setq bebop-hud--pulses (assoc-delete-all name bebop-hud--pulses))))
 
 (defun bebop-hud--pulse-detach ()
@@ -410,9 +459,7 @@ Called from the render path: rebuilding the buffer strands the
 overlays where they sat, and the next frame re-locates its row
 anyway."
   (dolist (entry bebop-hud--pulses)
-    (let ((ov (plist-get (cdr entry) :overlay)))
-      (when (overlayp ov) (delete-overlay ov))
-      (plist-put (cdr entry) :overlay nil))))
+    (bebop-hud--pulse-erase (cdr entry))))
 
 (defun bebop-hud--pulse-row (name)
   "Return (BEG . END) of NAME's topmost dashboard row, or nil.
@@ -435,10 +482,8 @@ after the last one clears the pulse. A dead dashboard buffer ends the
 pulse rather than resurrecting it."
   (when-let ((state (cdr (assoc name bebop-hud--pulses))))
     (let ((buf (get-buffer bebop-buffer-name))
-          (frames (plist-get state :frames))
-          (ov (plist-get state :overlay)))
-      (when (overlayp ov) (delete-overlay ov))
-      (plist-put state :overlay nil)
+          (frames (plist-get state :frames)))
+      (bebop-hud--pulse-erase state)
       (if (or (<= frames 0) (not (buffer-live-p buf)))
           (bebop-hud--pulse-clear name)
         (plist-put state :frames (1- frames))
@@ -461,14 +506,20 @@ never accumulate timers. No dashboard buffer, no pulse."
                        :frames (1- (* 2 bebop-hud-pulse-swaps))))
           timer)
       (push (cons name state) bebop-hud--pulses)
-      ;; The repeating timer holds itself so it can commit suicide if
-      ;; its entry disappears from under it — a module reload mid-pulse
-      ;; would otherwise leave a repeating timer with nothing to do.
+      ;; The repeating timer holds itself and its own state so it can
+      ;; retire when its entry disappears from under it — anything that
+      ;; empties `bebop-hud--pulses' without going through
+      ;; `bebop-hud--pulse-clear'. It erases before it cancels: the
+      ;; entry is already unreachable by then, so a bare cancel would
+      ;; strand the wash overlay and leave the row banded gray for the
+      ;; life of the buffer. (Not a reload story — the defvar survives
+      ;; a reload, entries and all.)
       (setq timer (run-at-time
                    bebop-hud-pulse-interval bebop-hud-pulse-interval
                    (lambda ()
                      (if (assoc name bebop-hud--pulses)
                          (bebop-hud--pulse-frame name)
+                       (bebop-hud--pulse-erase state)
                        (cancel-timer timer)))))
       (plist-put state :timer timer))))
 
@@ -482,11 +533,13 @@ keystroke — only at an edge that happened while you looked away."
 (add-hook 'bebop-session-activity-functions #'bebop-hud--pulse-on-activity)
 
 (defun bebop-new-set (name)
-  "Declare a new set NAME — the manual path for ticketless groupings."
+  "Declare a new set NAME — the manual path for ticketless groupings.
+Sets declared here are sticky: you asked for the box, so the sweep does
+not take it away the moment it is empty. `bebop-remove-set' does."
   (interactive "sNew set name: ")
   (when (string-empty-p (string-trim name))
     (user-error "Set name cannot be empty"))
-  (bebop-set--declare name)
+  (bebop-set--declare name t)
   (bebop--render)
   (message "Set \"%s\" declared" name))
 
@@ -517,11 +570,17 @@ session that no longer exists."
 
 (defun bebop-set--prune-if-empty (set)
   "Remove SET when no session belongs to it any more. Return SET if removed.
-A set exists to hold sessions, so its last member leaving ends it —
-otherwise it lingers as an empty box on stage until someone remembers
-`bebop-remove-set'. Removal is free: enrichment re-declares the set the
-next time a ticket matches its epic."
-  (when (and set (null (bebop-set--members set)))
+An enrichment-declared set exists to hold sessions, so its last member
+leaving ends it — otherwise it lingers as an empty box on stage until
+someone remembers `bebop-remove-set'. Removal is free there: enrichment
+re-declares the set the next time a ticket matches its epic.
+
+Sticky sets are the exception, and they are exempt here. Nothing
+re-declares a hand-built set, so sweeping one is not self-healing — it
+is deletion."
+  (when (and set
+             (not (bebop-set--sticky-p set))
+             (null (bebop-set--members set)))
     (bebop-set--forget-set set)
     set))
 
@@ -546,12 +605,14 @@ The backstop to `bebop-set--prune-if-empty': membership also ends in
 ways teardown never sees — a chart archived by hand, a venue removed in
 a shell, a set emptied on another machine. This enumerates every known
 set and counts, rather than reasoning forward from what just changed,
-which is exactly why pre-existing empties used to accumulate."
+which is exactly why pre-existing empties used to accumulate. Sticky
+sets are skipped, as in the per-teardown prune."
   (interactive)
   (let ((rows (bebop-set--rows))
         removed)
     (dolist (set (bebop-set--names))
-      (unless (bebop-set--members set rows)
+      (unless (or (bebop-set--sticky-p set)
+                  (bebop-set--members set rows))
         (bebop-set--forget-set set)
         (push set removed)))
     (setq removed (nreverse removed))
@@ -563,27 +624,73 @@ which is exactly why pre-existing empties used to accumulate."
                  "No empty sets")))
     removed))
 
+(defun bebop-set--dirty-venues (names)
+  "Return those of NAMES whose venue holds uncommitted changes.
+Read with `git status --porcelain'. A venue that is not a working tree,
+or one whose git call fails, is not reported dirty: the prompt this
+feeds must not cry wolf, or it stops being read."
+  (seq-filter
+   (lambda (name)
+     (when-let ((venue (plist-get (bebop--session-artifacts name) :venue)))
+       (with-temp-buffer
+         (and (eq 0 (call-process "git" nil t nil
+                                  "-C" venue "status" "--porcelain"))
+              (> (buffer-size) 0)))))
+   names))
+
 (defun bebop-close-set (set)
   "Close SET: tear down every member, then remove the set itself.
 The set-scale discard verb — a shipped epic is one gesture, not one per
 session. Members go through `bebop-teardown-session', so charts land in
-the archive and venues are removed; the set disappears because its last
-member left, not as a separate decision."
+the archive and venues are removed, and the set goes with its last
+member unless it is sticky.
+
+Each teardown is caught. One member that cannot go down — a chart
+buffer that survived its reap, a venue git refuses — used to abort the
+loop with the remaining members still on stage, the set unswept, and no
+report of which one failed. Now the others still go, the sweep and the
+render still happen, and the message counts what actually occurred
+instead of restating the preflight number.
+
+The prompt names the members whose venues hold uncommitted work. It is
+the last moment anyone can see that this gesture is about to delete
+them."
   (interactive
    (list (completing-read "Close set: " (bebop-set--names) nil t)))
-  (let ((members (bebop-set--members set)))
+  (let* ((members (bebop-set--members set))
+         (dirty (bebop-set--dirty-venues members))
+         closed failed)
     (unless (yes-or-no-p
-             (format "Close set \"%s\"? (tear down %d: %s) "
+             (format "Close set \"%s\"? Tear down %d (%s)%s "
                      set (length members)
-                     (if members (string-join members ", ") "no members")))
+                     (if members (string-join members ", ") "no members")
+                     (if dirty
+                         (format " — UNCOMMITTED WORK in %s"
+                                 (string-join dirty ", "))
+                       "")))
       (user-error "Close cancelled"))
     (dolist (name members)
-      (bebop-teardown-session name))
-    ;; The last teardown normally prunes the set; an already-empty set,
-    ;; or one whose members refused to leave, still needs the check.
-    (bebop-set--prune-if-empty set)
-    (bebop--render)
-    (message "Closed set \"%s\" (%d torn down)" set (length members))))
+      (condition-case err
+          (progn (bebop-teardown-session name)
+                 (push name closed))
+        (error (push (cons name (error-message-string err)) failed))))
+    (setq failed (nreverse failed))
+    ;; Prune and render whatever happened above. The last teardown
+    ;; normally prunes the set; an already-empty set, a sticky one, or
+    ;; one whose members refused to leave still needs the check — and
+    ;; the dashboard still needs to stop showing rows that are gone.
+    (let ((pruned (bebop-set--prune-if-empty set)))
+      (bebop--render)
+      (message
+       "%s" (concat (format "Closed set \"%s\": %d torn down"
+                            set (length closed))
+                    (when failed
+                      (format ", %d failed (%s)" (length failed)
+                              (mapconcat #'car failed ", ")))
+                    (cond (pruned "; set removed")
+                          ((bebop-set--sticky-p set) "; set kept (sticky)")
+                          (t "; set kept (still has members)")))))
+    (mapcar #'car failed)))
 
 (defun bebop--entry-name-at-point ()
   "Return the session or on-deck entry name at point, or nil."
@@ -1052,15 +1159,20 @@ is live and derived; they dim when their snapshots age out (see
            (live (plist-get row :live))
            (dot (if live
                     (let* ((status (plist-get live :status))
-                           ;; Dot decay: past `bebop-hud-dot-stale-days'
-                           ;; the status color is spent, not the status.
-                           (base (if (bebop--dot-stale-p name)
-                                     'shadow
-                                   (bebop-set--dot-face status))))
+                           (face (bebop-set--dot-face status)))
+                      ;; Attention outranks decay. Decay says "nothing
+                      ;; has happened on this row for days"; unseen says
+                      ;; "this changed since you last looked" — and the
+                      ;; second statement contradicts the first. An
+                      ;; agent that went blocked while you were away was
+                      ;; quiet right up until the moment worth seeing,
+                      ;; so testing staleness first shadowed exactly the
+                      ;; dots the HUD exists to raise. Staleness may
+                      ;; only gray a status you have already acked.
                       (bebop-set--prop
                        "●" (if (bebop-set--unseen-status-p name status)
-                               (list 'bebop-hud-unseen-face base)
-                             base)))
+                               (list 'bebop-hud-unseen-face face)
+                             (if (bebop--dot-stale-p name) 'shadow face))))
                   (bebop-set--prop "○" 'shadow)))
            (chart (when (plist-get row :chart)
                     (bebop-set--prop "⊞" 'shadow)))
