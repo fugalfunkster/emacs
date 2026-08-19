@@ -354,6 +354,117 @@ lane."
 
 (add-to-list 'global-mode-string '(:eval (bebop-hud--modeline)) t)
 
+(defcustom bebop-hud-pulse-swaps 3
+  "Face swaps in a transition pulse. Zero disables pulsing entirely."
+  :type 'integer
+  :group 'bebop)
+
+(defcustom bebop-hud-pulse-interval 0.12
+  "Seconds between transition-pulse frames.
+Total pulse length is roughly twice this times `bebop-hud-pulse-swaps'
+— half a second, the length of a glance."
+  :type 'number
+  :group 'bebop)
+
+(defface bebop-hud-pulse-face
+  '((((background dark)) :background "#3A3A3A")
+    (((background light)) :background "#DCDCDC"))
+  "Grayscale wash marking a row that just changed state.
+Background only: the row must not reflow mid-flicker, and a transition
+is a change of emphasis, not a new state worth a color."
+  :group 'bebop)
+
+(defvar bebop-hud--pulses nil
+  "Alist of session NAME to a plist (:timer :overlay :frames).
+Holds only in-flight pulses; entries delete themselves on their last
+frame, so a quiet dashboard carries no pulse state at all.")
+
+(defun bebop-hud--pulse-clear (name)
+  "End NAME's pulse: cancel its timer, delete its overlay, drop its entry."
+  (when-let ((state (cdr (assoc name bebop-hud--pulses))))
+    (when (timerp (plist-get state :timer))
+      (cancel-timer (plist-get state :timer)))
+    (when (overlayp (plist-get state :overlay))
+      (delete-overlay (plist-get state :overlay)))
+    (setq bebop-hud--pulses (assoc-delete-all name bebop-hud--pulses))))
+
+(defun bebop-hud--pulse-detach ()
+  "Delete every pulse overlay, keeping the timers running.
+Called from the render path: rebuilding the buffer strands the
+overlays where they sat, and the next frame re-locates its row
+anyway."
+  (dolist (entry bebop-hud--pulses)
+    (let ((ov (plist-get (cdr entry) :overlay)))
+      (when (overlayp ov) (delete-overlay ov))
+      (plist-put (cdr entry) :overlay nil))))
+
+(defun bebop-hud--pulse-row (name)
+  "Return (BEG . END) of NAME's topmost dashboard row, or nil.
+Topmost is deliberate: when the marquee is projecting the session, the
+pulse lands in the lane — the place the eye is already being sent."
+  (save-excursion
+    (goto-char (point-min))
+    (let (found)
+      (while (and (not found) (not (eobp)))
+        (if (equal name (get-text-property (point) 'bebop-session-name))
+            (setq found (cons (line-beginning-position)
+                              (line-end-position)))
+          (forward-line 1)))
+      found)))
+
+(defun bebop-hud--pulse-frame (name)
+  "Render one pulse frame for NAME and count down toward the last.
+Odd frames wash, even frames rest, so the row alternates; the frame
+after the last one clears the pulse. A dead dashboard buffer ends the
+pulse rather than resurrecting it."
+  (when-let ((state (cdr (assoc name bebop-hud--pulses))))
+    (let ((buf (get-buffer bebop-buffer-name))
+          (frames (plist-get state :frames))
+          (ov (plist-get state :overlay)))
+      (when (overlayp ov) (delete-overlay ov))
+      (plist-put state :overlay nil)
+      (if (or (<= frames 0) (not (buffer-live-p buf)))
+          (bebop-hud--pulse-clear name)
+        (plist-put state :frames (1- frames))
+        (when (= 1 (mod frames 2))
+          (with-current-buffer buf
+            (when-let ((row (bebop-hud--pulse-row name)))
+              (let ((new (make-overlay (car row) (cdr row) buf)))
+                (overlay-put new 'face 'bebop-hud-pulse-face)
+                (overlay-put new 'priority 100)
+                (plist-put state :overlay new)))))))))
+
+(defun bebop-hud--pulse (name)
+  "Pulse NAME's dashboard row once — a short grayscale flicker.
+Restarts rather than stacks: a burst of transitions on one session can
+never accumulate timers. No dashboard buffer, no pulse."
+  (bebop-hud--pulse-clear name)
+  (when (and (> bebop-hud-pulse-swaps 0)
+             (buffer-live-p (get-buffer bebop-buffer-name)))
+    (let ((state (list :timer nil :overlay nil
+                       :frames (1- (* 2 bebop-hud-pulse-swaps))))
+          timer)
+      (push (cons name state) bebop-hud--pulses)
+      ;; The repeating timer holds itself so it can commit suicide if
+      ;; its entry disappears from under it — a module reload mid-pulse
+      ;; would otherwise leave a repeating timer with nothing to do.
+      (setq timer (run-at-time
+                   bebop-hud-pulse-interval bebop-hud-pulse-interval
+                   (lambda ()
+                     (if (assoc name bebop-hud--pulses)
+                         (bebop-hud--pulse-frame name)
+                       (cancel-timer timer)))))
+      (plist-put state :timer timer))))
+
+(defun bebop-hud--pulse-on-activity (name event)
+  "Pulse NAME on a state transition. Hook target.
+Sends are excluded: you do not need the dashboard to blink at your own
+keystroke — only at an edge that happened while you looked away."
+  (when (eq event 'transition)
+    (bebop-hud--pulse name)))
+
+(add-hook 'bebop-session-activity-functions #'bebop-hud--pulse-on-activity)
+
 (defun bebop-new-set (name)
   "Declare a new set NAME — the manual path for ticketless groupings."
   (interactive "sNew set name: ")
@@ -1020,6 +1131,9 @@ RET reads, so activation works from either listing."
   (let* ((rows (bebop-set--rows))
          (groups (bebop-set--group rows))
          (width (bebop-set--name-width rows (bebop-set--names))))
+    ;; The buffer was just erased under any in-flight pulse; drop the
+    ;; stranded overlays and let the running timers re-locate their rows.
+    (bebop-hud--pulse-detach)
     (magit-insert-section (bebop-setlist)
       ;; Separator blank lines are inserted here in the ROOT section's
       ;; scope, between child sections — never inside a child, where
