@@ -561,14 +561,16 @@ This command asks; `bebop-teardown-session' does the work."
   (message "Exiled session: %s" name))
 
 (defun bebop-exile-session-at-point ()
-  "Exile the on-deck session at point, or call `bebop-exile-session' interactively.
-When point has a `bebop-on-deck-name' text property, passes that name directly
-to `bebop-exile-session'.  Otherwise falls through to the interactive prompt."
+  "Exile the session at point, or call `bebop-exile-session' interactively.
+Reads the row's name from `bebop-on-deck-name' or `bebop-session-name' —
+exile targets live sessions too, and live rows carry the latter property.
+With neither (point off any row), falls through to the interactive prompt."
   (interactive)
-  (let ((session-name (get-text-property (point) 'bebop-on-deck-name)))
+  (let ((session-name (or (get-text-property (point) 'bebop-on-deck-name)
+                          (get-text-property (point) 'bebop-session-name))))
     (if session-name
         (bebop-exile-session session-name)
-      (bebop-exile-session))))
+      (call-interactively #'bebop-exile-session))))
 
 (defvar-local bebop-composition--cookies nil
   "Face-remapping cookies active while `bebop-composition-mode' is on.")
