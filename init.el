@@ -24,14 +24,13 @@
 
 (package-initialize)
 
-(when (memq window-system '(mac ns x))
-  (exec-path-from-shell-initialize))
-
 (when (not package-archive-contents)
   (package-refresh-contents))
 
 (defvar my-packages
   '(use-package
+    exec-path-from-shell
+    ido-completing-read+
     paredit
     clojure-mode
     clojure-mode-extra-font-locking
@@ -54,6 +53,8 @@
     lsp-treemacs
     lsp-ui
     hover
+    flutter
+    prettier-js
     flycheck
     flycheck-eglot
     keyfreq
@@ -74,6 +75,12 @@
 (dolist (p my-packages)
   (when (not (package-installed-p p))
     (package-install p)))
+
+;; Pull PATH from the login shell so GUI Emacs sees the same tools as the
+;; terminal. Must run after the install loop so a fresh machine can bootstrap.
+(when (memq window-system '(mac ns x))
+  (require 'exec-path-from-shell)
+  (exec-path-from-shell-initialize))
 
 (add-to-list 'load-path "~/.emacs.d/vendor")
 (add-to-list 'load-path "~/.emacs.d/customizations")
