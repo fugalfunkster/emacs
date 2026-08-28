@@ -6,6 +6,7 @@
     "Compat shim for Emacs 27 — real variable added in Emacs 28."))
 
 (add-hook 'typescript-mode-hook 'subword-mode)
+(add-hook 'typescript-ts-base-mode-hook 'subword-mode)
 (add-hook 'js-mode-hook 'subword-mode)
 (add-hook 'html-mode-hook 'subword-mode)
 (add-hook 'web-mode-hook 'subword-mode)
@@ -14,6 +15,7 @@
 (add-hook 'js2-mode-hook #'add-node-modules-path)
 (add-hook 'rjsx-mode-hook #'add-node-modules-path)
 (add-hook 'typescript-mode-hook #'add-node-modules-path)
+(add-hook 'typescript-ts-base-mode-hook #'add-node-modules-path)
 (add-hook 'web-mode-hook #'add-node-modules-path)
 
 (setq js-indent-level 1)
@@ -54,7 +56,7 @@
 
 (defun jsts--prettier-js-before-save ()
   "Format the current buffer with prettier-js."
-  (when (derived-mode-p 'js-mode 'js2-mode 'rjsx-mode 'typescript-mode)
+  (when (derived-mode-p 'js-mode 'js2-mode 'rjsx-mode 'typescript-mode 'typescript-ts-base-mode)
     (prettier-js)))
 
 (defun jsts--setup-prettier-js-on-save ()
@@ -64,13 +66,14 @@
 
 (defun jsts--maybe-setup-prettier-js-for-current-buffer ()
   "Enable prettier-js for JS/TS buffers."
-  (when (derived-mode-p 'js-mode 'js2-mode 'rjsx-mode 'typescript-mode)
+  (when (derived-mode-p 'js-mode 'js2-mode 'rjsx-mode 'typescript-mode 'typescript-ts-base-mode)
     (jsts--setup-prettier-js-on-save)))
 
 (add-hook 'js-mode-hook #'jsts--setup-prettier-js-on-save)
 (add-hook 'js2-mode-hook #'jsts--setup-prettier-js-on-save)
 (add-hook 'rjsx-mode-hook #'jsts--setup-prettier-js-on-save)
 (add-hook 'typescript-mode-hook #'jsts--setup-prettier-js-on-save)
+(add-hook 'typescript-ts-base-mode-hook #'jsts--setup-prettier-js-on-save)
 (add-hook 'after-change-major-mode-hook #'jsts--maybe-setup-prettier-js-for-current-buffer)
 (add-hook 'find-file-hook #'jsts--maybe-setup-prettier-js-for-current-buffer)
 
@@ -78,6 +81,29 @@
 
 ;; TSX → typescript-mode
 (add-to-list 'auto-mode-alist '("\\.tsx\\'" . typescript-mode))
+
+;; Tree-sitter TS/TSX. tsserver only parses JSX when told the file is
+;; "typescriptreact" — eglot derives that from tsx-ts-mode, never from
+;; typescript-mode, so .tsx must land in the ts modes wherever grammars
+;; exist. Grammar .dylibs are arch/machine-specific and must stay out of
+;; Dropbox; like my-packages, missing ones self-build on first startup
+;; (git + cc). The typescript-mode mappings above stay as the fallback.
+(when (and (fboundp 'treesit-available-p) (treesit-available-p))
+  (add-to-list 'treesit-extra-load-path
+               (expand-file-name "tree-sitter" my-local-emacs-dir))
+  (setq treesit-language-source-alist
+        '((typescript "https://github.com/tree-sitter/tree-sitter-typescript" "master" "typescript/src")
+          (tsx "https://github.com/tree-sitter/tree-sitter-typescript" "master" "tsx/src")))
+  (dolist (lang '(typescript tsx))
+    (unless (treesit-language-available-p lang)
+      (condition-case err
+          (treesit-install-language-grammar
+           lang (expand-file-name "tree-sitter" my-local-emacs-dir))
+        (error (message "treesit: could not build %s grammar: %s" lang err)))))
+  (when (treesit-language-available-p 'typescript)
+    (add-to-list 'auto-mode-alist '("\\.ts\\'" . typescript-ts-mode)))
+  (when (treesit-language-available-p 'tsx)
+    (add-to-list 'auto-mode-alist '("\\.tsx\\'" . tsx-ts-mode))))
 
 ;; JSX → web-mode
 (add-to-list 'auto-mode-alist '("\\.jsx\\'" . web-mode))
@@ -91,6 +117,7 @@
 
 ;; Auto-start eglot in JS/TS buffers
 (add-hook 'typescript-mode-hook #'eglot-ensure)
+(add-hook 'typescript-ts-base-mode-hook #'eglot-ensure)
 (add-hook 'js-mode-hook #'eglot-ensure)
 (add-hook 'js2-mode-hook #'eglot-ensure)
 (add-hook 'rjsx-mode-hook #'eglot-ensure)

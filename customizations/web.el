@@ -2,6 +2,7 @@
 (add-hook 'sgml-mode-hook 'emmet-mode)
 (add-hook 'web-mode-hook  'emmet-mode)
 (add-hook 'typescript-mode-hook 'emmet-mode)
+(add-hook 'typescript-ts-base-mode-hook 'emmet-mode)
 (setq emmet-move-cursor-between-quotes t)
 (setq emmet-expand-jsx-className? t)
 (setq emmet-self-closing-tag-style " /")
