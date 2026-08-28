@@ -55,6 +55,10 @@
     hover
     flutter
     prettier-js
+    add-node-modules-path
+    rjsx-mode
+    vue-mode
+    format-all
     flycheck
     flycheck-eglot
     keyfreq

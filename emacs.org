@@ -927,6 +927,10 @@ that Emacs Custom doesn't write into this tangle target.
     hover
     flutter
     prettier-js
+    add-node-modules-path
+    rjsx-mode
+    vue-mode
+    format-all
     flycheck
     flycheck-eglot
     keyfreq
