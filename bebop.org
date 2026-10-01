@@ -805,6 +805,9 @@ session meta. That buys, in order:
 
 ** The marquee
 
+(Retired in the third pass, below — the membership rules it proved
+now render in-place: hoisting, fold-piercing, heading kind glyphs.)
+
 The attention lane — the sign outside the club saying who's on
 tonight. A section above the live strip listing every session with an
 unacked attention state (agent waiting, ◆ unresolved comments, ✗
@@ -935,6 +938,42 @@ plus one defcustom. The pulse is its own small commit — timer
 discipline (cancel on re-render, never stack) is where the bugs will
 live. All three are iMac-testable without the Pro.
 
+** Third pass: the marquee retires (design)
+
+Decided 2026-10-01, after six weeks of the lane. The marquee earned
+its keep while attention had nowhere else to live. By now its
+membership truth (=bebop-set--attention-kinds=) also feeds the
+unseen-bold dots, the heading tally, and the mode-line periphery —
+the lane was the last consumer that /duplicated/ rows instead of
+decorating them, and it spent the dashboard's most valuable vertical
+space restating what the tree already shows. The predicate outlives
+the lane; only the projection goes.
+
+Each job the lane owned, relocated into the tree:
+
+- /The fold problem/ — attention pierces the fold. A folded set (or
+  Ungrouped) renders its unacked rows below the heading, in the
+  parent's scope where no fold can reach them: folded except for
+  attention. No projection — the pierced row is the only visible
+  listing, so =RET= and the pulse land on one place. Folding thereby
+  becomes a render input, so =TAB= re-renders (=bebop-set-toggle=)
+  instead of merely flipping overlays.
+- /Worst-first ordering/ — attention rows hoist to the top of their
+  own section (=bebop-set--child<=), ordered by the same
+  severity-then-recency compare the lane used.
+- /What, not just how much/ — the heading's ◉ run becomes the
+  periphery's kind glyphs with counts (=● 2 ✗ 1 ◆ 3=,
+  =bebop-set--attention-glyphs=): one spelling of attention-by-kind,
+  rendered by both surfaces, so a fold line says what it is sitting
+  on.
+- /Cross-buffer discovery/ — the periphery, unchanged; it never
+  depended on the lane.
+
+What is lost, accepted: the single top-of-buffer triage scan across
+all sets at once. The periphery counts plus hoisted, fold-piercing
+rows carry that load now; if a week of use misses the lane, this
+section is the revert map.
+
 * Environment
 
 | Path                                    | Purpose                                  |
@@ -1063,7 +1102,7 @@ if absent, creating the tmux window, and launching Claude Code in it:
 #+end_src
 
 =BEBOP_SESSION= gives every agent its identity at birth: a SessionStart
-hook (or the =bebop-orient= skill it points to) calls =bebop-session-info=
+hook (or the =orient= skill it points to) calls =bebop-session-info=
 over the emacs server to orient — set, chart, venue, ticket, siblings,
 backline — regardless of which path created the session.
 
@@ -5523,32 +5562,36 @@ Saves once, not once per session."
   (message "Bebop: all sessions marked seen"))
 #+end_src
 
-*** Marquee
+*** Attention
 
-Phase 3 of the HUD design: the attention lane — the sign outside the
-club saying who's on tonight. Membership is /unacked attention
+Phase 3 of the HUD design, as revised by the third pass: the
+membership truth of attention. A row qualifies on /unacked attention
 state/: an agent that flipped to waiting or blocked since you last
 visited, a pipeline that failed, or unresolved comments on an open or
 draft MR that you haven't seen (stale external data never qualifies —
-old news doesn't earn the lane — and a closed or merged MR's threads
-ask nothing). A projection, not a move: the row still renders in
-its home section; the marquee is a second listing whose =RET= lands
-in the same place. Visiting acks, acking leaves the lane — the dot,
-✗, or ◆ stays in the tree, so nothing is forgotten, only quieted.
-Ordered worst-first (blocked, waiting, failed pipeline, comments),
+old news earns nothing — and a closed or merged MR's threads ask
+nothing). Visiting acks, acking quiets — the dot, ✗, or ◆ stays in
+the tree, so nothing is forgotten, only quieted. Severity orders
+worst-first (blocked, waiting, failed pipeline, comments),
 most-recent within a rank.
+
+This predicate once fed a marquee — a lane at the top of the buffer
+projecting every attention row a second time. The lane retired in the
+third pass (see the design chapter): its jobs moved into the tree —
+hoisting within sections, piercing through folds, kind glyphs on
+headings — and the predicate outlived it.
 
 #+begin_src emacs-lisp
 (defconst bebop-set--attention-order '(blocked waiting pipeline comments)
-  "Attention kinds, worst first — the marquee's severity scale.")
+  "Attention kinds, worst first — the HUD's severity scale.")
 
 (defun bebop-set--attention-kinds (row)
   "Return ROW's unacked attention kinds, worst first, or nil.
 A list drawn from `bebop-set--attention-order'.  The single
-membership truth behind the marquee (non-nil = listed, car = rank),
-the set-heading ◉ tally, and the periphery counts — one predicate,
-three consumers, no drift.  Comments only count on an open or draft
-MR: a closed or merged MR's threads ask nothing of you."
+membership truth behind fold-piercing (non-nil = pierced, car =
+rank), the set-heading kind glyphs, and the periphery counts — one
+predicate, three consumers, no drift.  Comments only count on an open
+or draft MR: a closed or merged MR's threads ask nothing of you."
   (let* ((name (plist-get row :name))
          (live (plist-get row :live))
          (status (and live (plist-get live :status)))
@@ -5571,32 +5614,58 @@ MR: a closed or merged MR's threads ask nothing of you."
       (push (if (eq status 'blocked) 'blocked 'waiting) kinds))
     kinds))
 
-(defun bebop-set--marquee-p (row)
+(defun bebop-set--attention-p (row)
   "Non-nil when ROW holds an unacked attention state."
   (bebop-set--attention-kinds row))
 
-(defun bebop-set--marquee-rank (row)
+(defun bebop-set--attention-rank (row)
   "Return ROW's severity rank — the position of its worst kind."
   (let ((kinds (bebop-set--attention-kinds row)))
     (if kinds
         (seq-position bebop-set--attention-order (car kinds))
       (length bebop-set--attention-order))))
 
-(defun bebop-set--marquee< (a b)
-  "Order marquee rows A and B worst-first, then most recent first.
+(defun bebop-set--attention< (a b)
+  "Order attention rows A and B worst-first, then most recent first.
 Never-stamped rows sink. Stamps compare as *times*, not as strings:
 `bebop--now-string' writes the UTC offset into every one, so the hour
 after this machine leaves daylight time it starts writing -0800 where
 it wrote -0700, and a lexicographic compare reads the newer stamp as
 the older one for as long as the hour digits agree."
-  (let ((ra (bebop-set--marquee-rank a))
-        (rb (bebop-set--marquee-rank b)))
+  (let ((ra (bebop-set--attention-rank a))
+        (rb (bebop-set--attention-rank b)))
     (if (/= ra rb) (< ra rb)
       (let ((ta (bebop-set--activity-time (plist-get a :name)))
             (tb (bebop-set--activity-time (plist-get b :name))))
         (cond ((and ta tb) (time-less-p tb ta))
               (ta t)
               (t nil))))))
+
+(defun bebop-set--attention-glyphs (rows)
+  "Return ROWS' attention counts by kind as a string, or nil when quiet.
+=● 2 ✗ 1 ◆ 3= — agents needing you (blocked and waiting share the
+glyph: one ask, a human at the keyboard), failed pipelines, unseen
+comments; zero-count kinds vanish. The one spelling of
+attention-by-kind: set headings and the mode-line periphery both
+render this string, so they can never disagree. Unpropertized —
+each surface picks its own face."
+  (let ((dots 0) (pipes 0) (mrs 0))
+    (dolist (r rows)
+      (let ((kinds (bebop-set--attention-kinds r)))
+        (when (or (memq 'blocked kinds) (memq 'waiting kinds))
+          (setq dots (1+ dots)))
+        (when (memq 'pipeline kinds)
+          (setq pipes (1+ pipes)))
+        (when (memq 'comments kinds)
+          (setq mrs (1+ mrs)))))
+    (when (> (+ dots pipes mrs) 0)
+      (mapconcat
+       #'identity
+       (delq nil
+             (list (when (> dots 0) (format "● %d" dots))
+                   (when (> pipes 0) (format "✗ %d" pipes))
+                   (when (> mrs 0) (format "◆ %d" mrs))))
+       "  "))))
 #+end_src
 
 *** Periphery
@@ -5604,10 +5673,10 @@ the older one for as long as the hour digits agree."
 Phase 5 of the HUD design: attention gets /discovered/ in the corner
 of your eye and /resolved/ in the dashboard. A mode-line segment —
 visible from any buffer, any Solo frame, via =global-mode-string= —
-carries the marquee's counts by kind: =● 2 ✗ 1 ◆ 3= (agents needing
-you, failed pipelines, unseen comments), in marquee severity order.
-Zero-count kinds vanish and the whole segment renders empty when the
-marquee is dark: the mode-line only ever spends the characters
+carries the attention counts by kind: =● 2 ✗ 1 ◆ 3= (agents needing
+you, failed pipelines, unseen comments), in severity order. Zero-count
+kinds vanish and the whole segment renders empty when nothing is
+unacked: the mode-line only ever spends the characters
 attention deserves. Counts are cached at render time — mode-line
 evals fire far too often for row math — and every path that changes
 them (poll edges, acks, pulse) already re-renders.
@@ -5627,40 +5696,19 @@ The `bebop--notify-waiting' cousin for external edges."
   (message "Bebop: %s" (apply #'format fmt args)))
 
 (defvar bebop-hud--periphery nil
-  "Cached mode-line segment, or nil while the marquee is dark.
+  "Cached mode-line segment, or nil while no attention is unacked.
 Recomputed by `bebop-hud--update-periphery' at render time.")
 
 (defun bebop-hud--update-periphery (rows)
   "Recompute the periphery counts from ROWS and refresh mode-lines.
-Counts come from `bebop-set--attention-kinds' — the same membership
-truth as the marquee, so the mode-line can never disagree with the
-lane."
-  (let ((dots 0) (pipes 0) (mrs 0))
-    (dolist (r rows)
-      (let ((kinds (bebop-set--attention-kinds r)))
-        (when (or (memq 'blocked kinds) (memq 'waiting kinds))
-          (setq dots (1+ dots)))
-        (when (memq 'pipeline kinds)
-          (setq pipes (1+ pipes)))
-        (when (memq 'comments kinds)
-          (setq mrs (1+ mrs)))))
+The segment is `bebop-set--attention-glyphs' — the same string the
+set headings render, so the mode-line can never disagree with the
+tree."
+  (let ((glyphs (bebop-set--attention-glyphs rows)))
     (setq bebop-hud--periphery
-          (when (> (+ dots pipes mrs) 0)
+          (when glyphs
             (concat " "
-                    (mapconcat
-                     #'identity
-                     (delq nil
-                           (list
-                            (when (> dots 0)
-                              (bebop-set--prop (format "● %d" dots)
-                                               'bebop-dot-waiting-face))
-                            (when (> pipes 0)
-                              (bebop-set--prop (format "✗ %d" pipes)
-                                               'bebop-dot-waiting-face))
-                            (when (> mrs 0)
-                              (bebop-set--prop (format "◆ %d" mrs)
-                                               'bebop-dot-waiting-face))))
-                     "  ")
+                    (bebop-set--prop glyphs 'bebop-dot-waiting-face)
                     " "))))
   (force-mode-line-update t))
 
@@ -5675,7 +5723,7 @@ lane."
 
 Second pass: the moment a session flips state, blink its row once. The
 *persistent* form of "this changed" already exists — unseen bold plus
-the marquee — so the pulse's whole job is the first half-second of
+the pierced fold — so the pulse's whole job is the first half-second of
 noticing, and it is one-shot by construction: a continuous blink would
 fight "transitions outrank states" by making the loudest thing on the
 dashboard a fact you already read.
@@ -5743,14 +5791,16 @@ anyway."
     (bebop-hud--pulse-erase (cdr entry))))
 
 (defun bebop-hud--pulse-row (name)
-  "Return (BEG . END) of NAME's topmost dashboard row, or nil.
-Topmost is deliberate: when the marquee is projecting the session, the
-pulse lands in the lane — the place the eye is already being sent."
+  "Return (BEG . END) of NAME's topmost visible dashboard row, or nil.
+Visible matters: a folded set's body rows are still in the buffer as
+invisible text, and the row the eye can find is the pierced copy below
+the heading — washing the hidden one would pulse nothing at all."
   (save-excursion
     (goto-char (point-min))
     (let (found)
       (while (and (not found) (not (eobp)))
-        (if (equal name (get-text-property (point) 'bebop-session-name))
+        (if (and (equal name (get-text-property (point) 'bebop-session-name))
+                 (not (invisible-p (point))))
             (setq found (cons (line-beginning-position)
                               (line-end-position)))
           (forward-line 1)))
@@ -6529,15 +6579,17 @@ lone outlier past the cap simply overflows its own line."
 
 (defun bebop-set--heading-counts (rows width)
   "Return iconographic, column-aligned rollup counts for a set heading.
-Four fixed columns after the name field: the state icon repeated once
+Three fixed columns after the name field, the state icon repeated once
 per session — ●● for two active (dot-active face), ● waiting
-(dot-waiting face), ○○○ for three on deck, ◉ for one unacked
-attention state (bold, so even the fold line admits what it's sitting
-on); no numerals. Columns sit at absolute stops so every set heading
-tables up regardless of name length; a crowded cell overflows its
-stop with a single space keeping it separated from the next. The
-first three counts are disjoint — a waiting session is not also
-counted as running; the unacked column overlaps them by design."
+(dot-waiting face), ○○○ for three on deck; no numerals. A fourth
+column carries the attention kind glyphs with counts (=● 2 ✗ 1 ◆ 3=,
+bold, same spelling as the periphery) so even the fold line says what
+it's sitting on, not just how much. Columns sit at absolute stops so
+every set heading tables up regardless of name length; a crowded cell
+overflows its stop with a single space keeping it separated from the
+next. The first three counts are disjoint — a waiting session is not
+also counted as running; the attention column overlaps them by
+design."
   (if (null rows)
       (concat (bebop-set--stop (+ bebop-set--name-col width))
               (bebop-set--prop "(empty)" 'shadow))
@@ -6550,16 +6602,12 @@ counted as running; the unacked column overlaps them by design."
            (active (- (seq-count (lambda (r) (plist-get r :live)) rows)
                       waiting))
            (deck (seq-count (lambda (r) (not (plist-get r :live))) rows))
-           (unacked (seq-count #'bebop-set--marquee-p rows))
            (base (+ bebop-set--name-col width))
            (col 0)
            (parts nil))
       (dolist (cell (list (list active ?● 'bebop-dot-active-face)
                           (list waiting ?● 'bebop-dot-waiting-face)
-                          (list deck ?○ 'shadow)
-                          (list unacked ?◉
-                                (list 'bebop-hud-unseen-face
-                                      'bebop-dot-waiting-face))))
+                          (list deck ?○ 'shadow)))
         (push " " parts)
         (push (bebop-set--stop (+ base (* col 6))) parts)
         (when (> (car cell) 0)
@@ -6567,6 +6615,13 @@ counted as running; the unacked column overlaps them by design."
                                  (nth 2 cell))
                 parts))
         (setq col (1+ col)))
+      (when-let ((glyphs (bebop-set--attention-glyphs rows)))
+        (push " " parts)
+        (push (bebop-set--stop (+ base (* col 6))) parts)
+        (push (bebop-set--prop glyphs
+                               (list 'bebop-hud-unseen-face
+                                     'bebop-dot-waiting-face))
+              parts))
       (apply #'concat (nreverse parts)))))
 
 (defun bebop-set--counts (rows)
@@ -6580,8 +6635,37 @@ counted as running; the unacked column overlaps them by design."
                                (when (> deck 0) (format "%d on deck" deck))))))
       (mapconcat #'identity pieces " · "))))
 
+(defun bebop-set--child< (a b)
+  "Order section children A and B: attention hoists, names break ties.
+Rows with unacked attention sort first, among themselves by
+`bebop-set--attention<' — worst-first, most-recent within a rank — so
+an open section reads top-down in severity order. Quiet rows keep the
+stable alphabetical strip below them."
+  (let ((aa (bebop-set--attention-p a))
+        (ab (bebop-set--attention-p b)))
+    (cond ((and aa ab) (bebop-set--attention< a b))
+          (aa t)
+          (ab nil)
+          (t (string< (plist-get a :name) (plist-get b :name))))))
+
+(defun bebop-set--insert-pierced (section rows width)
+  "Insert ROWS' unacked attention rows after SECTION when it is folded.
+Attention pierces the fold: the rows land in the parent section's
+scope, outside SECTION's foldable body, so a collapsed set cannot
+hide a session that wants you — folded except for attention. Nothing
+inserts when SECTION is open (the hoisted child rows are already on
+screen), so the visible listing is always singular. Fold state is a
+render input here, which is why `bebop-set-toggle' re-renders instead
+of merely flipping visibility overlays."
+  (when (oref section hidden)
+    (dolist (r (seq-filter #'bebop-set--attention-p rows))
+      (bebop-set--insert-row r width "    "))))
+
 (defun bebop-set--insert-set (group width &optional hide)
-  "Insert the section for GROUP (SET-NAME . ROWS). HIDE collapses it."
+  "Insert the section for GROUP (SET-NAME . ROWS). HIDE collapses it.
+A folded set stays honest two ways: the heading's attention glyphs,
+and its unacked rows pierced through below it
+(`bebop-set--insert-pierced')."
   (let* ((set (car group))
          (rows (cdr group))
          ;; The set's own session, by naming convention: a row named
@@ -6590,30 +6674,30 @@ counted as running; the unacked column overlaps them by design."
          ;; copy-sequence before sort: sort is destructive and ROWS is
          ;; still iterated for the heading counts.
          (children (sort (copy-sequence (if own (remq own rows) rows))
-                         (lambda (a b)
-                           (string< (plist-get a :name)
-                                    (plist-get b :name)))))
-         (start (point)))
-    (magit-insert-section (bebop-set set hide)
-      (magit-insert-heading
-        (concat (bebop-set--gutter own)
-                (bebop-set--prop set '(:weight bold))
-                (bebop-set--heading-counts rows width)))
-      (when own
-        (add-text-properties
-         start (point)
-         (if (plist-get own :live)
-             (list 'bebop-session-name set)
-           (list 'bebop-on-deck-name set))))
-      (dolist (r children)
-        (bebop-set--insert-row r width "    ")))))
+                         #'bebop-set--child<))
+         (start (point))
+         (section
+          (magit-insert-section (bebop-set set hide)
+            (magit-insert-heading
+              (concat (bebop-set--gutter own)
+                      (bebop-set--prop set '(:weight bold))
+                      (bebop-set--heading-counts rows width)))
+            (when own
+              (add-text-properties
+               start (point)
+               (if (plist-get own :live)
+                   (list 'bebop-session-name set)
+                 (list 'bebop-on-deck-name set))))
+            (dolist (r children)
+              (bebop-set--insert-row r width "    ")))))
+    (bebop-set--insert-pierced section children width)))
 
 (defun bebop-set--render-body ()
   "Insert the setlist tree — the dashboard body.
-Order: marquee (only when lit), live ungrouped sessions (flat strip),
-sets, Ungrouped. Marquee rows are projections — the same session
-renders again in its home section; both carry the text properties
-RET reads, so activation works from either listing."
+Order: live ungrouped sessions (flat strip), sets, Ungrouped.
+Attention renders in place: hoisted to the top of its section
+(`bebop-set--child<'), pierced through a folded one
+(`bebop-set--insert-pierced'), counted by kind on the heading."
   (let* ((rows (bebop-set--rows))
          (groups (bebop-set--group rows))
          (width (bebop-set--name-width rows (bebop-set--names))))
@@ -6623,20 +6707,8 @@ RET reads, so activation works from either listing."
     (magit-insert-section (bebop-setlist)
       ;; Separator blank lines are inserted here in the ROOT section's
       ;; scope, between child sections — never inside a child, where
-      ;; they would become foldable content and shift on toggle. The
-      ;; marquee label is likewise a plain line, not a section heading —
-      ;; folding away attention would defeat the lane.
+      ;; they would become foldable content and shift on toggle.
       (bebop-hud--update-periphery rows)
-      (let ((marquee (sort (seq-filter #'bebop-set--marquee-p rows)
-                           #'bebop-set--marquee<)))
-        (when marquee
-          (insert (concat (bebop-set--stop bebop-set--name-col)
-                          (bebop-set--prop "Marquee"
-                                           '(:inherit shadow :weight bold))
-                          "\n"))
-          (dolist (r marquee)
-            (bebop-set--insert-row r width ""))
-          (insert "\n")))
       (let ((strip (plist-get groups :live-ungrouped)))
         (dolist (r strip)
           (bebop-set--insert-row r width ""))
@@ -6646,14 +6718,18 @@ RET reads, so activation works from either listing."
         (bebop-set--insert-set g width))
       (when-let ((un (plist-get groups :ungrouped)))
         (insert "\n")
-        (magit-insert-section (bebop-ungrouped "Ungrouped" t)
-          (magit-insert-heading
-            (concat (bebop-set--stop bebop-set--name-col)
-                    (bebop-set--prop "Ungrouped" '(:inherit shadow :weight bold))
-                    (bebop-set--prop (format " (%s)" (bebop-set--counts un))
-                                     'shadow)))
-          (dolist (r un)
-            (bebop-set--insert-row r width "    ")))))))
+        (let ((section
+               (magit-insert-section (bebop-ungrouped "Ungrouped" t)
+                 (magit-insert-heading
+                   (concat (bebop-set--stop bebop-set--name-col)
+                           (bebop-set--prop "Ungrouped"
+                                            '(:inherit shadow :weight bold))
+                           (bebop-set--prop (format " (%s)"
+                                                    (bebop-set--counts un))
+                                            'shadow)))
+                 (dolist (r (sort (copy-sequence un) #'bebop-set--child<))
+                   (bebop-set--insert-row r width "    ")))))
+          (bebop-set--insert-pierced section un width))))))
 #+end_src
 
 *** Plug in: renderer, keybindings, cheatsheet
@@ -6667,6 +6743,19 @@ RET reads, so activation works from either listing."
         "C/D: chart  V/W: venue"
         "N: new set  m: move to set  g: refresh  .: mark seen"))
 
+(defun bebop-set-toggle ()
+  "Toggle the section at point, then re-render the dashboard.
+Folding is a render input: a folded section re-renders with its
+unacked attention rows pierced below the heading, and an open one
+takes them back into its body — so the toggle must rebuild the tree,
+not merely flip magit's visibility overlays."
+  (interactive)
+  (when-let ((section (magit-current-section)))
+    (magit-section-toggle section)
+    (bebop--render)))
+
+(define-key bebop-dashboard-mode-map (kbd "TAB") #'bebop-set-toggle)
+(define-key bebop-dashboard-mode-map (kbd "<tab>") #'bebop-set-toggle)
 (define-key bebop-dashboard-mode-map (kbd "N") #'bebop-new-set)
 (define-key bebop-dashboard-mode-map (kbd "m") #'bebop-assign-set)
 (define-key bebop-dashboard-mode-map (kbd ".") #'bebop-mark-all-seen)
