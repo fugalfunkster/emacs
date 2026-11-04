@@ -182,7 +182,7 @@ both arrive as nil."
                 (bebop-remote--insert-row s))))))
         (insert "\n")
         (insert (propertize
-                 "g: refresh  RET: compose  a: attach (mosh)  P: forward port  .: mark seen\n"
+                 "g: refresh  RET: compose  w: workbench  a: attach (mosh)  P: forward port  .: mark seen\n"
                  'face '(:inherit shadow :height 0.75)))
         (goto-char (point-min))
         (let ((found nil))
@@ -259,6 +259,7 @@ both arrive as nil."
     (define-key map (kbd "a")      #'bebop-remote-attach)
     (define-key map (kbd "P")      #'bebop-remote-forward-port)
     (define-key map (kbd ".")      #'bebop-remote-mark-all-seen)
+    (define-key map (kbd "w")      #'bebop-remote-workbench)
     (define-key map (kbd "j")      #'bebop-remote--next)
     (define-key map (kbd "p")      #'bebop-remote--prev)
     (define-key map (kbd "<down>") #'bebop-remote--next)
@@ -281,7 +282,8 @@ both arrive as nil."
             (unless (process-live-p bebop-remote--stream)
               (propertize "  stream down" 'face 'shadow))))))
   (add-hook 'kill-buffer-hook #'bebop-remote--stop-timer nil t)
-  (add-hook 'kill-buffer-hook #'bebop-remote--stop-stream nil t))
+  (add-hook 'kill-buffer-hook #'bebop-remote--stop-stream nil t)
+  (add-hook 'post-command-hook #'bebop-remote--follow nil t))
 
 ;;;###autoload
 (defun bebop-remote ()
@@ -619,6 +621,107 @@ stream or the poll — passes through here."
   (or bebop-remote--periphery ""))
 
 (add-to-list 'global-mode-string '(:eval (bebop-remote--modeline)) t)
+
+(defcustom bebop-remote-client-name (car (split-string (system-name) "\\."))
+  "This machine's name in the grouped session names: `hostname -s'.
+bin/bebop-term names each window's grouped session CLIENT-ROLE."
+  :type 'string
+  :group 'bebop)
+
+(defcustom bebop-remote-follow-delay 0.3
+  "Seconds point must rest on a row before the D terminal follows."
+  :type 'number
+  :group 'bebop)
+
+(defcustom bebop-remote-term-program "bebop-term"
+  "The dotfiles program that opens a role's terminal window."
+  :type 'string
+  :group 'bebop)
+
+(defvar bebop-remote-host-command nil
+  "Command list that runs a shell command on the host, or nil for ssh.
+Tests set this to (\"sh\" \"-c\") to steer the local tmux.")
+
+(defvar bebop-remote--followed nil "The session the D terminal last showed.")
+(defvar bebop-remote--follow-timer nil)
+(defvar bebop-remote--missing-roles nil
+  "Roles whose terminal was found missing, so the notice shows once.")
+
+(defun bebop-remote--host-argv (command)
+  "The argv that runs shell COMMAND on the host."
+  (if bebop-remote-host-command
+      (append bebop-remote-host-command (list command))
+    (append (list "ssh") bebop-remote-ssh-options
+            (list (bebop-remote--target) command))))
+
+(defun bebop-remote-steer (role name &optional callback)
+  "Show far session NAME in the ROLE terminal, without blocking.
+CALLBACK, if given, gets t on success and nil when that terminal's
+grouped session does not exist."
+  (let* ((target (format "%s-%s:=%s" bebop-remote-client-name role
+                         (bebop-remote--window-name name)))
+         (cmd (format "%s select-window -t %s" bebop-remote-tmux
+                      (shell-quote-argument target))))
+    (make-process
+     :name (format "bebop-remote-steer-%s" role)
+     :command (bebop-remote--host-argv cmd)
+     :connection-type 'pipe
+     :noquery t
+     :buffer nil
+     :sentinel (lambda (proc _event)
+                 (unless (process-live-p proc)
+                   (let ((ok (eq 0 (process-exit-status proc))))
+                     (if ok
+                         (setq bebop-remote--missing-roles
+                               (delete role bebop-remote--missing-roles))
+                       (unless (or callback
+                                   (member role bebop-remote--missing-roles))
+                         (push role bebop-remote--missing-roles)
+                         (message "Bebop: no %s terminal for %s — run %s %s"
+                                  role name bebop-remote-term-program role)))
+                     (when callback (funcall callback ok))))))))
+
+(defun bebop-remote--follow ()
+  "Steer the D terminal to the session at point, once point rests."
+  (when (timerp bebop-remote--follow-timer)
+    (cancel-timer bebop-remote--follow-timer))
+  (let ((name (get-text-property (point) 'bebop-remote-name)))
+    (when (and name (not (equal name bebop-remote--followed))
+               (seq-find (lambda (s) (and (equal (plist-get s :name) name)
+                                          (plist-get s :live)))
+                         bebop-remote--sessions))
+      (setq bebop-remote--follow-timer
+            (run-at-time bebop-remote-follow-delay nil
+                         (lambda ()
+                           (setq bebop-remote--followed name)
+                           (bebop-remote-steer "D" name)))))))
+
+(defun bebop-remote-open-terminal (role)
+  "Open the ROLE terminal window with `bebop-remote-term-program'."
+  (unless (executable-find bebop-remote-term-program)
+    (user-error "Bebop: %s is not on PATH (dotfiles bin/)" bebop-remote-term-program))
+  (call-process bebop-remote-term-program nil 0 nil role
+                (bebop-remote--target)))
+
+(defun bebop-remote-workbench (&optional name)
+  "Pin the W terminal to far session NAME (or the one at point).
+Opens the W window first when it does not exist yet."
+  (interactive)
+  (let ((name (or name
+                  (get-text-property (point) 'bebop-remote-name)
+                  (user-error "No session at point"))))
+    (bebop-remote-steer
+     "W" name
+     (lambda (ok)
+       (if ok
+           (message "Bebop: workbench terminal → %s" name)
+         (bebop-remote-open-terminal "W")
+         ;; mosh needs a moment to attach before the session exists.
+         (run-at-time 3 nil #'bebop-remote-steer "W" name
+                      (lambda (ok)
+                        (message (if ok "Bebop: workbench terminal → %s"
+                                   "Bebop: W terminal did not come up for %s")
+                                 name))))))))
 
 (defun bebop-remote-attach ()
   "Attach to the host's agent tmux session — the live-TTY escape hatch.
