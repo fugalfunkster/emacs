@@ -183,7 +183,7 @@ both arrive as nil."
                 (bebop-remote--insert-row s))))))
         (insert "\n")
         (insert (propertize
-                 "g: refresh  RET: compose  w: pin W  W: workbench  a: attach (mosh)  P: forward port  .: mark seen\n"
+                 "g: refresh  RET: compose  r: resume  w: pin W  W: workbench  a: attach (mosh)  P: forward port  .: mark seen\n"
                  'face '(:inherit shadow :height 0.75)))
         (goto-char (point-min))
         (let ((found nil))
@@ -262,6 +262,7 @@ both arrive as nil."
     (define-key map (kbd ".")      #'bebop-remote-mark-all-seen)
     (define-key map (kbd "w")      #'bebop-remote-workbench)
     (define-key map (kbd "W")      #'bebop-remote-workbench-layout)
+    (define-key map (kbd "r")      #'bebop-remote-resume)
     (define-key map (kbd "j")      #'bebop-remote--next)
     (define-key map (kbd "p")      #'bebop-remote--prev)
     (define-key map (kbd "<down>") #'bebop-remote--next)
@@ -361,6 +362,20 @@ from the local Dropbox before any network call."
   "Composition buffer for a far session; \\[bebop-remote-send-buffer] sends over ssh."
   :lighter " Remote"
   :keymap bebop-remote-compose-mode-map)
+
+(defun bebop-remote-resume (&optional name)
+  "Resume the far on-deck session NAME (or the one at point) on the host."
+  (interactive)
+  (let* ((name (or name
+                   (get-text-property (point) 'bebop-remote-name)
+                   (user-error "No session at point")))
+         (s (seq-find (lambda (s) (equal (plist-get s :name) name))
+                      bebop-remote--sessions)))
+    (when (plist-get s :live)
+      (user-error "%s is already running on %s" name bebop-remote-host))
+    (bebop-remote--eval-json (format "(bebop-resume-session %S)" name))
+    (message "Bebop: resumed %s on %s" name bebop-remote-host)
+    (bebop-remote-refresh)))
 
 (defun bebop-remote-compose (&optional name)
   "Open the composition buffer for the far session NAME (or at point)."

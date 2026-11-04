@@ -73,6 +73,26 @@ Fields: session, set, chart, venue, ticket, siblings
   "Return a JSON array of all known set names."
   (json-serialize (vconcat (bebop-set--names))))
 
+(defun bebop-resume-session (name)
+  "Resume on-deck session NAME without prompts. Returns JSON.
+The citizen form of `bebop-resume', for callers with no minibuffer."
+  (unless (and (stringp name) (not (string-empty-p name)))
+    (error "bebop-resume-session: NAME must be a non-empty string"))
+  (unless (member name (bebop--on-deck-names))
+    (error "bebop-resume-session: %s is not on deck" name))
+  (let* ((chart (let ((f (expand-file-name (concat name ".org")
+                                           (expand-file-name bebop-charts-dir))))
+                  (when (file-exists-p f) f)))
+         (venue (let ((d (expand-file-name name (expand-file-name bebop-venues-dir))))
+                  (when (file-directory-p d) d)))
+         (stored (bebop--session-info name))
+         (launcher (if bebop-use-docker 'docker
+                     (and stored (plist-get stored :launcher)))))
+    (bebop--create-session name venue chart launcher)
+    (json-serialize (list :resumed name
+                          :chart (or chart :null)
+                          :venue (or venue :null)))))
+
 (defun bebop-propose-exile (name)
   "Queue session NAME for exile approval. Returns the queue as JSON."
   (unless (member name bebop--exile-proposals)

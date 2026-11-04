@@ -7451,6 +7451,37 @@ Fields: session, set, chart, venue, ticket, siblings
   (json-serialize (vconcat (bebop-set--names))))
 #+end_src
 
+*** Resume without prompts
+
+=bebop-resume= asks for the session name, so over ssh it would wait on
+the host's minibuffer, where nobody is looking. The remote dashboard
+resumes through this verb instead. It reads the chart and venue off
+disk exactly as =bebop-resume= does, keeps the on-deck name, and asks
+nothing. A relayed session lands on deck on the host, and =r= on its
+row in the client's remote dashboard brings it up there.
+
+#+begin_src emacs-lisp
+(defun bebop-resume-session (name)
+  "Resume on-deck session NAME without prompts. Returns JSON.
+The citizen form of `bebop-resume', for callers with no minibuffer."
+  (unless (and (stringp name) (not (string-empty-p name)))
+    (error "bebop-resume-session: NAME must be a non-empty string"))
+  (unless (member name (bebop--on-deck-names))
+    (error "bebop-resume-session: %s is not on deck" name))
+  (let* ((chart (let ((f (expand-file-name (concat name ".org")
+                                           (expand-file-name bebop-charts-dir))))
+                  (when (file-exists-p f) f)))
+         (venue (let ((d (expand-file-name name (expand-file-name bebop-venues-dir))))
+                  (when (file-directory-p d) d)))
+         (stored (bebop--session-info name))
+         (launcher (if bebop-use-docker 'docker
+                     (and stored (plist-get stored :launcher)))))
+    (bebop--create-session name venue chart launcher)
+    (json-serialize (list :resumed name
+                          :chart (or chart :null)
+                          :venue (or venue :null)))))
+#+end_src
+
 *** Exile proposals
 
 Roundup queues; the human disposes. Proposing is idempotent.
@@ -8413,7 +8444,7 @@ retries and restarts the timer.
                 (bebop-remote--insert-row s))))))
         (insert "\n")
         (insert (propertize
-                 "g: refresh  RET: compose  w: pin W  W: workbench  a: attach (mosh)  P: forward port  .: mark seen\n"
+                 "g: refresh  RET: compose  r: resume  w: pin W  W: workbench  a: attach (mosh)  P: forward port  .: mark seen\n"
                  'face '(:inherit shadow :height 0.75)))
         (goto-char (point-min))
         (let ((found nil))
@@ -8492,6 +8523,7 @@ retries and restarts the timer.
     (define-key map (kbd ".")      #'bebop-remote-mark-all-seen)
     (define-key map (kbd "w")      #'bebop-remote-workbench)
     (define-key map (kbd "W")      #'bebop-remote-workbench-layout)
+    (define-key map (kbd "r")      #'bebop-remote-resume)
     (define-key map (kbd "j")      #'bebop-remote--next)
     (define-key map (kbd "p")      #'bebop-remote--prev)
     (define-key map (kbd "<down>") #'bebop-remote--next)
@@ -8607,6 +8639,20 @@ its active pane, which for agent windows is the only pane.
   "Composition buffer for a far session; \\[bebop-remote-send-buffer] sends over ssh."
   :lighter " Remote"
   :keymap bebop-remote-compose-mode-map)
+
+(defun bebop-remote-resume (&optional name)
+  "Resume the far on-deck session NAME (or the one at point) on the host."
+  (interactive)
+  (let* ((name (or name
+                   (get-text-property (point) 'bebop-remote-name)
+                   (user-error "No session at point")))
+         (s (seq-find (lambda (s) (equal (plist-get s :name) name))
+                      bebop-remote--sessions)))
+    (when (plist-get s :live)
+      (user-error "%s is already running on %s" name bebop-remote-host))
+    (bebop-remote--eval-json (format "(bebop-resume-session %S)" name))
+    (message "Bebop: resumed %s on %s" name bebop-remote-host)
+    (bebop-remote-refresh)))
 
 (defun bebop-remote-compose (&optional name)
   "Open the composition buffer for the far session NAME (or at point)."
