@@ -125,7 +125,7 @@ both arrive as nil."
   "Insert one dashboard line for session plist S."
   (let* ((name (plist-get s :name))
          (live (plist-get s :live))
-         (status (plist-get s :status))
+         (status (bebop-remote--status s))
          (set (plist-get s :set))
          (dot-face (cond ((not live) 'shadow)
                          ((member status '("blocked" "waiting"))
@@ -140,7 +140,10 @@ both arrive as nil."
     (when set
       (insert (propertize (format "  [%s]" set) 'face 'shadow)))
     (insert "\n")
-    (add-text-properties start (point) (list 'bebop-remote-name name))))
+    (add-text-properties start (point) (list 'bebop-remote-name name))
+    (when live
+      (when-let ((children (plist-get (car (bebop-remote--hook name)) :children)))
+        (bebop--insert-subagent-rows name "  " children)))))
 
 (defun bebop-remote--render ()
   "Redraw the remote dashboard from the last fetched state."
@@ -263,10 +266,14 @@ both arrive as nil."
     (display-line-numbers-mode -1))
   (setq header-line-format
         '((:eval
-           (propertize (format " Remote: %s" bebop-remote-host)
-                       'face `(:height 1.6 :weight bold
-                               :foreground ,bebop-header-color)))))
-  (add-hook 'kill-buffer-hook #'bebop-remote--stop-timer nil t))
+           (concat
+            (propertize (format " Remote: %s" bebop-remote-host)
+                        'face `(:height 1.6 :weight bold
+                                :foreground ,bebop-header-color))
+            (unless (process-live-p bebop-remote--stream)
+              (propertize "  stream down" 'face 'shadow))))))
+  (add-hook 'kill-buffer-hook #'bebop-remote--stop-timer nil t)
+  (add-hook 'kill-buffer-hook #'bebop-remote--stop-stream nil t))
 
 ;;;###autoload
 (defun bebop-remote ()
@@ -289,7 +296,8 @@ from the local Dropbox before any network call."
   (pop-to-buffer (get-buffer-create bebop-remote-buffer-name))
   (unless (derived-mode-p 'bebop-remote-mode)
     (bebop-remote-mode))
-  (bebop-remote-refresh))
+  (bebop-remote-refresh)
+  (bebop-remote--start-stream))
 
 (defvar-local bebop-remote--compose-session nil
   "The far session this composition buffer sends to, or nil.")
@@ -354,6 +362,138 @@ from the local Dropbox before any network call."
     (pop-to-buffer buf)
     (message "Compose, then C-c C-c to send to %s on %s"
              name bebop-remote-host)))
+
+(defcustom bebop-remote-events-dir "~/.emacs.d-local/bebop-events"
+  "The host's hook event directory — its `bebop-events-dir'."
+  :type 'string
+  :group 'bebop)
+
+(defcustom bebop-remote-python "/usr/bin/python3"
+  "Absolute path to python3 on the host."
+  :type 'string
+  :group 'bebop)
+
+(defcustom bebop-remote-stream-retry 5
+  "Seconds before a dropped event stream reconnects."
+  :type 'integer
+  :group 'bebop)
+
+(defvar bebop-remote-stream-command nil
+  "Command list that starts the event stream, or nil for ssh to the host.
+The program arrives on its standard input. Tests set this to run the
+stream locally.")
+
+(defvar bebop-remote--hook-states (make-hash-table :test #'equal)
+  "Event file stem on the host → folded hook state, as `bebop--hook-states'.")
+
+(defvar bebop-remote--stream nil "The event stream process, or nil.")
+(defvar bebop-remote--stream-render-timer nil)
+(defvar bebop-remote--stream-retry-timer nil)
+
+(defun bebop-remote--stream-script ()
+  "The stream program's text, from this machine's own tangled copy."
+  (with-temp-buffer
+    (insert-file-contents
+     (expand-file-name "bin/bebop-event-stream" user-emacs-directory))
+    (buffer-string)))
+
+(defun bebop-remote--stream-filter (proc output)
+  "Fold each whole line of stream OUTPUT; redraw once the burst ends."
+  (let ((buf (concat (or (process-get proc :partial) "") output))
+        (start 0))
+    (while (string-match "\n" buf start)
+      (let* ((line (substring buf start (match-beginning 0)))
+             (tab (string-search "\t" line)))
+        (setq start (match-end 0))
+        (when-let* ((tab tab)
+                    (stem (substring line 0 tab))
+                    (ev (ignore-errors
+                          (json-parse-string (substring line (1+ tab))
+                                             :object-type 'plist :array-type 'list
+                                             :null-object nil :false-object nil))))
+          (puthash stem
+                   (if (equal (plist-get ev :e) "SessionStart")
+                       (bebop--hook-fold nil ev)
+                     (bebop--hook-fold (gethash stem bebop-remote--hook-states) ev))
+                   bebop-remote--hook-states))))
+    (process-put proc :partial (substring buf start))
+    (when (timerp bebop-remote--stream-render-timer)
+      (cancel-timer bebop-remote--stream-render-timer))
+    (setq bebop-remote--stream-render-timer
+          (run-at-time 0.2 nil #'bebop-remote--render))))
+
+(defun bebop-remote--stream-sentinel (proc _event)
+  "Reconnect a dropped stream while the remote dashboard lives."
+  (unless (process-live-p proc)
+    (when (eq proc bebop-remote--stream)
+      (setq bebop-remote--stream nil)
+      (when (get-buffer bebop-remote-buffer-name)
+        (bebop-remote--render)
+        (setq bebop-remote--stream-retry-timer
+              (run-at-time bebop-remote-stream-retry nil
+                           #'bebop-remote--start-stream))))))
+
+(defun bebop-remote--start-stream ()
+  "Open the event stream unless it is already open."
+  (unless (process-live-p bebop-remote--stream)
+    ;; A replay rebuilds every state, so start from nothing.
+    (clrhash bebop-remote--hook-states)
+    (let* ((args (list "-u" "-" bebop-remote-events-dir))
+           (cmd (or bebop-remote-stream-command
+                    (append (list "ssh") bebop-remote-ssh-options
+                            (list (bebop-remote--target)
+                                  (mapconcat #'shell-quote-argument
+                                             (cons bebop-remote-python args)
+                                             " ")))))
+           (proc (make-process :name "bebop-remote-stream"
+                               :command (if bebop-remote-stream-command
+                                            (append cmd args)
+                                          cmd)
+                               :connection-type 'pipe
+                               :noquery t
+                               :filter #'bebop-remote--stream-filter
+                               :sentinel #'bebop-remote--stream-sentinel)))
+      (process-send-string proc (bebop-remote--stream-script))
+      (process-send-eof proc)
+      (setq bebop-remote--stream proc))))
+
+(defun bebop-remote--stop-stream ()
+  "Close the event stream and its timers."
+  (dolist (tm (list bebop-remote--stream-retry-timer
+                    bebop-remote--stream-render-timer))
+    (when (timerp tm) (cancel-timer tm)))
+  (let ((proc bebop-remote--stream))
+    (setq bebop-remote--stream nil)
+    (when (process-live-p proc)
+      (delete-process proc))))
+
+(defun bebop-remote--hook (name)
+  "The far session NAME's effective hook state, or nil without events."
+  (when-let ((st (gethash (replace-regexp-in-string
+                           "/" "_" (string-remove-prefix "/" name))
+                          bebop-remote--hook-states)))
+    (when (plist-get st :state)
+      (cons (bebop--hook-effective st) (plist-get st :at)))))
+
+(defun bebop-remote--status (s)
+  "The status string to draw for far session plist S.
+The stream wins: it is newer than the host's poll. One exception, as on
+the host: no hook fires on an Esc interrupt, so a session the events
+still call `working' is idle when the host's pane check says so and no
+event came for a while."
+  (let* ((hook (bebop-remote--hook (plist-get s :name)))
+         (eff (car hook))
+         (polled (plist-get s :status)))
+    (cond
+     ((null eff) polled)
+     ((and (equal (plist-get eff :state) "working")
+           (equal polled "waiting")
+           (> (- (float-time) (or (cdr hook) 0)) 10))
+      polled)
+     (t (pcase (plist-get eff :state)
+          ("working" "active")
+          ((or "blocked" "error") "blocked")
+          (_ "waiting"))))))
 
 (defun bebop-remote-attach ()
   "Attach to the host's agent tmux session — the live-TTY escape hatch.

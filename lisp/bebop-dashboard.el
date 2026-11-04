@@ -775,9 +775,11 @@ list when they add keybindings.")
   "STRING with FACE as both `face' and `font-lock-face'."
   (propertize string 'face face 'font-lock-face face))
 
-(defun bebop--insert-subagent-rows (name indent)
-  "Insert a row for each live sub-agent of session NAME, after INDENT."
-  (let* ((children (bebop--subagents name))
+(defun bebop--insert-subagent-rows (name indent &optional children)
+  "Insert a row for each live sub-agent of session NAME, after INDENT.
+CHILDREN overrides the local hook state; the remote dashboard passes
+the far session's."
+  (let* ((children (or children (bebop--subagents name)))
          (shown (seq-take children bebop-subagent-rows-max))
          (more (- (length children) (length shown))))
     (cl-loop
