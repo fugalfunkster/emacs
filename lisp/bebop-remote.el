@@ -133,6 +133,9 @@ both arrive as nil."
                          ((member status '("unknown" "degraded" "gone"))
                           'bebop-dot-degraded-face)
                          (t 'bebop-dot-active-face)))
+         (dot-face (if (and live (bebop-remote--unseen-p name status))
+                       (list '(:weight bold) dot-face)
+                     dot-face))
          (start (point)))
     (insert (propertize (if live "●" "○") 'face dot-face))
     (insert " ")
@@ -164,9 +167,13 @@ both arrive as nil."
          ((null bebop-remote--sessions)
           (insert (propertize "  No sessions on the host.\n" 'face 'shadow)))
          (t
-          (dolist (s (seq-filter (lambda (s) (plist-get s :live))
-                                 bebop-remote--sessions))
-            (bebop-remote--insert-row s))
+          (bebop-remote--notice-edges)
+          ;; Unseen attention goes first; the rest keep the host's order.
+          (let ((live (seq-filter (lambda (s) (plist-get s :live))
+                                  bebop-remote--sessions)))
+            (dolist (s (append (seq-filter #'bebop-remote--attention-p live)
+                               (seq-remove #'bebop-remote--attention-p live)))
+              (bebop-remote--insert-row s)))
           (let ((deck (seq-remove (lambda (s) (plist-get s :live))
                                   bebop-remote--sessions)))
             (when deck
@@ -175,7 +182,7 @@ both arrive as nil."
                 (bebop-remote--insert-row s))))))
         (insert "\n")
         (insert (propertize
-                 "g: refresh  RET: compose  a: attach (mosh)  P: forward port\n"
+                 "g: refresh  RET: compose  a: attach (mosh)  P: forward port  .: mark seen\n"
                  'face '(:inherit shadow :height 0.75)))
         (goto-char (point-min))
         (let ((found nil))
@@ -251,6 +258,7 @@ both arrive as nil."
     (define-key map (kbd "RET")    #'bebop-remote-compose)
     (define-key map (kbd "a")      #'bebop-remote-attach)
     (define-key map (kbd "P")      #'bebop-remote-forward-port)
+    (define-key map (kbd ".")      #'bebop-remote-mark-all-seen)
     (define-key map (kbd "j")      #'bebop-remote--next)
     (define-key map (kbd "p")      #'bebop-remote--prev)
     (define-key map (kbd "<down>") #'bebop-remote--next)
@@ -360,6 +368,10 @@ from the local Dropbox before any network call."
       (bebop--set-header-overlay (format "Remote → %s" name)
                                  bebop-session-header-color 2.0))
     (pop-to-buffer buf)
+    ;; Opening a session is looking at it: the ack gesture.
+    (bebop-remote-ack name)
+    (when (get-buffer bebop-remote-buffer-name)
+      (bebop-remote--render))
     (message "Compose, then C-c C-c to send to %s on %s"
              name bebop-remote-host)))
 
@@ -389,6 +401,9 @@ stream locally.")
 (defvar bebop-remote--stream nil "The event stream process, or nil.")
 (defvar bebop-remote--stream-render-timer nil)
 (defvar bebop-remote--stream-retry-timer nil)
+
+(defvar bebop-remote--quiet-until 0
+  "Edges before this time (a stream replay) do not alert. See Attention.")
 
 (defun bebop-remote--stream-script ()
   "The stream program's text, from this machine's own tangled copy."
@@ -436,8 +451,10 @@ stream locally.")
 (defun bebop-remote--start-stream ()
   "Open the event stream unless it is already open."
   (unless (process-live-p bebop-remote--stream)
-    ;; A replay rebuilds every state, so start from nothing.
+    ;; A replay rebuilds every state, so start from nothing, and its
+    ;; edges are old news (see Attention).
     (clrhash bebop-remote--hook-states)
+    (setq bebop-remote--quiet-until (+ (float-time) 5))
     (let* ((args (list "-u" "-" bebop-remote-events-dir))
            (cmd (or bebop-remote-stream-command
                     (append (list "ssh") bebop-remote-ssh-options
@@ -494,6 +511,114 @@ event came for a while."
           ("working" "active")
           ((or "blocked" "error") "blocked")
           (_ "waiting"))))))
+
+(defcustom bebop-remote-acks-file "~/.emacs.d-local/bebop-remote-acks.eld"
+  "Where this machine keeps its seen marks for the host's sessions."
+  :type 'file
+  :group 'bebop)
+
+(defvar bebop-remote--acks nil
+  "Alist of far session name → status string as of your last look.
+Loaded from `bebop-remote-acks-file' on first use.")
+
+(defvar bebop-remote--acks-loaded nil)
+
+(defvar bebop-remote--seen-status nil
+  "Alist of far session name → the status last drawn, for edge detection.")
+
+(defvar bebop-remote--periphery nil
+  "Cached mode-line segment for far attention, or nil when there is none.")
+
+(defun bebop-remote--load-acks ()
+  "Read the seen marks once per Emacs."
+  (unless bebop-remote--acks-loaded
+    (setq bebop-remote--acks-loaded t
+          bebop-remote--acks
+          (ignore-errors
+            (with-temp-buffer
+              (insert-file-contents (expand-file-name bebop-remote-acks-file))
+              (read (current-buffer)))))))
+
+(defun bebop-remote--save-acks ()
+  "Write the seen marks."
+  (let ((file (expand-file-name bebop-remote-acks-file)))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file
+      (prin1 bebop-remote--acks (current-buffer)))))
+
+(defun bebop-remote-ack (name &optional no-save)
+  "Mark far session NAME seen as of the status last drawn.
+NO-SAVE skips the write, for callers that ack many and save once."
+  (bebop-remote--load-acks)
+  (when-let ((status (alist-get name bebop-remote--seen-status nil nil #'equal)))
+    (setf (alist-get name bebop-remote--acks nil nil #'equal) status)
+    (unless no-save (bebop-remote--save-acks))))
+
+(defun bebop-remote-mark-all-seen ()
+  "Mark every far session seen."
+  (interactive)
+  (dolist (c bebop-remote--seen-status)
+    (bebop-remote-ack (car c) t))
+  (bebop-remote--save-acks)
+  (bebop-remote--render)
+  (message "Bebop: all %s sessions marked seen" bebop-remote-host))
+
+(defun bebop-remote--unseen-p (name status)
+  "Non-nil if far session NAME's STATUS differs from its seen mark."
+  (bebop-remote--load-acks)
+  (when-let ((acked (alist-get name bebop-remote--acks nil nil #'equal)))
+    (not (equal acked status))))
+
+(defun bebop-remote--attention-p (s)
+  "Non-nil if far session plist S waits for you and you have not looked."
+  (let ((status (bebop-remote--status s)))
+    (and (plist-get s :live)
+         (member status '("waiting" "blocked"))
+         (bebop-remote--unseen-p (plist-get s :name) status))))
+
+(defun bebop-remote--watching-p (name)
+  "Non-nil if far session NAME's composition buffer is in the selected window."
+  (equal (buffer-name (window-buffer (selected-window)))
+         (format "*bebop-remote: %s*" name)))
+
+(defun bebop-remote--notice-edges ()
+  "Alert on far sessions that started to wait; refresh the mode line.
+Called before each render, so every source of a new status — the
+stream or the poll — passes through here."
+  (let ((quiet (< (float-time) bebop-remote--quiet-until)))
+    (dolist (s bebop-remote--sessions)
+      (when (plist-get s :live)
+        (let* ((name (plist-get s :name))
+               (status (bebop-remote--status s))
+               (before (alist-get name bebop-remote--seen-status nil nil #'equal)))
+          (setf (alist-get name bebop-remote--seen-status nil nil #'equal) status)
+          (when (and before (not (equal before status)))
+            (if (bebop-remote--watching-p name)
+                (bebop-remote-ack name)
+              (when (and (not quiet) (member status '("waiting" "blocked")))
+                (let ((msg (plist-get (car (bebop-remote--hook name)) :msg)))
+                  (ding t)
+                  (message "Bebop: %s on %s is %s%s" name bebop-remote-host
+                           (if (equal status "blocked") "blocked" "waiting")
+                           (if msg (format " — %s" msg) ""))))))))))
+  (let ((n (seq-count #'bebop-remote--attention-p bebop-remote--sessions)))
+    (setq bebop-remote--periphery
+          (when (> n 0)
+            (concat " " (propertize (format "%s ● %d"
+                                            ;; "Matthews-Pro" → "Pro"
+                                            (car (last (split-string
+                                                        bebop-remote-presence-host
+                                                        "-")))
+                                            n)
+                                    'face 'bebop-dot-waiting-face)
+                    " "))))
+  (force-mode-line-update t))
+
+(defun bebop-remote--modeline ()
+  "The far attention segment for `global-mode-string'."
+  (or bebop-remote--periphery ""))
+
+(add-to-list 'global-mode-string '(:eval (bebop-remote--modeline)) t)
 
 (defun bebop-remote-attach ()
   "Attach to the host's agent tmux session — the live-TTY escape hatch.
