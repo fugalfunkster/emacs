@@ -796,10 +796,24 @@ profile."
   :group 'bebop)
 
 (defun bebop-remote--workarea ()
-  "The workbench screen's work area (X Y W H): the second screen if any."
+  "The workbench screen's work area (X Y W H): the second screen if any.
+Without a second screen, the main one. The height is the smallest that
+any frame on that screen reports: the NS port gave a work area without
+the Dock once (Chrome ran 91 px past the bottom on 2026-11-04), likely
+read from a frame that hides the Dock, so one reading is not trusted."
   (let* ((mons (display-monitor-attributes-list))
-         (mon (or (car (last (cdr mons))) (car mons))))
-    (alist-get 'workarea mon)))
+         (mon (or (car (last (cdr mons))) (car mons)))
+         (geometry (alist-get 'geometry mon))
+         (area (alist-get 'workarea mon))
+         (heights
+          (delq nil
+                (mapcar (lambda (f)
+                          (let ((m (frame-monitor-attributes f)))
+                            (when (equal (alist-get 'geometry m) geometry)
+                              (nth 3 (alist-get 'workarea m)))))
+                        (visible-frame-list)))))
+    (list (nth 0 area) (nth 1 area) (nth 2 area)
+          (apply #'min (nth 3 area) heights))))
 
 (defun bebop-remote--workbench-boxes ()
   "Pixel boxes (X Y W H) for the chart, terminal and browser."
@@ -904,6 +918,10 @@ Also the `workbench' mailbox verb; returns a short report."
   (let* ((name (or name
                    (get-text-property (point) 'bebop-remote-name)
                    (user-error "No session at point")))
+         (_ (unless (and (stringp name) (not (string-empty-p name)))
+              ;; The mailbox verb takes its name from a caller's
+              ;; environment; an empty one must not lay anything out.
+              (error "bebop-remote-workbench-layout: NAME must be a non-empty string")))
          (s (seq-find (lambda (s) (equal (plist-get s :name) name))
                       bebop-remote--sessions))
          (chart (bebop-remote--local-chart

@@ -1374,14 +1374,19 @@ Every bebop alert (a session starts to wait, a pipeline fails, a new MR
 comment, a far session on the resident host) used to call =ding=. But
 the config turns the Emacs bell off (=ring-bell-function= is =ignore=
 in =emacs.org=), so no alert ever made a sound. =bebop-alert= plays a
-macOS system sound instead, with =afplay=, and leaves the bell off.
+macOS system sound instead, with =afplay=, and leaves the bell off. It
+is silent until you set =bebop-alert-sound= (2026-11-04: you asked for
+quiet while the workflow moves to the Pro). The visual alerts, the
+echo-area message and the mode-line count, do not depend on it.
 
 The resident host stays silent. Its screen is only for repair, and its
 sessions' alerts reach you on the client (=bebop-remote.el=, Attention).
 
 #+begin_src emacs-lisp
-(defcustom bebop-alert-sound "/System/Library/Sounds/Glass.aiff"
-  "Sound file bebop alerts play, or nil for silent alerts."
+(defcustom bebop-alert-sound nil
+  "Sound file bebop alerts play, or nil for silent alerts.
+Silent by default. To opt in, set it to a system sound, for example
+\"/System/Library/Sounds/Glass.aiff\"."
   :type '(choice (const :tag "Silent" nil) file)
   :group 'bebop)
 
@@ -9262,10 +9267,24 @@ profile."
   :group 'bebop)
 
 (defun bebop-remote--workarea ()
-  "The workbench screen's work area (X Y W H): the second screen if any."
+  "The workbench screen's work area (X Y W H): the second screen if any.
+Without a second screen, the main one. The height is the smallest that
+any frame on that screen reports: the NS port gave a work area without
+the Dock once (Chrome ran 91 px past the bottom on 2026-11-04), likely
+read from a frame that hides the Dock, so one reading is not trusted."
   (let* ((mons (display-monitor-attributes-list))
-         (mon (or (car (last (cdr mons))) (car mons))))
-    (alist-get 'workarea mon)))
+         (mon (or (car (last (cdr mons))) (car mons)))
+         (geometry (alist-get 'geometry mon))
+         (area (alist-get 'workarea mon))
+         (heights
+          (delq nil
+                (mapcar (lambda (f)
+                          (let ((m (frame-monitor-attributes f)))
+                            (when (equal (alist-get 'geometry m) geometry)
+                              (nth 3 (alist-get 'workarea m)))))
+                        (visible-frame-list)))))
+    (list (nth 0 area) (nth 1 area) (nth 2 area)
+          (apply #'min (nth 3 area) heights))))
 
 (defun bebop-remote--workbench-boxes ()
   "Pixel boxes (X Y W H) for the chart, terminal and browser."
@@ -9370,6 +9389,10 @@ Also the `workbench' mailbox verb; returns a short report."
   (let* ((name (or name
                    (get-text-property (point) 'bebop-remote-name)
                    (user-error "No session at point")))
+         (_ (unless (and (stringp name) (not (string-empty-p name)))
+              ;; The mailbox verb takes its name from a caller's
+              ;; environment; an empty one must not lay anything out.
+              (error "bebop-remote-workbench-layout: NAME must be a non-empty string")))
          (s (seq-find (lambda (s) (equal (plist-get s :name) name))
                       bebop-remote--sessions))
          (chart (bebop-remote--local-chart

@@ -80,8 +80,10 @@ wrong-but-obvious host component beats a wrong-and-invisible one."
         short
       bebop-host-fallback)))
 
-(defcustom bebop-alert-sound "/System/Library/Sounds/Glass.aiff"
-  "Sound file bebop alerts play, or nil for silent alerts."
+(defcustom bebop-alert-sound nil
+  "Sound file bebop alerts play, or nil for silent alerts.
+Silent by default. To opt in, set it to a system sound, for example
+\"/System/Library/Sounds/Glass.aiff\"."
   :type '(choice (const :tag "Silent" nil) file)
   :group 'bebop)
 
