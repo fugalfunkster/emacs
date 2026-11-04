@@ -93,6 +93,63 @@ The citizen form of `bebop-resume', for callers with no minibuffer."
                           :chart (or chart :null)
                           :venue (or venue :null)))))
 
+(defun bebop-list-repos ()
+  "Return the repositories under `bebop-repos-dir' as a JSON array."
+  (json-serialize (vconcat (bebop--list-repos))))
+
+(defun bebop-list-branches (repo)
+  "Return REPO's local and remote branches as a JSON array."
+  (unless (member repo (bebop--list-repos))
+    (error "bebop-list-branches: no repository named %s" repo))
+  (json-serialize
+   (vconcat (bebop--list-branches
+             (expand-file-name repo (expand-file-name bebop-repos-dir))))))
+
+(defun bebop-list-venues ()
+  "Return the venue directory names as a JSON array."
+  (json-serialize (vconcat (bebop--list-venues))))
+
+(defun bebop-start-session (name venue chart)
+  "Create session NAME from the VENUE and CHART specs, asking nothing.
+See the section text for the spec shapes. Returns JSON. The citizen
+form of `bebop-new-session', for callers with no minibuffer."
+  (unless (and (stringp name) (not (string-empty-p (string-trim name))))
+    (error "bebop-start-session: NAME must be a non-empty string"))
+  (bebop--assert-name-available name)
+  (let* ((venue-path
+          (pcase venue
+            ('nil nil)
+            (`("new" ,repo ,branch) (bebop--add-venue repo branch))
+            (`("old" ,dir)
+             (let ((d (expand-file-name dir (expand-file-name bebop-venues-dir))))
+               (unless (member dir (bebop--list-venues))
+                 (error "bebop-start-session: no venue named %s" dir))
+               d))
+            (`("repo" ,repo)
+             (unless (member repo (bebop--list-repos))
+               (error "bebop-start-session: no repository named %s" repo))
+             (expand-file-name repo (expand-file-name bebop-repos-dir)))
+            (_ (error "bebop-start-session: bad venue spec %S" venue))))
+         (chart-path
+          (pcase chart
+            ('nil nil)
+            (`("new") (bebop--create-new-chart name))
+            (`("heading" ,text)
+             (let ((path (bebop--create-new-chart name)))
+               (bebop--cue-to-chart text path)
+               path))
+            (`("file" ,rel)
+             (let ((f (expand-file-name rel (expand-file-name bebop-org-dir))))
+               (unless (file-exists-p f)
+                 (error "bebop-start-session: %s is not here (Dropbox lag?)" rel))
+               f))
+            (_ (error "bebop-start-session: bad chart spec %S" chart)))))
+    (bebop--create-session name venue-path chart-path
+                           (when bebop-use-docker 'docker))
+    (json-serialize (list :started name
+                          :venue (or venue-path :null)
+                          :chart (or chart-path :null)))))
+
 (defun bebop-propose-exile (name)
   "Queue session NAME for exile approval. Returns the queue as JSON."
   (unless (member name bebop--exile-proposals)

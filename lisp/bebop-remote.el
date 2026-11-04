@@ -190,7 +190,7 @@ The remote counterpart of `bebop--active-session'.")
                 (bebop-remote--insert-row s))))))
         (insert "\n")
         (insert (propertize
-                 "g: refresh  RET: select  r: resume  w: pin W  W: workbench  a: attach (mosh)  P: forward port  .: mark seen\n"
+                 "g: refresh  RET: select  n: new  r: resume  w: pin W  W: workbench  a: attach (mosh)  P: forward port  .: mark seen\n"
                  'face '(:inherit shadow :height 0.75)))
         (goto-char (point-min))
         (let ((found nil))
@@ -270,6 +270,7 @@ The remote counterpart of `bebop--active-session'.")
     (define-key map (kbd "w")      #'bebop-remote-workbench)
     (define-key map (kbd "W")      #'bebop-remote-workbench-layout)
     (define-key map (kbd "r")      #'bebop-remote-resume)
+    (define-key map (kbd "n")      #'bebop-remote-new-session)
     (define-key map (kbd "j")      #'bebop-remote--next)
     (define-key map (kbd "p")      #'bebop-remote--prev)
     (define-key map (kbd "<down>") #'bebop-remote--next)
@@ -961,6 +962,108 @@ Also the `workbench' mailbox verb; returns a short report."
                (if errs (concat " — " (string-join errs "; ")) ""))
       (format "workbench: %s %s%s" name (or url "(no dev url)")
               (if errs (concat " — " (string-join errs "; ")) "")))))
+
+(defcustom bebop-remote-client nil
+  "Non-nil makes this machine a client of `bebop-remote-host'.
+The Conductor shows the host's sessions, and new sessions start there."
+  :type 'boolean
+  :group 'bebop)
+
+(defun bebop-remote--list (expr)
+  "Evaluate EXPR on the host and return its JSON array as a list."
+  (append (bebop-remote--eval-json expr) nil))
+
+(defun bebop-remote--org-relative (file)
+  "FILE's path relative to `bebop-org-dir', or a user error if outside it.
+The host only sees what Dropbox syncs: the org tree."
+  (let ((root (file-name-as-directory
+               (file-truename (expand-file-name bebop-org-dir))))
+        (true (file-truename file)))
+    (unless (string-prefix-p root true)
+      (user-error "%s is outside %s, so %s cannot see it"
+                  file bebop-org-dir bebop-remote-host))
+    (file-relative-name true root)))
+
+(defun bebop-remote-new-session ()
+  "Create a session on the host: venue, name, chart, as `bebop-new-session'."
+  (interactive)
+  (let* ((venue-choice (completing-read
+                        (format "Venue on %s: " bebop-remote-host)
+                        '("new" "old" "repo" "none") nil t))
+         (venue
+          (pcase venue-choice
+            ("new"
+             (let* ((repo (completing-read
+                           "Repository: "
+                           (bebop-remote--list "(bebop-list-repos)") nil t))
+                    (branch (completing-read
+                             "Branch (type a new name to create): "
+                             (bebop-remote--list
+                              (format "(bebop-list-branches %S)" repo)))))
+               (when (string-empty-p (string-trim branch))
+                 (user-error "Branch name cannot be empty"))
+               (list "new" repo branch)))
+            ("old" (list "old" (completing-read
+                                "Existing venue: "
+                                (bebop-remote--list "(bebop-list-venues)") nil t)))
+            ("repo" (list "repo" (completing-read
+                                  "Repo: "
+                                  (bebop-remote--list "(bebop-list-repos)") nil t)))
+            (_ nil)))
+         (default-name (pcase venue
+                         (`("new" ,repo ,branch)
+                          (format "%s--%s" repo (bebop--sanitize-name branch)))
+                         (`(,_ ,dir) dir)))
+         (name (read-string "Session name: " default-name))
+         (in-org (derived-mode-p 'org-mode))
+         (at-heading (and in-org
+                          (ignore-errors
+                            (save-excursion (org-back-to-heading t) t))))
+         (current-file (buffer-file-name))
+         (chart-choice (completing-read
+                        "Chart: "
+                        (append (when at-heading '("from heading"))
+                                (when (and in-org current-file) '("use this file"))
+                                '("new" "old" "org" "none"))
+                        nil t))
+         (chart
+          (pcase chart-choice
+            ("from heading" (list "heading" (bebop--subtree-text)))
+            ("use this file" (list "file" (bebop-remote--org-relative current-file)))
+            ("new" (list "new"))
+            ("old" (list "file" (bebop-remote--org-relative
+                                 (bebop--prompt-existing-chart))))
+            ("org" (list "file" (bebop-remote--org-relative
+                                 (bebop--prompt-any-org))))
+            (_ nil))))
+    (bebop-remote--eval-json
+     (format "(bebop-start-session %S '%S '%S)" name venue chart))
+    (message "Bebop: started %s on %s" name bebop-remote-host)
+    (bebop-remote-refresh)
+    (ignore-errors (bebop-remote-select name))))
+
+(defun bebop-remote--conductor-dashboard (frame)
+  "On a client, show the host's sessions in FRAME's dashboard window."
+  (when bebop-remote-client
+    (let ((win (frame-parameter frame 'bebop-dashboard-window))
+          (buf (get-buffer-create bebop-remote-buffer-name)))
+      (when (window-live-p win)
+        (with-current-buffer buf
+          (unless (derived-mode-p 'bebop-remote-mode)
+            (bebop-remote-mode)))
+        (set-window-buffer win buf)
+        (bebop-remote-refresh)
+        (bebop-remote--start-stream)))))
+
+(advice-add 'bebop-frame--setup-conductor :after #'bebop-remote--conductor-dashboard)
+
+(defun bebop-remote--new-session-advice (orig &rest args)
+  "On a client, `bebop-new-session' starts the session on the host."
+  (if bebop-remote-client
+      (call-interactively #'bebop-remote-new-session)
+    (apply orig args)))
+
+(advice-add 'bebop-new-session :around #'bebop-remote--new-session-advice)
 
 (defun bebop-remote-attach ()
   "Attach to the host's agent tmux session — the live-TTY escape hatch.

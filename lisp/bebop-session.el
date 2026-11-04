@@ -345,8 +345,19 @@ Signals if NAME has no live tmux window."
     (let* ((repo (completing-read "Repository: " repos nil t))
            (repo-path (expand-file-name repo (expand-file-name bebop-repos-dir)))
            (branches (bebop--list-branches repo-path))
-           (branch (completing-read "Branch (type a new name to create): " branches))
-           (_ (when (string-empty-p (string-trim branch))
+           (branch (completing-read "Branch (type a new name to create): " branches)))
+      (bebop--add-venue repo branch))))
+
+(defun bebop--add-venue (repo branch)
+  "Create the venue for BRANCH of REPO and return its path. Asks nothing.
+An existing branch is checked out; a new name is branched from HEAD.
+`bebop--prompt-new-venue' asks for REPO and BRANCH; the remote
+`bebop-start-session' verb receives them."
+  (unless (member repo (bebop--list-repos))
+    (user-error "No repository named %s in %s" repo bebop-repos-dir))
+  (let* ((repo-path (expand-file-name repo (expand-file-name bebop-repos-dir)))
+         (branches (bebop--list-branches repo-path)))
+    (let* ((_ (when (string-empty-p (string-trim branch))
                 (user-error "Branch name cannot be empty")))
            (sanitized (bebop--sanitize-name branch))
            (worktree-name (format "%s--%s" repo sanitized))
