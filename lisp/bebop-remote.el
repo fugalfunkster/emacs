@@ -1,6 +1,7 @@
 ;;; bebop-remote.el --- Live Remote: drive a resident host's bebop over ssh -*- lexical-binding: t; -*-
 
 (require 'seq)
+(require 'url-parse)
 (require 'bebop-core)
 (require 'bebop-dashboard) ; the dot faces — same dots, same colors
 
@@ -281,7 +282,15 @@ both arrive as nil."
                         'face `(:height 1.6 :weight bold
                                 :foreground ,bebop-header-color))
             (unless (process-live-p bebop-remote--stream)
-              (propertize "  stream down" 'face 'shadow))))))
+              (propertize "  stream down" 'face 'shadow))
+            (when bebop-remote--forwards
+              (propertize
+               (concat "  ⇄ "
+                       (mapconcat (lambda (f)
+                                    (format "%s%d" (if (equal (car f) "-R") "↑" "")
+                                            (cdr f)))
+                                  (reverse bebop-remote--forwards) " "))
+               'face 'shadow))))))
   (add-hook 'kill-buffer-hook #'bebop-remote--stop-timer nil t)
   (add-hook 'kill-buffer-hook #'bebop-remote--stop-stream nil t)
   (add-hook 'post-command-hook #'bebop-remote--follow nil t))
@@ -405,6 +414,12 @@ stream locally.")
 (defvar bebop-remote--stream-render-timer nil)
 (defvar bebop-remote--stream-retry-timer nil)
 
+(defvar bebop-remote--forwards nil
+  "Forwards to keep on the connection: a list of (FLAG . PORT).
+FLAG is \"-L\" (a host port reachable here) or \"-R\" (a port here
+reachable on the host). A dropped connection loses them, so the event
+stream sets them up again each time it connects.")
+
 (defvar bebop-remote--quiet-until 0
   "Edges before this time (a stream replay) do not alert. See Attention.")
 
@@ -475,7 +490,10 @@ stream locally.")
                                :sentinel #'bebop-remote--stream-sentinel)))
       (process-send-string proc (bebop-remote--stream-script))
       (process-send-eof proc)
-      (setq bebop-remote--stream proc))))
+      (setq bebop-remote--stream proc)
+      ;; Forwards live on the connection; a new one needs them again.
+      (when (and bebop-remote--forwards (not bebop-remote-stream-command))
+        (run-at-time 2 nil #'bebop-remote--reforward)))))
 
 (defun bebop-remote--stop-stream ()
   "Close the event stream and its timers."
@@ -744,8 +762,23 @@ The repo is the session name's part before \"--\"."
   :type '(alist :key-type string :value-type integer)
   :group 'bebop)
 
-(defvar bebop-remote--chrome-window nil
-  "Id of the Chrome window the workbench opened last, or nil.")
+(defcustom bebop-remote-chrome-app "Google Chrome"
+  "The Chrome application the workbench launches."
+  :type 'string
+  :group 'bebop)
+
+(defcustom bebop-remote-chrome-profile "~/.emacs.d-local/bebop-chrome"
+  "Profile directory of the workbench Chrome.
+Its own profile, so logins persist and your everyday Chrome is
+untouched. Chrome also refuses remote debugging on its default
+profile."
+  :type 'directory
+  :group 'bebop)
+
+(defcustom bebop-remote-chrome-debug-port 9333
+  "The workbench Chrome's debug port, here and, reverse-forwarded, on the host."
+  :type 'integer
+  :group 'bebop)
 
 (defun bebop-remote--workarea ()
   "The workbench screen's work area (X Y W H): the second screen if any."
@@ -823,30 +856,30 @@ The repo is the session name's part before \"--\"."
                    (cdr (assoc (car (split-string name "--")) bebop-remote-dev-ports)))))
     (when port (format "http://localhost:%d/" port))))
 
+(defun bebop-remote--chrome-up-p ()
+  "Non-nil when the workbench Chrome answers on its debug port."
+  (eq 0 (call-process "curl" nil nil nil "-sf" "-m" "1"
+                      (format "http://localhost:%d/json/version"
+                              bebop-remote-chrome-debug-port))))
+
 (defun bebop-remote--workbench-browser (box url)
-  "Open URL in the workbench Chrome window, placed at BOX."
+  "Show URL in the workbench Chrome, launching it placed at BOX if needed.
+A running one opens URL in a new tab; nothing can move its window."
   (pcase-let ((`(,x ,y ,w ,h) box))
-    (let* ((reuse (and bebop-remote--chrome-window
-                       (format "(exists window id %d)" bebop-remote--chrome-window)))
-           (script
-            (format "tell application \"Google Chrome\"
-  set w to missing value
-  %s
-  if w is missing value then set w to make new window
-  set bounds of w to {%d, %d, %d, %d}
-  %s
-  return id of w
-end tell"
-                    (if reuse
-                        (format "if %s then set w to window id %d"
-                                reuse bebop-remote--chrome-window)
-                      "")
-                    x y (+ x w) (+ y h)
-                    (if url (format "set URL of active tab of w to %S" url) ""))))
-      (with-temp-buffer
-        (when (eq 0 (call-process "osascript" nil t nil "-e" script))
-          (setq bebop-remote--chrome-window
-                (string-to-number (string-trim (buffer-string)))))))))
+    (if (bebop-remote--chrome-up-p)
+        (when url
+          (call-process "curl" nil nil nil "-sf" "-m" "2" "-X" "PUT"
+                        (format "http://localhost:%d/json/new?%s"
+                                bebop-remote-chrome-debug-port url)))
+      (apply #'call-process "open" nil 0 nil
+             "-na" bebop-remote-chrome-app "--args"
+             (format "--user-data-dir=%s"
+                     (expand-file-name bebop-remote-chrome-profile))
+             (format "--remote-debugging-port=%d" bebop-remote-chrome-debug-port)
+             (format "--window-position=%d,%d" x y)
+             (format "--window-size=%d,%d" w h)
+             "--no-first-run" "--new-window"
+             (if url (list url) nil)))))
 
 (defun bebop-remote-workbench-layout (&optional name)
   "Lay out far session NAME's workbench on the second screen.
@@ -866,8 +899,20 @@ Also the `workbench' mailbox verb; returns a short report."
     (bebop-remote--workbench-frame (plist-get boxes :chart) chart name)
     (bebop-remote--workbench-term (plist-get boxes :term) name)
     (bebop-remote--workbench-browser (plist-get boxes :browser) url)
-    (message "Bebop: workbench for %s%s" name (if url (format " at %s" url) ""))
-    (format "workbench: %s %s" name (or url "(no dev url)"))))
+    ;; The tunnels: the dev server here, the Chrome debug port there.
+    (let ((errs (delq nil
+                      (list (when url
+                              (when-let ((e (bebop-remote--forward
+                                             "-L" (url-port (url-generic-parse-url url)))))
+                                (format "dev port: %s" e)))
+                            (when-let ((e (bebop-remote--forward
+                                           "-R" bebop-remote-chrome-debug-port)))
+                              (format "debug port: %s" e))))))
+      (message "Bebop: workbench for %s%s%s" name
+               (if url (format " at %s" url) "")
+               (if errs (concat " — " (string-join errs "; ")) ""))
+      (format "workbench: %s %s%s" name (or url "(no dev url)")
+              (if errs (concat " — " (string-join errs "; ")) "")))))
 
 (defun bebop-remote-attach ()
   "Attach to the host's agent tmux session — the live-TTY escape hatch.
@@ -892,19 +937,34 @@ falls back to ssh -t."
       (term-char-mode))
     (switch-to-buffer buf)))
 
+(defun bebop-remote--forward (flag port)
+  "Add forward FLAG (\"-L\" or \"-R\") for PORT on the control master.
+Remember it on success. Return nil on success, else ssh's message."
+  (with-temp-buffer
+    (if (eq 0 (apply #'call-process "ssh" nil t nil
+                     (append bebop-remote-ssh-options
+                             (list "-O" "forward" flag
+                                   (format "%d:localhost:%d" port port)
+                                   (bebop-remote--target)))))
+        (progn (cl-pushnew (cons flag port) bebop-remote--forwards :test #'equal)
+               nil)
+      (let ((out (string-trim (buffer-string))))
+        (if (string-empty-p out) "no control master to ride" out)))))
+
+(defun bebop-remote--reforward ()
+  "Set up every remembered forward again, after a reconnect."
+  (dolist (f (reverse bebop-remote--forwards))
+    (when-let ((err (bebop-remote--forward (car f) (cdr f))))
+      (message "Bebop: forward %s %d failed: %s" (car f) (cdr f) err))))
+
 (defun bebop-remote-forward-port (port)
   "Forward local PORT to the same port on the host's localhost, live.
 Rides the existing control master (`ssh -O forward'), so no new
 connection and no reconnect."
   (interactive "nForward localhost port: ")
-  (let ((spec (format "%d:localhost:%d" port port)))
-    (if (eq 0 (apply #'call-process "ssh" nil nil nil
-                     (append bebop-remote-ssh-options
-                             (list "-O" "forward" "-L" spec
-                                   (bebop-remote--target)))))
-        (message "bebop-remote: localhost:%d → %s:%d"
-                 port bebop-remote-host port)
-      (user-error "bebop-remote: no control master to ride — refresh the dashboard first"))))
+  (if-let ((err (bebop-remote--forward "-L" port)))
+      (user-error "bebop-remote: localhost:%d not forwarded: %s" port err)
+    (message "bebop-remote: localhost:%d → %s:%d" port bebop-remote-host port)))
 
 (provide 'bebop-remote)
 
