@@ -24,6 +24,62 @@
             (rename-buffer (format "*eshell: %s*" name) t))
           buf))))
 
+(defcustom bebop-wm-program "aerospace"
+  "The AeroSpace command line tool. Placement is off when it is not found."
+  :type 'string
+  :group 'bebop)
+
+(defcustom bebop-wm-dashboard-workspace "D"
+  "AeroSpace workspace for the Conductor frame."
+  :type 'string
+  :group 'bebop)
+
+(defcustom bebop-wm-workbench-workspace "W"
+  "AeroSpace workspace for Solo frames and, later, the workbench."
+  :type 'string
+  :group 'bebop)
+
+(defun bebop-wm-available-p ()
+  "Non-nil when AeroSpace can place windows here."
+  (and (eq system-type 'darwin)
+       (display-graphic-p)
+       (executable-find bebop-wm-program)))
+
+(defun bebop-wm--call (&rest args)
+  "Run the AeroSpace CLI with ARGS. Return its output, or nil on failure."
+  (with-temp-buffer
+    (when (eql 0 (apply #'call-process bebop-wm-program nil t nil args))
+      (buffer-string))))
+
+(defun bebop-wm--frame-window-id (frame)
+  "Return AeroSpace's window id for FRAME, or nil if it has none yet."
+  (when-let* ((out (bebop-wm--call "list-windows" "--all" "--json" "--format"
+                                   "%{window-id} %{app-bundle-id} %{window-title}"))
+              (wins (ignore-errors
+                      (json-parse-string out :object-type 'alist
+                                         :array-type 'list)))
+              (title (frame-parameter frame 'name)))
+    (alist-get 'window-id
+               (seq-find (lambda (w)
+                           (and (equal (alist-get 'app-bundle-id w) "org.gnu.Emacs")
+                                (equal (alist-get 'window-title w) title)))
+                         wins))))
+
+(defun bebop-wm-place-frame (frame workspace &optional tries)
+  "Move FRAME's window to AeroSpace WORKSPACE and show that workspace.
+Retries for a second or so while AeroSpace has not seen the window yet."
+  (when (bebop-wm-available-p)
+    (let ((tries (or tries 6)))
+      (if-let ((id (and (frame-live-p frame)
+                        (bebop-wm--frame-window-id frame))))
+          (progn
+            (bebop-wm--call "move-node-to-workspace" "--focus-follows-window"
+                            "--window-id" (number-to-string id) workspace)
+            (bebop-wm--call "workspace" workspace))
+        (when (and (> tries 1) (frame-live-p frame))
+          (run-at-time 0.25 nil #'bebop-wm-place-frame
+                       frame workspace (1- tries)))))))
+
 (defun bebop ()
   "Open (or focus) the Bebop Conductor frame.
 
@@ -45,7 +101,8 @@ and starts dashboard polling. No eshell startup ritual required."
     ;; Ensure tmux session, discover existing agents, start polling
     (bebop-start)
     ;; Set up or refresh the 3-window layout
-    (bebop-frame--setup-conductor frame)))
+    (bebop-frame--setup-conductor frame)
+    (bebop-wm-place-frame frame bebop-wm-dashboard-workspace)))
 
 (defun bebop-frame--setup-conductor (frame)
   "Create or refresh the locked 2-column Conductor layout in FRAME.
@@ -173,7 +230,8 @@ Layout:
                           (bebop-solo-session . ,name)
                           (fullscreen . maximized)))))
         (select-frame-set-input-focus new-frame)
-        (bebop-frame--setup-solo new-frame name)))))
+        (bebop-frame--setup-solo new-frame name)
+        (bebop-wm-place-frame new-frame bebop-wm-workbench-workspace)))))
 
 (defun bebop-frame--setup-solo (frame name)
   "Create the Solo 2-column layout for session NAME in FRAME.
