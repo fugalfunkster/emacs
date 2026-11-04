@@ -2863,7 +2863,85 @@ Render a single pair line with status dot and text properties for point-based na
     (insert (propertize name 'face line-face))
     (insert "\n")
     ;; bebop-session-name must cover the whole line for navigation to work
-    (add-text-properties start (point) (list 'bebop-session-name name))))
+    (add-text-properties start (point) (list 'bebop-session-name name)))
+  (bebop--insert-subagent-rows name "  "))
+#+end_src
+
+*** Sub-agent rows
+
+A session's live sub-agents hang under its row, one line each, from the
+hook state's =:children=. They must not read as sets. A set is a bold,
+foldable heading that you made, and its sessions carry the full gutter.
+A sub-agent is a light tree line that the agent made: a shadow
+connector, a small state mark, its task in italics and its agent type
+dimmed. A blocked sub-agent shows what it wants. The rows come and go
+with the agent, so they never fold and you cannot select them. They
+carry =bebop-subagent-of= rather than =bebop-session-name=, so =n= and =p=
+step over them.
+
+#+begin_src emacs-lisp
+(defcustom bebop-subagent-rows-max 5
+  "Most sub-agent rows shown under one session; the rest are counted."
+  :type 'integer
+  :group 'bebop)
+
+(defun bebop--subagents (name)
+  "Return session NAME's live sub-agents: an alist of AGENT-ID → record."
+  (plist-get (plist-get (alist-get name bebop--last-status-details
+                                   nil nil #'equal)
+                        :hook)
+             :children))
+
+(defun bebop--subagent-signature (detail)
+  "What a sub-agent row of status DETAIL shows, for change detection."
+  (mapcar (lambda (c)
+            (let ((r (cdr c)))
+              (list (car c) (plist-get r :state) (plist-get r :title)
+                    (plist-get r :msg))))
+          (plist-get (plist-get detail :hook) :children)))
+
+(defun bebop--subagent-prop (string face)
+  "STRING with FACE as both `face' and `font-lock-face'."
+  (propertize string 'face face 'font-lock-face face))
+
+(defun bebop--insert-subagent-rows (name indent)
+  "Insert a row for each live sub-agent of session NAME, after INDENT."
+  (let* ((children (bebop--subagents name))
+         (shown (seq-take children bebop-subagent-rows-max))
+         (more (- (length children) (length shown))))
+    (cl-loop
+     for (id . rec) in shown
+     for i from 1
+     do (let* ((last (and (= i (length shown)) (= more 0)))
+               (blocked (equal (plist-get rec :state) "blocked"))
+               (title (truncate-string-to-width
+                       (or (plist-get rec :title) id) 40 nil nil "…"))
+               (type (plist-get rec :type))
+               (start (point)))
+          (insert indent)
+          (insert (bebop--subagent-prop (if last "└╴" "├╴") 'shadow))
+          (insert (if blocked
+                      (bebop--subagent-prop "●" 'bebop-dot-waiting-face)
+                    (bebop--subagent-prop "◦" 'bebop-dot-active-face)))
+          (insert " ")
+          (insert (bebop--subagent-prop title '(:inherit shadow :slant italic)))
+          (when (and type (not (equal type title)))
+            (insert (bebop--subagent-prop (concat "  " type)
+                                          '(:inherit shadow :height 0.85))))
+          (when (and blocked (plist-get rec :msg))
+            (insert "  ")
+            (insert (bebop--subagent-prop
+                     (truncate-string-to-width (plist-get rec :msg) 60 nil nil "…")
+                     'bebop-dot-waiting-face)))
+          (insert "\n")
+          (add-text-properties start (point)
+                               (list 'bebop-subagent-of name))))
+    (when (> more 0)
+      (let ((start (point)))
+        (insert indent
+                (bebop--subagent-prop (format "└╴+%d more" more) 'shadow)
+                "\n")
+        (add-text-properties start (point) (list 'bebop-subagent-of name))))))
 #+end_src
 
 Point accessor used by navigation and action commands to identify the current pair.
@@ -3041,6 +3119,12 @@ Poll all known pairs, update their statuses, and re-render if anything changed; 
                    (new-status (plist-get detail :status))
                    (reason (plist-get detail :reason))
                    (old-status (plist-get info :status)))
+              ;; Sub-agents come and go inside one status: redraw for them too.
+              (unless (equal (bebop--subagent-signature detail)
+                             (bebop--subagent-signature
+                              (alist-get name bebop--last-status-details
+                                         nil nil #'equal)))
+                (setq changed t))
               (setf (alist-get name bebop--last-status-details nil nil #'equal)
                     detail)
               (if (eq new-status 'gone)
@@ -7060,7 +7144,12 @@ lone outlier past the cap simply overflows its own line."
        start (point)
        (if live
            (list 'bebop-session-name name)
-         (list 'bebop-on-deck-name name))))))
+         (list 'bebop-on-deck-name name))))
+    ;; Sub-agents sit outside the row's own section but inside its
+    ;; set's, so they fold with the set and pierce with the row.
+    (when live
+      (bebop--insert-subagent-rows
+       name (concat (bebop-set--stop bebop-set--name-col) indent "  ")))))
 
 (defun bebop-set--heading-counts (rows width)
   "Return iconographic, column-aligned rollup counts for a set heading.

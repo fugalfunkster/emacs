@@ -1231,7 +1231,12 @@ lone outlier past the cap simply overflows its own line."
        start (point)
        (if live
            (list 'bebop-session-name name)
-         (list 'bebop-on-deck-name name))))))
+         (list 'bebop-on-deck-name name))))
+    ;; Sub-agents sit outside the row's own section but inside its
+    ;; set's, so they fold with the set and pierce with the row.
+    (when live
+      (bebop--insert-subagent-rows
+       name (concat (bebop-set--stop bebop-set--name-col) indent "  ")))))
 
 (defun bebop-set--heading-counts (rows width)
   "Return iconographic, column-aligned rollup counts for a set heading.
