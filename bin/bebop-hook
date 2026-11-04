@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""bebop-hook: append one Claude Code hook event to the session's event file.
+
+Wired in ~/.claude/settings.json for SessionStart, UserPromptSubmit,
+Pre/PostToolUse(Failure), PermissionRequest, Notification, Elicitation,
+Stop, StopFailure, SubagentStart, SubagentStop and SessionEnd. The
+payload arrives on stdin. Tangled from bebop.org; do not edit.
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+EVENTS_DIR = os.path.expanduser(
+    os.environ.get("BEBOP_EVENTS_DIR", "~/.emacs.d-local/bebop-events"))
+
+
+def session_name():
+    """The bebop session this agent belongs to, made safe as a file name."""
+    name = os.environ.get("BEBOP_SESSION")
+    pane = os.environ.get("TMUX_PANE")
+    if not name and pane:
+        try:
+            name = subprocess.run(
+                ["tmux", "display-message", "-p", "-t", pane, "#W"],
+                capture_output=True, text=True, timeout=2).stdout.strip()
+        except Exception:
+            name = None
+    if not name:
+        return None
+    return name.lstrip("/").replace("/", "_")
+
+
+def clip(s, n=160):
+    """S on one line, at most N characters; None unless a string."""
+    if not isinstance(s, str):
+        return None
+    return " ".join(s.split())[:n] or None
+
+
+def record(p):
+    """The compact event line for hook payload P."""
+    event = p.get("hook_event_name")
+    tool = p.get("tool_name")
+    ti = p.get("tool_input") if isinstance(p.get("tool_input"), dict) else {}
+    r = {"t": int(time.time() * 1000), "e": event}
+
+    def put(key, value):
+        if value not in (None, "", []):
+            r[key] = value
+
+    put("aid", p.get("agent_id"))
+    put("atype", p.get("agent_type"))
+    put("tool", tool)
+    put("nt", p.get("notification_type"))
+    put("src", p.get("source"))
+    put("desc", clip(ti.get("description")))
+    if tool == "Bash":
+        put("cmd", clip(ti.get("command"), 120))
+    questions = ti.get("questions")
+    if isinstance(questions, list) and questions and isinstance(questions[0], dict):
+        put("q", clip(questions[0].get("question")))
+    response = p.get("tool_response")
+    if event == "PostToolUse" and tool == "Agent" and isinstance(response, dict):
+        put("spawned", response.get("agentId"))
+    if event == "Stop":
+        # Always present on Stop, even empty: the reader prunes children
+        # that are not in it.
+        tasks = p.get("background_tasks")
+        r["bg"] = [{"id": t.get("id"), "desc": clip(t.get("description")),
+                    "atype": t.get("agent_type")}
+                   for t in (tasks if isinstance(tasks, list) else [])
+                   if isinstance(t, dict) and t.get("type") == "subagent"]
+    if event == "StopFailure":
+        put("err", clip(p.get("error") or p.get("error_type") or p.get("message")))
+    return r
+
+
+def main():
+    try:
+        payload = json.load(sys.stdin)
+        name = session_name()
+        if not name:
+            return
+        os.makedirs(EVENTS_DIR, exist_ok=True)
+        path = os.path.join(EVENTS_DIR, name + ".jsonl")
+        mode = "w" if payload.get("hook_event_name") == "SessionStart" else "a"
+        with open(path, mode) as f:
+            f.write(json.dumps(record(payload), separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
+main()

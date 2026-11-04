@@ -43,10 +43,7 @@ and starts dashboard polling. No eshell startup ritual required."
                                  (fullscreen . maximized))))))
     (select-frame-set-input-focus frame)
     ;; Ensure tmux session, discover existing agents, start polling
-    (unless (bebop--tmux-session-exists-p)
-      (bebop--tmux "new-session" "-d" "-s" bebop-tmux-session))
-    (bebop--discover-existing-sessions)
-    (bebop--start-poll)
+    (bebop-start)
     ;; Set up or refresh the 3-window layout
     (bebop-frame--setup-conductor frame)))
 

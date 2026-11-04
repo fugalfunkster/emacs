@@ -186,6 +186,11 @@ If PAIR-NAME starts with /, the window name is everything after the /."
   "Return non-nil if the claude tmux session exists."
   (eq 0 (bebop--tmux "has-session" "-t" bebop-tmux-session)))
 
+(defun bebop--ensure-tmux-session ()
+  "Create the claude tmux session if it does not exist."
+  (unless (bebop--tmux-session-exists-p)
+    (bebop--tmux "new-session" "-d" "-s" bebop-tmux-session)))
+
 (defun bebop--tmux-window-list ()
   "Return list of window name strings in the claude tmux session.
 Returns nil if the session does not exist."
@@ -262,6 +267,246 @@ Returns nil if the window does not exist or the pane id is invalid."
      ((cl-some (lambda (l) (string-match-p "❯" l)) tail)
       (list :status 'waiting :reason 'prompt-visible))
      (t (list :status 'unknown :reason 'no-known-indicator)))))
+
+(defcustom bebop-events-dir (expand-file-name "~/.emacs.d-local/bebop-events/")
+  "Directory where bin/bebop-hook writes one event file per session.
+Machine-local on purpose: the events describe agents on this host."
+  :type 'directory
+  :group 'bebop)
+
+(defcustom bebop-interrupt-indicators '("Interrupted · What should Claude do instead")
+  "Pane text Claude shows after you interrupt a turn with Esc.
+No hook fires on an interrupt, so the events keep saying `working'.
+This marker, with no `bebop-working-footer' beside it, says the turn
+is over."
+  :type '(repeat regexp)
+  :group 'bebop)
+
+(defcustom bebop-working-footer "esc to interrupt"
+  "Footer text Claude shows only while a turn runs.
+An idle prompt alone is no evidence of an interrupt: in fullscreen mode
+the spinner scrolls out of the captured tail while text streams, but
+this footer stays."
+  :type 'regexp
+  :group 'bebop)
+
+(defvar bebop--hook-states (make-hash-table :test #'equal)
+  "Session name → folded hook state.
+A plist: :state (\"working\" \"blocked\" \"done\" \"idle\" \"error\", or
+nil once the session ended), :kind, :msg, :at (time of the last event),
+:children (alist of AGENT-ID → plist :state :kind :msg :title :type),
+:pending (descriptions of Agent calls not yet matched to a start) and
+:offset (bytes of the event file already read).")
+
+(defun bebop--events-file (name)
+  "Return the event file for session NAME, named as bin/bebop-hook names it."
+  (expand-file-name
+   (concat (replace-regexp-in-string "/" "_" (string-remove-prefix "/" name))
+           ".jsonl")
+   bebop-events-dir))
+
+(defun bebop--hook-rank (state)
+  "Urgency of hook STATE: what needs you outranks what is news."
+  (pcase state
+    ((or "blocked" "error") 4) ("done" 3) ("working" 2) ("idle" 1) (_ 0)))
+
+(defun bebop--hook-kind (ev)
+  "The blocked kind for permission request EV."
+  (if (equal (plist-get ev :tool) "AskUserQuestion") "question" "permission"))
+
+(defun bebop--hook-blocked-msg (ev)
+  "The message for permission request EV, in Claude's own phrasing."
+  (if (equal (plist-get ev :tool) "AskUserQuestion")
+      (format "answer: %s" (or (plist-get ev :q) "a question"))
+    (format "approve %s: %s" (plist-get ev :tool)
+            (or (plist-get ev :cmd) (plist-get ev :desc) ""))))
+
+(defun bebop--hook-child-put (children id props)
+  "Return CHILDREN with agent ID's record updated by plist PROPS.
+A new child goes at the end, so children keep their start order."
+  (let* ((cell (assoc id children))
+         (rec (cdr cell)))
+    (while props
+      (setq rec (plist-put rec (car props) (cadr props))
+            props (cddr props)))
+    (if cell
+        (progn (setcdr cell rec) children)
+      (append children (list (cons id rec))))))
+
+(defun bebop--hook-fold (st ev)
+  "Fold hook event EV into state ST. Return the new state plist."
+  (let ((e (plist-get ev :e))
+        (aid (plist-get ev :aid))
+        (state (plist-get st :state))
+        (kind (plist-get st :kind))
+        (msg (plist-get st :msg))
+        (children (copy-tree (plist-get st :children)))
+        (pending (plist-get st :pending)))
+    (if aid
+        (pcase e
+          ("SubagentStart"
+           (setq children (bebop--hook-child-put
+                           children aid
+                           (list :state "working"
+                                 :type (plist-get ev :atype)
+                                 :title (or (car pending) (plist-get ev :atype))))
+                 pending (cdr pending)))
+          ("SubagentStop"
+           (setq children (assoc-delete-all aid children)))
+          ("PermissionRequest"
+           (when (assoc aid children)
+             (setq children (bebop--hook-child-put
+                             children aid
+                             (list :state "blocked"
+                                   :kind (bebop--hook-kind ev)
+                                   :msg (bebop--hook-blocked-msg ev))))))
+          ((or "PreToolUse" "PostToolUse" "PostToolUseFailure")
+           (when (assoc aid children)
+             (setq children (bebop--hook-child-put
+                             children aid (list :state "working" :kind nil :msg nil))))))
+      (pcase e
+        ("SessionStart"
+         (setq state "idle" kind nil msg nil children nil pending nil))
+        ("UserPromptSubmit"
+         (setq state "working" kind nil msg nil))
+        ((or "PreToolUse" "PostToolUse" "PostToolUseFailure")
+         (setq state "working" kind nil msg nil)
+         (when (and (equal e "PreToolUse")
+                    (equal (plist-get ev :tool) "Agent")
+                    (plist-get ev :desc))
+           (setq pending (append pending (list (plist-get ev :desc)))))
+         (when-let ((id (plist-get ev :spawned)))
+           (when (assoc id children)
+             (setq children (bebop--hook-child-put
+                             children id (list :title (plist-get ev :desc)))))))
+        ("PermissionRequest"
+         (setq state "blocked"
+               kind (bebop--hook-kind ev)
+               msg (bebop--hook-blocked-msg ev)))
+        ("Elicitation"
+         (setq state "blocked" kind "question" msg "MCP input"))
+        ("Notification"
+         ;; Echoes a PermissionRequest already folded. On its own (a
+         ;; dialog no other hook saw) it still means the session waits.
+         (when (and (equal (plist-get ev :nt) "permission_prompt")
+                    (not (equal state "blocked"))
+                    (not (cl-some (lambda (c)
+                                    (equal (plist-get (cdr c) :state) "blocked"))
+                                  children)))
+           (setq state "blocked" kind "permission" msg nil)))
+        ("Stop"
+         (let ((bg (plist-get ev :bg)))
+           (setq state "done" kind nil msg nil pending nil
+                 children (cl-remove-if-not
+                           (lambda (c)
+                             (cl-find (car c) bg
+                                      :key (lambda (b) (plist-get b :id))
+                                      :test #'equal))
+                           children))
+           (dolist (b bg)
+             (setq children (bebop--hook-child-put
+                             children (plist-get b :id)
+                             (list :title (plist-get b :desc)
+                                   :type (plist-get b :atype)
+                                   :state (or (plist-get
+                                               (cdr (assoc (plist-get b :id) children))
+                                               :state)
+                                              "working")))))))
+        ("StopFailure"
+         (setq state "error" kind nil msg (plist-get ev :err)))
+        ("SessionEnd"
+         (setq state nil kind nil msg nil children nil pending nil))))
+    (list :state state :kind kind :msg msg :children children :pending pending
+          :at (/ (or (plist-get ev :t) 0) 1000.0)
+          :offset (plist-get st :offset))))
+
+(defun bebop--hook-state (name)
+  "Return the folded hook state of session NAME, reading new events first.
+Nil when the session has no event file: hooks are not installed, or the
+session predates them."
+  (let* ((file (bebop--events-file name))
+         (size (file-attribute-size (file-attributes file))))
+    (when size
+      (let* ((st (gethash name bebop--hook-states))
+             (offset (or (plist-get st :offset) 0)))
+        (when (< size offset)
+          (setq st nil offset 0))
+        (when (> size offset)
+          (with-temp-buffer
+            (insert-file-contents-literally file nil offset size)
+            (goto-char (point-max))
+            (when (search-backward "\n" nil t)
+              (let ((end (1+ (point))))
+                (dolist (line (split-string
+                               (buffer-substring-no-properties (point-min) end)
+                               "\n" t))
+                  (when-let ((ev (ignore-errors
+                                   (json-parse-string
+                                    (decode-coding-string line 'utf-8)
+                                    :object-type 'plist :array-type 'list
+                                    :null-object nil :false-object nil))))
+                    (setq st (bebop--hook-fold st ev))))
+                ;; The temp buffer holds raw bytes, so positions are bytes.
+                (setq offset (+ offset (1- end)))))))
+        (setq st (plist-put st :offset offset))
+        (puthash name st bebop--hook-states)
+        st))))
+
+(defun bebop--hook-effective (st)
+  "Roll ST's children up into the session's own state.
+A session is as urgent as its most urgent sub-agent, so a blocked
+sub-agent blocks the session and is named in the message. Returns a
+plist :state :kind :msg :children."
+  (let ((state (plist-get st :state))
+        (kind (plist-get st :kind))
+        (msg (plist-get st :msg)))
+    (dolist (c (plist-get st :children))
+      (let ((rec (cdr c)))
+        (when (> (bebop--hook-rank (plist-get rec :state))
+                 (bebop--hook-rank state))
+          (setq state (plist-get rec :state)
+                kind (plist-get rec :kind)
+                msg (and (plist-get rec :msg)
+                         (format "%s: %s" (or (plist-get rec :title) (car c))
+                                 (plist-get rec :msg)))))))
+    (list :state state :kind kind :msg msg :children (plist-get st :children))))
+
+(defun bebop--pane-interrupted-p (pane-id)
+  "Non-nil if PANE-ID shows an interrupted turn and no running one."
+  (when-let ((raw (bebop--tmux-capture-pane pane-id)))
+    (let* ((clean (bebop--strip-ansi raw))
+           (tail (string-join
+                  (last (seq-remove (lambda (l) (string-empty-p (string-trim l)))
+                                    (split-string clean "\n"))
+                        8)
+                  "\n")))
+      (and (cl-some (lambda (re) (string-match-p re tail))
+                    bebop-interrupt-indicators)
+           (not (string-match-p bebop-working-footer tail))))))
+
+(defun bebop--status-detail (name pane-id)
+  "Return the status detail of session NAME: hook events first, the pane second.
+The pane alone decides that a window is gone, and it decides everything
+for a session without hook events."
+  (let ((pane (bebop--infer-status-detail pane-id))
+        (st (bebop--hook-state name)))
+    (if (or (eq (plist-get pane :status) 'gone)
+            (null (plist-get st :state)))
+        pane
+      ;; An interrupt leaves the events at `working'; the pane says
+      ;; otherwise. Fold that into the state so it holds until the next
+      ;; event.
+      (when (and (equal (plist-get st :state) "working")
+                 (bebop--pane-interrupted-p pane-id))
+        (setq st (plist-put st :state "idle"))
+        (puthash name st bebop--hook-states))
+      (let ((eff (bebop--hook-effective st)))
+        (list :status (pcase (plist-get eff :state)
+                        ("working" 'active)
+                        ((or "blocked" "error") 'blocked)
+                        (_ 'waiting))
+              :reason 'hook
+              :hook eff)))))
 
 (defun bebop--spawn-session (name)
   "Create a new agent pair named NAME.
@@ -642,7 +887,7 @@ fold state preserved across poll re-renders via the visibility cache.
                     (when (>= misses bebop-pane-miss-threshold)
                       (push name orphans)
                       (setq changed t)))))
-            (let* ((detail (bebop--infer-status-detail pane-id))
+            (let* ((detail (bebop--status-detail name pane-id))
                    (new-status (plist-get detail :status))
                    (reason (plist-get detail :reason))
                    (old-status (plist-get info :status)))
@@ -704,6 +949,15 @@ Also restarts the poll timer if it stopped."
   (bebop--poll-all)
   (bebop--render)
   (bebop--start-poll))
+
+(defun bebop-start ()
+  "Ensure the tmux session, discover running agents, and start polling."
+  (interactive)
+  (bebop--ensure-tmux-session)
+  (bebop--discover-existing-sessions)
+  (bebop--start-poll))
+
+(add-hook 'emacs-startup-hook #'bebop-start)
 
 (defun bebop--start-poll ()
   "Start the status polling timer if not already running."
