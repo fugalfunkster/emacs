@@ -42,12 +42,15 @@ answering with garbage would post its presence where no peer looks."
     ("session-info"    . bebop-session-info)
     ("exile-proposals" . bebop-exile-proposals)
     ("jam"             . bebop-jam)
-    ("relay-done"      . bebop-relay-done))
+    ("relay-done"      . bebop-relay-done)
+    ("workbench"       . bebop-remote-workbench-layout))
   "Verb allowlist for incoming calls.
 Never dispatch arbitrary elisp from the mailbox: the call file is
 Dropbox-writable, and the allowlist is what keeps that acceptable.
 `relay-done' stays within that stance: it only stages a proposal in
-this machine's own ledger; a human executes it at a roundup checkpoint.")
+this machine's own ledger; a human executes it at a roundup checkpoint.
+`workbench' only arranges this machine's windows for a named session
+(bebop-remote.el, Workbench layout).")
 
 (defvar bebop-call--timer nil)
 

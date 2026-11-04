@@ -7567,12 +7567,15 @@ answering with garbage would post its presence where no peer looks."
     ("session-info"    . bebop-session-info)
     ("exile-proposals" . bebop-exile-proposals)
     ("jam"             . bebop-jam)
-    ("relay-done"      . bebop-relay-done))
+    ("relay-done"      . bebop-relay-done)
+    ("workbench"       . bebop-remote-workbench-layout))
   "Verb allowlist for incoming calls.
 Never dispatch arbitrary elisp from the mailbox: the call file is
 Dropbox-writable, and the allowlist is what keeps that acceptable.
 `relay-done' stays within that stance: it only stages a proposal in
-this machine's own ledger; a human executes it at a roundup checkpoint.")
+this machine's own ledger; a human executes it at a roundup checkpoint.
+`workbench' only arranges this machine's windows for a named session
+(bebop-remote.el, Workbench layout).")
 #+end_src
 
 *** Mailbox files and state
@@ -8409,7 +8412,7 @@ retries and restarts the timer.
                 (bebop-remote--insert-row s))))))
         (insert "\n")
         (insert (propertize
-                 "g: refresh  RET: compose  w: workbench  a: attach (mosh)  P: forward port  .: mark seen\n"
+                 "g: refresh  RET: compose  w: pin W  W: workbench  a: attach (mosh)  P: forward port  .: mark seen\n"
                  'face '(:inherit shadow :height 0.75)))
         (goto-char (point-min))
         (let ((found nil))
@@ -8487,6 +8490,7 @@ retries and restarts the timer.
     (define-key map (kbd "P")      #'bebop-remote-forward-port)
     (define-key map (kbd ".")      #'bebop-remote-mark-all-seen)
     (define-key map (kbd "w")      #'bebop-remote-workbench)
+    (define-key map (kbd "W")      #'bebop-remote-workbench-layout)
     (define-key map (kbd "j")      #'bebop-remote--next)
     (define-key map (kbd "p")      #'bebop-remote--prev)
     (define-key map (kbd "<down>") #'bebop-remote--next)
@@ -9051,12 +9055,13 @@ grouped session does not exist."
                            (setq bebop-remote--followed name)
                            (bebop-remote-steer "D" name)))))))
 
-(defun bebop-remote-open-terminal (role)
-  "Open the ROLE terminal window with `bebop-remote-term-program'."
+(defun bebop-remote-open-terminal (role &rest ghostty-args)
+  "Open the ROLE terminal window with `bebop-remote-term-program'.
+GHOSTTY-ARGS go to Ghostty, for example its window position."
   (unless (executable-find bebop-remote-term-program)
     (user-error "Bebop: %s is not on PATH (dotfiles bin/)" bebop-remote-term-program))
-  (call-process bebop-remote-term-program nil 0 nil role
-                (bebop-remote--target)))
+  (apply #'call-process bebop-remote-term-program nil 0 nil role
+         (bebop-remote--target) ghostty-args))
 
 (defun bebop-remote-workbench (&optional name)
   "Pin the W terminal to far session NAME (or the one at point).
@@ -9077,6 +9082,187 @@ Opens the W window first when it does not exist yet."
                         (message (if ok "Bebop: workbench terminal → %s"
                                    "Bebop: W terminal did not come up for %s")
                                  name))))))))
+#+end_src
+
+*** Workbench layout
+
+One command puts a session's working set on the second screen: its
+chart, its terminal and a browser. =W= on a row of the remote dashboard
+runs it, and so does the =workbench= mailbox verb, which is how an
+agent on the host asks for it (the figloop skill does). The layout:
+
+#+begin_example
+ ┌──────────────┬────────────────────────┐
+ │ chart        │                        │
+ │ (Emacs)      │   browser              │
+ ├──────────────┤   (Chrome, dev URL)    │
+ │ terminal     │                        │
+ │ (W, pinned)  │                        │
+ └──────────────┴────────────────────────┘
+#+end_example
+
+There is no window manager, so each program places its own window:
+
+- The chart is an Emacs frame, sized and moved in pixels. There is one
+  workbench frame, and the command reuses it. The chart path comes
+  from the host, so it is mapped by file name into the local
+  =bebop-charts-dir=, which Dropbox keeps in step.
+- The terminal is the W role from =*** Terminals follow focus=. A new
+  one opens in place: =bebop-term= passes Ghostty its position (pixels,
+  from the primary screen's visible area) and its size (cells, from
+  =bebop-remote-term-cell=, an estimate). An open one keeps its place,
+  since nothing can move a Ghostty window from outside.
+- The browser is a Chrome window, placed by Chrome's own AppleScript
+  (the first use asks for Automation permission, not Accessibility).
+  The command reuses the window it opened last. The URL is
+  =localhost:PORT=: the session's backline port when it has one, else
+  the port for its repo in =bebop-remote-dev-ports=. Until the port is
+  forwarded (=P=, and item 10 of the move-in), the page will not load.
+
+#+begin_src emacs-lisp
+(defcustom bebop-remote-workbench-split '(0.42 . 0.4)
+  "Workbench proportions: (LEFT-WIDTH . CHART-HEIGHT), as fractions.
+LEFT-WIDTH is the chart-and-terminal column's share of the screen;
+CHART-HEIGHT is the chart's share of that column."
+  :type '(cons number number)
+  :group 'bebop)
+
+(defcustom bebop-remote-term-cell '(9 . 19)
+  "Estimated Ghostty cell size in pixels, (WIDTH . HEIGHT).
+Ghostty takes its initial size in cells; this converts."
+  :type '(cons integer integer)
+  :group 'bebop)
+
+(defcustom bebop-remote-dev-ports '(("web-app" . 3000) ("commander" . 3002))
+  "Dev server port by repo, for sessions without a backline port.
+The repo is the session name's part before \"--\"."
+  :type '(alist :key-type string :value-type integer)
+  :group 'bebop)
+
+(defvar bebop-remote--chrome-window nil
+  "Id of the Chrome window the workbench opened last, or nil.")
+
+(defun bebop-remote--workarea ()
+  "The workbench screen's work area (X Y W H): the second screen if any."
+  (let* ((mons (display-monitor-attributes-list))
+         (mon (or (car (last (cdr mons))) (car mons))))
+    (alist-get 'workarea mon)))
+
+(defun bebop-remote--workbench-boxes ()
+  "Pixel boxes (X Y W H) for the chart, terminal and browser."
+  (pcase-let* ((`(,x ,y ,w ,h) (bebop-remote--workarea))
+               (lw (round (* w (car bebop-remote-workbench-split))))
+               (ch (round (* h (cdr bebop-remote-workbench-split)))))
+    (list :chart (list x y lw ch)
+          :term (list x (+ y ch) lw (- h ch))
+          :browser (list (+ x lw) y (- w lw) h))))
+
+(defun bebop-remote--local-chart (path)
+  "The local copy of the host's chart PATH, or nil."
+  (when path
+    (let ((local (expand-file-name (file-name-nondirectory path)
+                                   bebop-charts-dir)))
+      (and (file-exists-p local) local))))
+
+(defun bebop-remote--workbench-frame (box chart name)
+  "Show CHART for session NAME in the workbench frame, placed at BOX."
+  (pcase-let ((`(,x ,y ,w ,h) box))
+    (let ((frame (or (seq-find (lambda (f) (frame-parameter f 'bebop-workbench))
+                               (frame-list))
+                     (make-frame '((name . "Workbench") (bebop-workbench . t))))))
+      (set-frame-position frame x y)
+      ;; `set-frame-size' sizes the text area; the title bar, fringes
+      ;; and scroll bar come on top. Take them off so the outer frame
+      ;; fills the box.
+      (let ((outer (alist-get 'outer-size (frame-geometry frame))))
+        (set-frame-size frame
+                        (- w (- (car outer) (frame-text-width frame)))
+                        (- h (- (cdr outer) (frame-text-height frame)))
+                        t))
+      (with-selected-frame frame
+        (delete-other-windows)
+        (switch-to-buffer
+         (if chart
+             (find-file-noselect chart)
+           (with-current-buffer (get-buffer-create "*bebop-workbench*")
+             (let ((inhibit-read-only t))
+               (erase-buffer)
+               (insert (format "%s has no chart on this machine.\n" name)))
+             (current-buffer)))))
+      frame)))
+
+(defun bebop-remote--workbench-term (box name)
+  "Pin the W terminal to NAME, opening it at BOX when it does not exist."
+  (pcase-let ((`(,x ,y ,w ,h) box)
+              (`(,px ,py . ,_) (alist-get 'workarea
+                                          (car (display-monitor-attributes-list)))))
+    (bebop-remote-steer
+     "W" name
+     (lambda (ok)
+       (unless ok
+         (bebop-remote-open-terminal
+          "W"
+          (format "--window-position-x=%d" (- x px))
+          (format "--window-position-y=%d" (- y py))
+          (format "--window-width=%d" (/ w (car bebop-remote-term-cell)))
+          (format "--window-height=%d" (/ h (cdr bebop-remote-term-cell))))
+         (run-at-time 3 nil #'bebop-remote-steer "W" name #'ignore))))))
+
+(defun bebop-remote--dev-url (name)
+  "The dev URL for far session NAME: its backline port, else its repo's."
+  (let* ((info (ignore-errors
+                 (bebop-remote--eval-json
+                  (format "(bebop-session-info %S)" name))))
+         (ports (plist-get (plist-get info :backline) :ports))
+         (port (or (and ports (> (length ports) 0) (aref ports 0))
+                   (cdr (assoc (car (split-string name "--")) bebop-remote-dev-ports)))))
+    (when port (format "http://localhost:%d/" port))))
+
+(defun bebop-remote--workbench-browser (box url)
+  "Open URL in the workbench Chrome window, placed at BOX."
+  (pcase-let ((`(,x ,y ,w ,h) box))
+    (let* ((reuse (and bebop-remote--chrome-window
+                       (format "(exists window id %d)" bebop-remote--chrome-window)))
+           (script
+            (format "tell application \"Google Chrome\"
+  set w to missing value
+  %s
+  if w is missing value then set w to make new window
+  set bounds of w to {%d, %d, %d, %d}
+  %s
+  return id of w
+end tell"
+                    (if reuse
+                        (format "if %s then set w to window id %d"
+                                reuse bebop-remote--chrome-window)
+                      "")
+                    x y (+ x w) (+ y h)
+                    (if url (format "set URL of active tab of w to %S" url) ""))))
+      (with-temp-buffer
+        (when (eq 0 (call-process "osascript" nil t nil "-e" script))
+          (setq bebop-remote--chrome-window
+                (string-to-number (string-trim (buffer-string)))))))))
+
+(defun bebop-remote-workbench-layout (&optional name)
+  "Lay out far session NAME's workbench on the second screen.
+Chart top left, the W terminal bottom left, Chrome on the right.
+Also the `workbench' mailbox verb; returns a short report."
+  (interactive)
+  (let* ((name (or name
+                   (get-text-property (point) 'bebop-remote-name)
+                   (user-error "No session at point")))
+         (s (seq-find (lambda (s) (equal (plist-get s :name) name))
+                      bebop-remote--sessions))
+         (chart (bebop-remote--local-chart
+                 (or (plist-get s :chart)
+                     (expand-file-name (concat name ".org") bebop-charts-dir))))
+         (boxes (bebop-remote--workbench-boxes))
+         (url (bebop-remote--dev-url name)))
+    (bebop-remote--workbench-frame (plist-get boxes :chart) chart name)
+    (bebop-remote--workbench-term (plist-get boxes :term) name)
+    (bebop-remote--workbench-browser (plist-get boxes :browser) url)
+    (message "Bebop: workbench for %s%s" name (if url (format " at %s" url) ""))
+    (format "workbench: %s %s" name (or url "(no dev url)"))))
 #+end_src
 
 *** The escape hatch and ports
