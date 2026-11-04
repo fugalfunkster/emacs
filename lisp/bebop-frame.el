@@ -150,6 +150,20 @@ Uses `set-window-buffer' so dedicated windows accept the buffer swap."
 (advice-add 'bebop--apply-active-session :after
             (lambda (&rest _) (bebop-frame--update-conductor)))
 
+(defun bebop-reframe ()
+  "Rebuild the Conductor in a new frame and close the old one.
+For a Conductor that stopped painting. The old frame is deleted with
+FORCE, so no confirmation dialog can hang Emacs."
+  (interactive)
+  (let ((old (cl-find-if (lambda (f) (frame-parameter f 'bebop-conductor))
+                         (frame-list))))
+    ;; Unmark the old frame first, or `bebop' would just focus it again.
+    (when old
+      (set-frame-parameter old 'bebop-conductor nil))
+    (bebop)
+    (when (frame-live-p old)
+      (delete-frame old t))))
+
 (defun bebop-solo (name)
   "Open (or focus) the Solo dev frame for session NAME.
 

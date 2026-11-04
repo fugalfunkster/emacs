@@ -8004,6 +8004,37 @@ Uses `set-window-buffer' so dedicated windows accept the buffer swap."
             (lambda (&rest _) (bebop-frame--update-conductor)))
 #+end_src
 
+*** Reframe: recover a blacked-out Conductor
+
+The NS build of Emacs sometimes stops painting a frame. After Mission
+Control, or a fullscreen toggle from a window manager, the Conductor
+goes fully black but still takes keystrokes. A new frame paints fine.
+Closing the black frame with its red button can hang Emacs on a dialog
+that you cannot see.
+
+=M-x bebop-reframe= is the recovery. It builds the Conductor again in a
+new frame, then deletes the old frame from Lisp with FORCE, so no
+dialog opens. Type it blind into the black frame (it still reads keys),
+call it from any other frame, or run it from a terminal:
+=emacsclient --eval '(bebop-reframe)'=. The buffers live on, so nothing
+is lost: the new frame shows the same dashboard and composition buffer.
+
+#+begin_src emacs-lisp
+(defun bebop-reframe ()
+  "Rebuild the Conductor in a new frame and close the old one.
+For a Conductor that stopped painting. The old frame is deleted with
+FORCE, so no confirmation dialog can hang Emacs."
+  (interactive)
+  (let ((old (cl-find-if (lambda (f) (frame-parameter f 'bebop-conductor))
+                         (frame-list))))
+    ;; Unmark the old frame first, or `bebop' would just focus it again.
+    (when old
+      (set-frame-parameter old 'bebop-conductor nil))
+    (bebop)
+    (when (frame-live-p old)
+      (delete-frame old t))))
+#+end_src
+
 *** Solo frame
 
 =M-x bebop-solo NAME= opens a full-screen dev environment for one session in a
