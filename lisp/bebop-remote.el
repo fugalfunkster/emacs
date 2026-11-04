@@ -114,6 +114,10 @@ both arrive as nil."
 (defvar bebop-remote-buffer-name "*bebop-remote*"
   "Buffer name for the remote dashboard.")
 
+(defvar bebop-remote--active nil
+  "The far session you selected with RET, or nil.
+The remote counterpart of `bebop--active-session'.")
+
 (defvar bebop-remote--sessions nil
   "Last fetched session list (a list of plists), or nil.")
 
@@ -140,7 +144,10 @@ both arrive as nil."
          (start (point)))
     (insert (propertize (if live "●" "○") 'face dot-face))
     (insert " ")
-    (insert (propertize name 'face (if live 'bebop-session-face 'shadow)))
+    (insert (propertize name 'face (cond ((not live) 'shadow)
+                                         ((equal name bebop-remote--active)
+                                          'bebop-selected-face)
+                                         (t 'bebop-session-face))))
     (when set
       (insert (propertize (format "  [%s]" set) 'face 'shadow)))
     (insert "\n")
@@ -183,7 +190,7 @@ both arrive as nil."
                 (bebop-remote--insert-row s))))))
         (insert "\n")
         (insert (propertize
-                 "g: refresh  RET: compose  r: resume  w: pin W  W: workbench  a: attach (mosh)  P: forward port  .: mark seen\n"
+                 "g: refresh  RET: select  r: resume  w: pin W  W: workbench  a: attach (mosh)  P: forward port  .: mark seen\n"
                  'face '(:inherit shadow :height 0.75)))
         (goto-char (point-min))
         (let ((found nil))
@@ -256,7 +263,7 @@ both arrive as nil."
 (defvar bebop-remote-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "g")      #'bebop-remote-refresh)
-    (define-key map (kbd "RET")    #'bebop-remote-compose)
+    (define-key map (kbd "RET")    #'bebop-remote-select)
     (define-key map (kbd "a")      #'bebop-remote-attach)
     (define-key map (kbd "P")      #'bebop-remote-forward-port)
     (define-key map (kbd ".")      #'bebop-remote-mark-all-seen)
@@ -294,7 +301,7 @@ both arrive as nil."
                'face 'shadow))))))
   (add-hook 'kill-buffer-hook #'bebop-remote--stop-timer nil t)
   (add-hook 'kill-buffer-hook #'bebop-remote--stop-stream nil t)
-  (add-hook 'post-command-hook #'bebop-remote--follow nil t))
+  )
 
 ;;;###autoload
 (defun bebop-remote ()
@@ -377,13 +384,9 @@ from the local Dropbox before any network call."
     (message "Bebop: resumed %s on %s" name bebop-remote-host)
     (bebop-remote-refresh)))
 
-(defun bebop-remote-compose (&optional name)
-  "Open the composition buffer for the far session NAME (or at point)."
-  (interactive)
-  (let* ((name (or name
-                   (get-text-property (point) 'bebop-remote-name)
-                   (user-error "No session at point")))
-         (buf (get-buffer-create (format "*bebop-remote: %s*" name))))
+(defun bebop-remote--compose-buffer (name)
+  "Return far session NAME's composition buffer, set up."
+  (let ((buf (get-buffer-create (format "*bebop-remote: %s*" name))))
     (with-current-buffer buf
       (unless (derived-mode-p 'org-mode)
         (org-mode))
@@ -394,13 +397,48 @@ from the local Dropbox before any network call."
       (bebop-remote-compose-mode 1)
       (bebop--set-header-overlay (format "Remote → %s" name)
                                  bebop-session-header-color 2.0))
-    (pop-to-buffer buf)
-    ;; Opening a session is looking at it: the ack gesture.
+    buf))
+
+(defun bebop-remote-select (&optional name)
+  "Select far session NAME (or the one at point), as RET does locally.
+Its composition buffer takes the Conductor's composition window (or
+another window when there is no Conductor), the D terminal switches to
+it, and it counts as seen. Moving point alone changes nothing."
+  (interactive)
+  (let* ((name (or name
+                   (get-text-property (point) 'bebop-remote-name)
+                   (user-error "No session at point")))
+         (s (seq-find (lambda (s) (equal (plist-get s :name) name))
+                      bebop-remote--sessions)))
+    (unless (plist-get s :live)
+      (user-error "%s is on deck — r resumes it on %s" name bebop-remote-host))
+    (setq bebop-remote--active name)
+    (let* ((buf (bebop-remote--compose-buffer name))
+           (conductor (seq-find (lambda (f) (frame-parameter f 'bebop-conductor))
+                                (frame-list)))
+           (win (and conductor (frame-parameter conductor 'bebop-comp-window))))
+      (if (window-live-p win)
+          (progn (set-window-buffer win buf)
+                 (with-selected-window win (text-scale-set 3)))
+        (display-buffer buf '((display-buffer-use-some-window
+                               display-buffer-pop-up-window)
+                              (inhibit-same-window . t)))))
+    (bebop-remote-steer "D" name)
+    (bebop-remote-ack name)
+    (bebop-remote--render)
+    (message "Bebop: %s on %s — compose, then C-c C-c to send"
+             name bebop-remote-host)))
+
+(defun bebop-remote-compose (&optional name)
+  "Open far session NAME's composition buffer in the selected window."
+  (interactive)
+  (let ((name (or name
+                  (get-text-property (point) 'bebop-remote-name)
+                  (user-error "No session at point"))))
+    (pop-to-buffer (bebop-remote--compose-buffer name))
     (bebop-remote-ack name)
     (when (get-buffer bebop-remote-buffer-name)
-      (bebop-remote--render))
-    (message "Compose, then C-c C-c to send to %s on %s"
-             name bebop-remote-host)))
+      (bebop-remote--render))))
 
 (defcustom bebop-remote-events-dir "~/.emacs.d-local/bebop-events"
   "The host's hook event directory — its `bebop-events-dir'."
@@ -613,9 +651,8 @@ NO-SAVE skips the write, for callers that ack many and save once."
          (bebop-remote--unseen-p (plist-get s :name) status))))
 
 (defun bebop-remote--watching-p (name)
-  "Non-nil if far session NAME's composition buffer is in the selected window."
-  (equal (buffer-name (window-buffer (selected-window)))
-         (format "*bebop-remote: %s*" name)))
+  "Non-nil if far session NAME is the one you selected (RET)."
+  (equal name bebop-remote--active))
 
 (defun bebop-remote--notice-edges ()
   "Alert on far sessions that started to wait; refresh the mode line.
@@ -662,11 +699,6 @@ bin/bebop-term names each window's grouped session CLIENT-ROLE."
   :type 'string
   :group 'bebop)
 
-(defcustom bebop-remote-follow-delay 0.3
-  "Seconds point must rest on a row before the D terminal follows."
-  :type 'number
-  :group 'bebop)
-
 (defcustom bebop-remote-term-program "bebop-term"
   "The dotfiles program that opens a role's terminal window."
   :type 'string
@@ -676,8 +708,6 @@ bin/bebop-term names each window's grouped session CLIENT-ROLE."
   "Command list that runs a shell command on the host, or nil for ssh.
 Tests set this to (\"sh\" \"-c\") to steer the local tmux.")
 
-(defvar bebop-remote--followed nil "The session the D terminal last showed.")
-(defvar bebop-remote--follow-timer nil)
 (defvar bebop-remote--missing-roles nil
   "Roles whose terminal was found missing, so the notice shows once.")
 
@@ -714,21 +744,6 @@ grouped session does not exist."
                          (message "Bebop: no %s terminal for %s — run %s %s"
                                   role name bebop-remote-term-program role)))
                      (when callback (funcall callback ok))))))))
-
-(defun bebop-remote--follow ()
-  "Steer the D terminal to the session at point, once point rests."
-  (when (timerp bebop-remote--follow-timer)
-    (cancel-timer bebop-remote--follow-timer))
-  (let ((name (get-text-property (point) 'bebop-remote-name)))
-    (when (and name (not (equal name bebop-remote--followed))
-               (seq-find (lambda (s) (and (equal (plist-get s :name) name)
-                                          (plist-get s :live)))
-                         bebop-remote--sessions))
-      (setq bebop-remote--follow-timer
-            (run-at-time bebop-remote-follow-delay nil
-                         (lambda ()
-                           (setq bebop-remote--followed name)
-                           (bebop-remote-steer "D" name)))))))
 
 (defun bebop-remote-open-terminal (role &rest ghostty-args)
   "Open the ROLE terminal window with `bebop-remote-term-program'.
