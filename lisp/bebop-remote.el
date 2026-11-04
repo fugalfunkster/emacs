@@ -633,7 +633,7 @@ stream or the poll — passes through here."
                 (bebop-remote-ack name)
               (when (and (not quiet) (member status '("waiting" "blocked")))
                 (let ((msg (plist-get (car (bebop-remote--hook name)) :msg)))
-                  (ding t)
+                  (bebop-alert)
                   (message "Bebop: %s on %s is %s%s" name bebop-remote-host
                            (if (equal status "blocked") "blocked" "waiting")
                            (if msg (format " — %s" msg) ""))))))))))

@@ -80,6 +80,24 @@ wrong-but-obvious host component beats a wrong-and-invisible one."
         short
       bebop-host-fallback)))
 
+(defcustom bebop-alert-sound "/System/Library/Sounds/Glass.aiff"
+  "Sound file bebop alerts play, or nil for silent alerts."
+  :type '(choice (const :tag "Silent" nil) file)
+  :group 'bebop)
+
+(defcustom bebop-resident-host "Matthews-Pro"
+  "Short name of the resident host. Its alerts stay silent."
+  :type 'string
+  :group 'bebop)
+
+(defun bebop-alert ()
+  "Play `bebop-alert-sound', without blocking, except on the resident host."
+  (when (and bebop-alert-sound
+             (not (equal (bebop--host-name) bebop-resident-host))
+             (file-exists-p bebop-alert-sound)
+             (executable-find "afplay"))
+    (call-process "afplay" nil 0 nil bebop-alert-sound)))
+
 (defface bebop-header-face
   '((t :height 3.0 :weight bold))
   "Face for the composition buffer header text."

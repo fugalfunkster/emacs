@@ -1368,6 +1368,37 @@ wrong-but-obvious host component beats a wrong-and-invisible one."
       bebop-host-fallback)))
 #+end_src
 
+*** Alerts
+
+Every bebop alert (a session starts to wait, a pipeline fails, a new MR
+comment, a far session on the resident host) used to call =ding=. But
+the config turns the Emacs bell off (=ring-bell-function= is =ignore=
+in =emacs.org=), so no alert ever made a sound. =bebop-alert= plays a
+macOS system sound instead, with =afplay=, and leaves the bell off.
+
+The resident host stays silent. Its screen is only for repair, and its
+sessions' alerts reach you on the client (=bebop-remote.el=, Attention).
+
+#+begin_src emacs-lisp
+(defcustom bebop-alert-sound "/System/Library/Sounds/Glass.aiff"
+  "Sound file bebop alerts play, or nil for silent alerts."
+  :type '(choice (const :tag "Silent" nil) file)
+  :group 'bebop)
+
+(defcustom bebop-resident-host "Matthews-Pro"
+  "Short name of the resident host. Its alerts stay silent."
+  :type 'string
+  :group 'bebop)
+
+(defun bebop-alert ()
+  "Play `bebop-alert-sound', without blocking, except on the resident host."
+  (when (and bebop-alert-sound
+             (not (equal (bebop--host-name) bebop-resident-host))
+             (file-exists-p bebop-alert-sound)
+             (executable-find "afplay"))
+    (call-process "afplay" nil 0 nil bebop-alert-sound)))
+#+end_src
+
 *** Faces
 
 #+begin_src emacs-lisp
@@ -3083,7 +3114,7 @@ declaring a pair orphaned on a =gone= status, the code re-checks via
 #+begin_src emacs-lisp
 (defun bebop--notify-waiting (name)
   "Alert the user that agent pair NAME has finished and is waiting for input."
-  (ding t)
+  (bebop-alert)
   (message "Bebop: %s is waiting for your input" name))
 #+end_src
 
@@ -6255,15 +6286,15 @@ them (poll edges, acks, pulse) already re-renders.
 Transition notifications are =bebop--notify-waiting='s cousins, fired
 where the edge is detected: inside the citizen write verbs, so any
 fetcher — pulse, roundup, a future machine — triggers them for free.
-Two transitions earn a ding: a pipeline flipping to failed, and the
+Two transitions earn an alert sound (=bebop-alert=): a pipeline flipping to failed, and the
 unresolved-comment count rising. A first observation never notifies —
 a transition needs a before.
 
 #+begin_src emacs-lisp
 (defun bebop-hud--notify (fmt &rest args)
-  "Ding and echo FMT formatted with ARGS, prefixed \"Bebop: \".
+  "Sound an alert and echo FMT formatted with ARGS, prefixed \"Bebop: \".
 The `bebop--notify-waiting' cousin for external edges."
-  (ding t)
+  (bebop-alert)
   (message "Bebop: %s" (apply #'format fmt args)))
 
 (defvar bebop-hud--periphery nil
@@ -8998,7 +9029,7 @@ stream or the poll — passes through here."
                 (bebop-remote-ack name)
               (when (and (not quiet) (member status '("waiting" "blocked")))
                 (let ((msg (plist-get (car (bebop-remote--hook name)) :msg)))
-                  (ding t)
+                  (bebop-alert)
                   (message "Bebop: %s on %s is %s%s" name bebop-remote-host
                            (if (equal status "blocked") "blocked" "waiting")
                            (if msg (format " — %s" msg) ""))))))))))

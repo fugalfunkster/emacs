@@ -923,7 +923,7 @@ fold state preserved across poll re-renders via the visibility cache.
 
 (defun bebop--notify-waiting (name)
   "Alert the user that agent pair NAME has finished and is waiting for input."
-  (ding t)
+  (bebop-alert)
   (message "Bebop: %s is waiting for your input" name))
 
 (defun bebop--poll-all ()

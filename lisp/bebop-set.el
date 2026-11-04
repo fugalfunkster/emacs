@@ -387,9 +387,9 @@ each surface picks its own face."
        "  "))))
 
 (defun bebop-hud--notify (fmt &rest args)
-  "Ding and echo FMT formatted with ARGS, prefixed \"Bebop: \".
+  "Sound an alert and echo FMT formatted with ARGS, prefixed \"Bebop: \".
 The `bebop--notify-waiting' cousin for external edges."
-  (ding t)
+  (bebop-alert)
   (message "Bebop: %s" (apply #'format fmt args)))
 
 (defvar bebop-hud--periphery nil
