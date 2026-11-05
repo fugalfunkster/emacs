@@ -331,15 +331,11 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
 (define-derived-mode bebop-remote-mode special-mode "BebopRemote"
   "Dashboard for a resident host's session pool, rendered over ssh.
 \\{bebop-remote-mode-map}"
-  (setq truncate-lines t)
-  (when (fboundp 'display-line-numbers-mode)
-    (display-line-numbers-mode -1))
+  (bebop--dashboard-look)
   (setq header-line-format
         '((:eval
            (concat
-            (propertize (format " Remote: %s" bebop-remote-host)
-                        'face `(:height 1.6 :weight bold
-                                :foreground ,bebop-header-color))
+            (bebop--header-propertize (format " Remote: %s" bebop-remote-host))
             (unless (process-live-p bebop-remote--stream)
               (propertize "  stream down" 'face 'shadow))
             (when bebop-remote--forwards
@@ -396,13 +392,15 @@ from the local Dropbox before any network call."
                          (bebop-remote--window-name
                           bebop-remote--compose-session)))
          (qt (shell-quote-argument target))
-         ;; The pause matters: on the host the three tmux calls land in
-         ;; microseconds, and Claude Code reads an Enter that arrives
-         ;; inside the paste burst as a newline in the prompt, not a
-         ;; submit. Locally, process spawn latency hides this.
-         (cmd (format "%s load-buffer - && %s paste-buffer -d -t %s && sleep 0.3 && %s send-keys -t %s C-m"
-                      bebop-remote-tmux bebop-remote-tmux qt
-                      bebop-remote-tmux qt))
+         (enter (format "%s send-keys -t %s C-m" bebop-remote-tmux qt))
+         ;; As `bebop--tmux-paste': a named buffer, bracketed, and a
+         ;; blank buffer sends only the Enter. The pause matters too: on
+         ;; the host the tmux calls land in microseconds, and an Enter
+         ;; inside the paste burst can read as a newline, not a submit.
+         (cmd (if (string-blank-p (buffer-string))
+                  enter
+                (format "%s load-buffer -b bebop-send - && %s paste-buffer -b bebop-send -d -p -t %s && sleep 0.3 && %s"
+                        bebop-remote-tmux bebop-remote-tmux qt enter)))
          (code (apply #'call-process-region (point-min) (point-max)
                       "ssh" nil nil nil
                       (append bebop-remote-ssh-options

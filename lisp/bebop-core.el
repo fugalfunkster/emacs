@@ -214,13 +214,27 @@ independent of any text-scale applied to the buffer."
              bebop-tmux-target pane))
     pane))
 
+(defun bebop--tmux-paste (pane)
+  "Paste the current buffer into tmux PANE, unless it is blank.
+The text goes through a named tmux buffer, never the paste stack: an
+empty `load-buffer' succeeds without creating a buffer, and a bare
+`paste-buffer' would then paste whatever sat on top of the stack —
+text you copied in some pane, hours ago. -p brackets the paste when
+the pane asked for it, as Claude Code does, so the agent knows where
+the paste ends and the Enter that follows submits."
+  (unless (string-blank-p (buffer-string))
+    (call-process-region (point-min) (point-max)
+                         "tmux" nil nil nil "load-buffer" "-b" "bebop-send" "-")
+    (call-process "tmux" nil nil nil
+                  "paste-buffer" "-b" "bebop-send" "-d" "-p" "-t" pane)))
+
 (defun bebop-send-buffer ()
-  "Send current buffer contents to Claude tmux pane, submit, then clear buffer."
+  "Send current buffer contents to Claude tmux pane, submit, then clear buffer.
+A blank buffer sends only the Enter, which submits whatever already
+sits in the agent's prompt."
   (interactive)
   (let ((pane (bebop--tmux-pane-id)))
-    (call-process-region (point-min) (point-max)
-                         "tmux" nil nil nil "load-buffer" "-")
-    (call-process "tmux" nil nil nil "paste-buffer" "-d" "-t" pane)
+    (bebop--tmux-paste pane)
     (call-process "tmux" nil nil nil "send-keys" "-t" pane "C-m")
     (erase-buffer)
     (message "Sent buffer to Claude pane %s" pane)))

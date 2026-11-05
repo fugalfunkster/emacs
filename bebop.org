@@ -1557,13 +1557,27 @@ immediately reflected.
              bebop-tmux-target pane))
     pane))
 
+(defun bebop--tmux-paste (pane)
+  "Paste the current buffer into tmux PANE, unless it is blank.
+The text goes through a named tmux buffer, never the paste stack: an
+empty `load-buffer' succeeds without creating a buffer, and a bare
+`paste-buffer' would then paste whatever sat on top of the stack —
+text you copied in some pane, hours ago. -p brackets the paste when
+the pane asked for it, as Claude Code does, so the agent knows where
+the paste ends and the Enter that follows submits."
+  (unless (string-blank-p (buffer-string))
+    (call-process-region (point-min) (point-max)
+                         "tmux" nil nil nil "load-buffer" "-b" "bebop-send" "-")
+    (call-process "tmux" nil nil nil
+                  "paste-buffer" "-b" "bebop-send" "-d" "-p" "-t" pane)))
+
 (defun bebop-send-buffer ()
-  "Send current buffer contents to Claude tmux pane, submit, then clear buffer."
+  "Send current buffer contents to Claude tmux pane, submit, then clear buffer.
+A blank buffer sends only the Enter, which submits whatever already
+sits in the agent's prompt."
   (interactive)
   (let ((pane (bebop--tmux-pane-id)))
-    (call-process-region (point-min) (point-max)
-                         "tmux" nil nil nil "load-buffer" "-")
-    (call-process "tmux" nil nil nil "paste-buffer" "-d" "-t" pane)
+    (bebop--tmux-paste pane)
     (call-process "tmux" nil nil nil "send-keys" "-t" pane "C-m")
     (erase-buffer)
     (message "Sent buffer to Claude pane %s" pane)))
@@ -3071,14 +3085,24 @@ Select the session at point as active and focus the composition buffer.
 ;; intentional. Lives outside the defvar so hot-reloads apply it.
 (define-key bebop-dashboard-mode-map (kbd "q") #'ignore)
 
-(define-derived-mode bebop-dashboard-mode magit-section-mode "BebopDash"
-  "Major mode for the Bebop multi-agent dashboard.
-Derived from `magit-section-mode' for section folding (TAB) with
-fold state preserved across poll re-renders via the visibility cache.
-\\{bebop-dashboard-mode-map}"
+(defun bebop--header-propertize (text)
+  "TEXT styled as the dashboard header: bold, large, the header color.
+Sized from the default face, so it ignores any text-scale."
+  (let* ((resolved (and (fboundp 'bebop--resolve-font) (bebop--resolve-font)))
+         (base-h (let ((dh (face-attribute 'default :height nil t)))
+                   (if (integerp dh) dh 160)))
+         (abs-h (round (* bebop-header-height base-h))))
+    (propertize text
+                'face `(:height ,abs-h :weight bold
+                        :foreground ,bebop-header-color
+                        ,@(when resolved (list :family resolved))))))
+
+(defun bebop--dashboard-look ()
+  "Give the current buffer the dashboard's look.
+Shared with the remote dashboard (`bebop-remote-mode'), which shows
+the host's tree and must look the same."
   (setq buffer-read-only t
         truncate-lines t)
-  (setq-local magit-section-cache-visibility t)
   ;; Flush the gutter against the window edge: no left fringe. The
   ;; fringe is where magit draws its fold-caret bitmaps, so switch the
   ;; visibility indicator to the textual style (trailing … on collapsed
@@ -3091,20 +3115,20 @@ fold state preserved across poll re-renders via the visibility cache.
   (when (fboundp 'hl-line-mode)
     (hl-line-mode -1))
   (setq mode-line-format nil)
-  (setq header-line-format
-        '((:eval
-           (let* ((resolved (and (fboundp 'bebop--resolve-font) (bebop--resolve-font)))
-                  (base-h (let ((dh (face-attribute 'default :height nil t)))
-                            (if (integerp dh) dh 160)))
-                  (abs-h (round (* bebop-header-height base-h))))
-             (propertize (concat " " bebop-header-text)
-                         'face `(:height ,abs-h :weight bold
-                                 :foreground ,bebop-header-color
-                                 ,@(when resolved (list :family resolved))))))))
   (face-remap-add-relative 'header-line
                            :background (face-attribute 'default :background nil t)
                            :box nil
-                           :underline nil)
+                           :underline nil))
+
+(define-derived-mode bebop-dashboard-mode magit-section-mode "BebopDash"
+  "Major mode for the Bebop multi-agent dashboard.
+Derived from `magit-section-mode' for section folding (TAB) with
+fold state preserved across poll re-renders via the visibility cache.
+\\{bebop-dashboard-mode-map}"
+  (setq-local magit-section-cache-visibility t)
+  (bebop--dashboard-look)
+  (setq header-line-format
+        '((:eval (bebop--header-propertize (concat " " bebop-header-text)))))
   (add-hook 'kill-buffer-hook #'bebop--stop-poll nil t))
 #+end_src
 
@@ -3724,9 +3748,7 @@ Signals if NAME has no live tmux window."
       (user-error "bebop-jam: no live session named %s" name))
     (with-temp-buffer
       (insert text)
-      (call-process-region (point-min) (point-max)
-                           "tmux" nil nil nil "load-buffer" "-"))
-    (call-process "tmux" nil nil nil "paste-buffer" "-d" "-t" pane)
+      (bebop--tmux-paste pane))
     (call-process "tmux" nil nil nil "send-keys" "-t" pane "C-m")
     (run-hook-with-args 'bebop-session-activity-functions name 'send)
     (format "jammed: %s" name)))
@@ -8822,15 +8844,11 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
 (define-derived-mode bebop-remote-mode special-mode "BebopRemote"
   "Dashboard for a resident host's session pool, rendered over ssh.
 \\{bebop-remote-mode-map}"
-  (setq truncate-lines t)
-  (when (fboundp 'display-line-numbers-mode)
-    (display-line-numbers-mode -1))
+  (bebop--dashboard-look)
   (setq header-line-format
         '((:eval
            (concat
-            (propertize (format " Remote: %s" bebop-remote-host)
-                        'face `(:height 1.6 :weight bold
-                                :foreground ,bebop-header-color))
+            (bebop--header-propertize (format " Remote: %s" bebop-remote-host))
             (unless (process-live-p bebop-remote--stream)
               (propertize "  stream down" 'face 'shadow))
             (when bebop-remote--forwards
@@ -8903,13 +8921,15 @@ its active pane, which for agent windows is the only pane.
                          (bebop-remote--window-name
                           bebop-remote--compose-session)))
          (qt (shell-quote-argument target))
-         ;; The pause matters: on the host the three tmux calls land in
-         ;; microseconds, and Claude Code reads an Enter that arrives
-         ;; inside the paste burst as a newline in the prompt, not a
-         ;; submit. Locally, process spawn latency hides this.
-         (cmd (format "%s load-buffer - && %s paste-buffer -d -t %s && sleep 0.3 && %s send-keys -t %s C-m"
-                      bebop-remote-tmux bebop-remote-tmux qt
-                      bebop-remote-tmux qt))
+         (enter (format "%s send-keys -t %s C-m" bebop-remote-tmux qt))
+         ;; As `bebop--tmux-paste': a named buffer, bracketed, and a
+         ;; blank buffer sends only the Enter. The pause matters too: on
+         ;; the host the tmux calls land in microseconds, and an Enter
+         ;; inside the paste burst can read as a newline, not a submit.
+         (cmd (if (string-blank-p (buffer-string))
+                  enter
+                (format "%s load-buffer -b bebop-send - && %s paste-buffer -b bebop-send -d -p -t %s && sleep 0.3 && %s"
+                        bebop-remote-tmux bebop-remote-tmux qt enter)))
          (code (apply #'call-process-region (point-min) (point-max)
                       "ssh" nil nil nil
                       (append bebop-remote-ssh-options

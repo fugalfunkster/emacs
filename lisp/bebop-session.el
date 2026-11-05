@@ -267,9 +267,7 @@ Signals if NAME has no live tmux window."
       (user-error "bebop-jam: no live session named %s" name))
     (with-temp-buffer
       (insert text)
-      (call-process-region (point-min) (point-max)
-                           "tmux" nil nil nil "load-buffer" "-"))
-    (call-process "tmux" nil nil nil "paste-buffer" "-d" "-t" pane)
+      (bebop--tmux-paste pane))
     (call-process "tmux" nil nil nil "send-keys" "-t" pane "C-m")
     (run-hook-with-args 'bebop-session-activity-functions name 'send)
     (format "jammed: %s" name)))

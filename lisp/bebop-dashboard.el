@@ -885,14 +885,24 @@ the far session's."
 ;; intentional. Lives outside the defvar so hot-reloads apply it.
 (define-key bebop-dashboard-mode-map (kbd "q") #'ignore)
 
-(define-derived-mode bebop-dashboard-mode magit-section-mode "BebopDash"
-  "Major mode for the Bebop multi-agent dashboard.
-Derived from `magit-section-mode' for section folding (TAB) with
-fold state preserved across poll re-renders via the visibility cache.
-\\{bebop-dashboard-mode-map}"
+(defun bebop--header-propertize (text)
+  "TEXT styled as the dashboard header: bold, large, the header color.
+Sized from the default face, so it ignores any text-scale."
+  (let* ((resolved (and (fboundp 'bebop--resolve-font) (bebop--resolve-font)))
+         (base-h (let ((dh (face-attribute 'default :height nil t)))
+                   (if (integerp dh) dh 160)))
+         (abs-h (round (* bebop-header-height base-h))))
+    (propertize text
+                'face `(:height ,abs-h :weight bold
+                        :foreground ,bebop-header-color
+                        ,@(when resolved (list :family resolved))))))
+
+(defun bebop--dashboard-look ()
+  "Give the current buffer the dashboard's look.
+Shared with the remote dashboard (`bebop-remote-mode'), which shows
+the host's tree and must look the same."
   (setq buffer-read-only t
         truncate-lines t)
-  (setq-local magit-section-cache-visibility t)
   ;; Flush the gutter against the window edge: no left fringe. The
   ;; fringe is where magit draws its fold-caret bitmaps, so switch the
   ;; visibility indicator to the textual style (trailing … on collapsed
@@ -905,20 +915,20 @@ fold state preserved across poll re-renders via the visibility cache.
   (when (fboundp 'hl-line-mode)
     (hl-line-mode -1))
   (setq mode-line-format nil)
-  (setq header-line-format
-        '((:eval
-           (let* ((resolved (and (fboundp 'bebop--resolve-font) (bebop--resolve-font)))
-                  (base-h (let ((dh (face-attribute 'default :height nil t)))
-                            (if (integerp dh) dh 160)))
-                  (abs-h (round (* bebop-header-height base-h))))
-             (propertize (concat " " bebop-header-text)
-                         'face `(:height ,abs-h :weight bold
-                                 :foreground ,bebop-header-color
-                                 ,@(when resolved (list :family resolved))))))))
   (face-remap-add-relative 'header-line
                            :background (face-attribute 'default :background nil t)
                            :box nil
-                           :underline nil)
+                           :underline nil))
+
+(define-derived-mode bebop-dashboard-mode magit-section-mode "BebopDash"
+  "Major mode for the Bebop multi-agent dashboard.
+Derived from `magit-section-mode' for section folding (TAB) with
+fold state preserved across poll re-renders via the visibility cache.
+\\{bebop-dashboard-mode-map}"
+  (setq-local magit-section-cache-visibility t)
+  (bebop--dashboard-look)
+  (setq header-line-format
+        '((:eval (bebop--header-propertize (concat " " bebop-header-text)))))
   (add-hook 'kill-buffer-hook #'bebop--stop-poll nil t))
 
 (defun bebop--notify-waiting (name)
