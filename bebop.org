@@ -7612,7 +7612,11 @@ your move since the last beat."
   (let* ((move (bebop-derived--your-move-p item))
          (start (point))
          (title-col (+ bebop-set--name-col width))
-         (room (max 20 (- (window-width) title-col 7)))
+         ;; The dashboard's own window, not whichever one is selected
+         ;; (a pulse render comes from emacsclient); a snapshot has
+         ;; no window at all, so it assumes a roomy client.
+         (win (get-buffer-window (current-buffer) t))
+         (room (max 20 (- (if win (window-width win) 140) title-col 7)))
          (age (bebop-set--age-string (gethash "updated" item))))
     (insert (bebop-derived--glyphs set item)
             "    "
