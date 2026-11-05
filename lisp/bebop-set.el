@@ -1525,11 +1525,10 @@ your move since the last beat."
             (or pipe "")
             (bebop-set--stop bebop-set--name-col))))
 
-(defun bebop-derived--insert-item (set item width)
-  "Insert one MR line for ITEM of derived SET."
+(defun bebop-derived--insert-item (set item title-col)
+  "Insert one MR line for ITEM of derived SET, its title at TITLE-COL."
   (let* ((move (bebop-derived--your-move-p item))
          (start (point))
-         (title-col (+ bebop-set--name-col width))
          ;; The dashboard's own window, not whichever one is selected
          ;; (a pulse render comes from emacsclient); a snapshot has
          ;; no window at all, so it assumes a roomy client.
@@ -1587,8 +1586,15 @@ your move since the last beat."
                      (format "%s%d%s" (if (and (> moves 0) (not stale)) " · " "")
                              (length items) (if stale " · stale" ""))
                      'shadow)))
-          (dolist (it (sort (copy-sequence items) #'bebop-derived--item<))
-            (bebop-derived--insert-item set it width)))))))
+          ;; Titles align to this set's longest ref, not to the
+          ;; session-name column: that one is sized for session names,
+          ;; and on an 80-column dashboard it leaves titles no room.
+          (let ((title-col (+ bebop-set--name-col 6
+                              (apply #'max (mapcar (lambda (it)
+                                                     (length (gethash "ref" it)))
+                                                   items)))))
+            (dolist (it (sort (copy-sequence items) #'bebop-derived--item<))
+              (bebop-derived--insert-item set it title-col))))))))
 
 (defun bebop-derived--item-at-point ()
   "Return the `bebop-mr-item' plist at point, or nil."
