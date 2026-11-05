@@ -335,7 +335,9 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
   (setq header-line-format
         '((:eval
            (concat
-            (bebop--header-propertize (format " Remote: %s" bebop-remote-host))
+            ;; The same header as *bebop*: the host tab names the
+            ;; machine, and switching tabs must not shift the tree.
+            (bebop--header-propertize (concat " " bebop-header-text))
             (unless (process-live-p bebop-remote--stream)
               (propertize "  stream down" 'face 'shadow))
             (when bebop-remote--forwards
@@ -1065,6 +1067,12 @@ The host only sees what Dropbox syncs: the org tree."
     (setq-local tab-line-tab-name-function #'bebop-remote--tab-name)
     (setq-local tab-line-close-button-show nil)
     (setq-local tab-line-new-button-show nil)
+    ;; The tab you are on wears the header blue, whether or not the
+    ;; dashboard window is selected; the other tab stays shadowed.
+    (dolist (face '(tab-line-tab tab-line-tab-current))
+      (face-remap-add-relative face :foreground bebop-header-color
+                               :weight 'bold))
+    (face-remap-add-relative 'tab-line-tab-inactive :inherit 'shadow)
     (tab-line-mode 1)))
 
 (defun bebop-remote--conductor-dashboard (frame)
@@ -1085,9 +1093,22 @@ The host only sees what Dropbox syncs: the org tree."
 
 (advice-add 'bebop-frame--setup-conductor :after #'bebop-remote--conductor-dashboard)
 
+(defun bebop-remote--remote-context-p ()
+  "Non-nil when a new session should start on the host.
+The dashboard you are in decides; elsewhere, the host tab the
+Conductor's dashboard window shows; with no Conductor, client mode."
+  (let* ((conductor (seq-find (lambda (f) (frame-parameter f 'bebop-conductor))
+                              (frame-list)))
+         (win (and conductor (frame-parameter conductor 'bebop-dashboard-window))))
+    (cond ((derived-mode-p 'bebop-remote-mode) t)
+          ((derived-mode-p 'bebop-dashboard-mode) nil)
+          ((window-live-p win)
+           (eq (window-buffer win) (get-buffer bebop-remote-buffer-name)))
+          (t bebop-remote-client))))
+
 (defun bebop-remote--new-session-advice (orig &rest args)
-  "On a client, `bebop-new-session' starts the session on the host."
-  (if bebop-remote-client
+  "Start the session on the host when the host tab is the context."
+  (if (bebop-remote--remote-context-p)
       (call-interactively #'bebop-remote-new-session)
     (apply orig args)))
 
