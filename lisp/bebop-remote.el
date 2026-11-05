@@ -287,16 +287,23 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
   (setq bebop-remote--timer nil))
 
 
+(defun bebop-remote--nav-stop-p ()
+  "Non-nil on a line the arrow keys stop at: sessions, derived-set
+headings and their MR rows (see `bebop--nav-stop-p')."
+  (or (get-text-property (point) 'bebop-remote-name)
+      (get-text-property (point) 'bebop-mr-item)
+      (get-text-property (point) 'bebop-mr-heading)))
+
 (defun bebop-remote--next ()
   "Move point to the next session line."
   (interactive)
   (let ((start (point)))
-    (when (get-text-property (point) 'bebop-remote-name)
+    (when (bebop-remote--nav-stop-p)
       (forward-line 1))
     (while (and (< (point) (point-max))
-                (null (get-text-property (point) 'bebop-remote-name)))
+                (null (bebop-remote--nav-stop-p)))
       (forward-line 1))
-    (unless (get-text-property (point) 'bebop-remote-name)
+    (unless (bebop-remote--nav-stop-p)
       (goto-char start))))
 
 (defun bebop-remote--prev ()
@@ -305,9 +312,9 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
   (let ((start (point)))
     (forward-line -1)
     (while (and (> (point) (point-min))
-                (null (get-text-property (point) 'bebop-remote-name)))
+                (null (bebop-remote--nav-stop-p)))
       (forward-line -1))
-    (unless (get-text-property (point) 'bebop-remote-name)
+    (unless (bebop-remote--nav-stop-p)
       (goto-char start))))
 
 (defvar bebop-remote-mode-map

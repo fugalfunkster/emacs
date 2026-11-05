@@ -206,7 +206,7 @@ As locally, a running agent's working directory does not move."
 
 (defconst bebop--snapshot-props
   '(face font-lock-face display bebop-session-name bebop-on-deck-name bebop-fold
-         bebop-mr-item)
+         bebop-mr-item bebop-mr-heading)
   "Text properties a dashboard snapshot keeps.")
 
 (defun bebop--snapshot-clean (string)

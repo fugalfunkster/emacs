@@ -820,16 +820,25 @@ the far session's."
   "Return the pair name at point, or nil."
   (get-text-property (point) 'bebop-session-name))
 
+(defun bebop--nav-stop-p ()
+  "Non-nil on a line the arrow keys stop at.
+Session lines, plus the derived sets' headings and MR rows: those
+carry no session name, and arrows that skipped them left the region
+reachable only by C-n."
+  (or (get-text-property (point) 'bebop-session-name)
+      (get-text-property (point) 'bebop-mr-item)
+      (get-text-property (point) 'bebop-mr-heading)))
+
 (defun bebop--next-session ()
   "Move point to the next pair line."
   (interactive)
   (let ((start (point)))
-    (when (get-text-property (point) 'bebop-session-name)
+    (when (bebop--nav-stop-p)
       (forward-line 1))
     (while (and (< (point) (point-max))
-                (null (get-text-property (point) 'bebop-session-name)))
+                (null (bebop--nav-stop-p)))
       (forward-line 1))
-    (unless (get-text-property (point) 'bebop-session-name)
+    (unless (bebop--nav-stop-p)
       (goto-char start))))
 
 (defun bebop--prev-session ()
@@ -838,9 +847,9 @@ the far session's."
   (let ((start (point)))
     (forward-line -1)
     (while (and (> (point) (point-min))
-                (null (get-text-property (point) 'bebop-session-name)))
+                (null (bebop--nav-stop-p)))
       (forward-line -1))
-    (unless (get-text-property (point) 'bebop-session-name)
+    (unless (bebop--nav-stop-p)
       (goto-char start))))
 
 (declare-function bebop-derived-act "bebop-set")

@@ -3007,16 +3007,25 @@ Point accessor used by navigation and action commands to identify the current pa
 *** Navigation commands
 
 #+begin_src emacs-lisp
+(defun bebop--nav-stop-p ()
+  "Non-nil on a line the arrow keys stop at.
+Session lines, plus the derived sets' headings and MR rows: those
+carry no session name, and arrows that skipped them left the region
+reachable only by C-n."
+  (or (get-text-property (point) 'bebop-session-name)
+      (get-text-property (point) 'bebop-mr-item)
+      (get-text-property (point) 'bebop-mr-heading)))
+
 (defun bebop--next-session ()
   "Move point to the next pair line."
   (interactive)
   (let ((start (point)))
-    (when (get-text-property (point) 'bebop-session-name)
+    (when (bebop--nav-stop-p)
       (forward-line 1))
     (while (and (< (point) (point-max))
-                (null (get-text-property (point) 'bebop-session-name)))
+                (null (bebop--nav-stop-p)))
       (forward-line 1))
-    (unless (get-text-property (point) 'bebop-session-name)
+    (unless (bebop--nav-stop-p)
       (goto-char start))))
 #+end_src
 
@@ -3029,9 +3038,9 @@ Move point backward to the previous pair line.
   (let ((start (point)))
     (forward-line -1)
     (while (and (> (point) (point-min))
-                (null (get-text-property (point) 'bebop-session-name)))
+                (null (bebop--nav-stop-p)))
       (forward-line -1))
-    (unless (get-text-property (point) 'bebop-session-name)
+    (unless (bebop--nav-stop-p)
       (goto-char start))))
 #+end_src
 
@@ -7655,7 +7664,8 @@ your move since the last beat."
         (insert "\n")
         (magit-insert-section (bebop-derived (concat "derived/" set) t)
           (magit-insert-heading
-            (concat (bebop-set--stop bebop-set--name-col)
+            (propertize
+             (concat (bebop-set--stop bebop-set--name-col)
                     (bebop-set--prop set '(:weight bold))
                     (bebop-set--stop (+ bebop-set--name-col width))
                     " "
@@ -7667,7 +7677,8 @@ your move since the last beat."
                     (bebop-set--prop
                      (format "%s%d%s" (if (and (> moves 0) (not stale)) " · " "")
                              (length items) (if stale " · stale" ""))
-                     'shadow)))
+                     'shadow))
+             'bebop-mr-heading set))
           ;; Titles align to this set's longest ref, not to the
           ;; session-name column: that one is sized for session names,
           ;; and on an 80-column dashboard it leaves titles no room.
@@ -8110,7 +8121,7 @@ escaped.
 #+begin_src emacs-lisp
 (defconst bebop--snapshot-props
   '(face font-lock-face display bebop-session-name bebop-on-deck-name bebop-fold
-         bebop-mr-item)
+         bebop-mr-item bebop-mr-heading)
   "Text properties a dashboard snapshot keeps.")
 
 (defun bebop--snapshot-clean (string)
@@ -9255,16 +9266,23 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
   (setq bebop-remote--timer nil))
 
 
+(defun bebop-remote--nav-stop-p ()
+  "Non-nil on a line the arrow keys stop at: sessions, derived-set
+headings and their MR rows (see `bebop--nav-stop-p')."
+  (or (get-text-property (point) 'bebop-remote-name)
+      (get-text-property (point) 'bebop-mr-item)
+      (get-text-property (point) 'bebop-mr-heading)))
+
 (defun bebop-remote--next ()
   "Move point to the next session line."
   (interactive)
   (let ((start (point)))
-    (when (get-text-property (point) 'bebop-remote-name)
+    (when (bebop-remote--nav-stop-p)
       (forward-line 1))
     (while (and (< (point) (point-max))
-                (null (get-text-property (point) 'bebop-remote-name)))
+                (null (bebop-remote--nav-stop-p)))
       (forward-line 1))
-    (unless (get-text-property (point) 'bebop-remote-name)
+    (unless (bebop-remote--nav-stop-p)
       (goto-char start))))
 
 (defun bebop-remote--prev ()
@@ -9273,9 +9291,9 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
   (let ((start (point)))
     (forward-line -1)
     (while (and (> (point) (point-min))
-                (null (get-text-property (point) 'bebop-remote-name)))
+                (null (bebop-remote--nav-stop-p)))
       (forward-line -1))
-    (unless (get-text-property (point) 'bebop-remote-name)
+    (unless (bebop-remote--nav-stop-p)
       (goto-char start))))
 
 (defvar bebop-remote-mode-map
@@ -10637,13 +10655,16 @@ Pulse drops =GITLAB_TOKEN= from its environment and uses glab's own
 login: a stale token in the environment wins over the login and turns
 every call into a 401.
 
-Registered in cron every 10 minutes, stdout/stderr to
-=~/.emacs.d/pulse.log= (overwritten each run — the log answers "what
-did the last beat do," history is not its job):
+Registered in cron every 10 minutes. Cron runs the tangled file
+itself, so a tangle is the whole deploy; the log stays machine-local
+\(the =~/.emacs.d-local/= convention), appended:
 
 #+begin_example
-*/10 * * * * /usr/bin/python3 $HOME/.emacs.d/bin/bebop-pulse.py > $HOME/.emacs.d/pulse.log 2>&1
+*/10 * * * * /usr/bin/python3 $HOME/.emacs.d/bin/bebop-pulse.py >> $HOME/.emacs.d-local/pulse.log 2>&1
 #+end_example
+
+Until 2026-11-05 cron ran a hand-made copy in =~/.emacs.d-local/bin=,
+which a tangle never updated.
 
 (Explicit =python3= rather than the shebang — one less way for cron's
 spartan environment to disappoint.)
