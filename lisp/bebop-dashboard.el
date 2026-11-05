@@ -874,20 +874,22 @@ reachable only by C-n."
           (bebop-derived-act item)
         (message "No pair at point")))))
 
-(defvar bebop-dashboard-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "n")      #'bebop-new-session)
-    (define-key map (kbd "RET")    #'bebop-activate-at-point)
-    (define-key map (kbd "<down>") #'bebop--next-session)
-    (define-key map (kbd "<up>")   #'bebop--prev-session)
-    (define-key map (kbd "j")      #'bebop--next-session)
-    (define-key map (kbd "p")      #'bebop--prev-session)
-    (define-key map (kbd "g")      #'bebop-refresh)
-    (define-key map (kbd "D")      #'bebop-debug-pane)
-    map)
+(defvar bebop-dashboard-mode-map (make-sparse-keymap)
   "Keymap for `bebop-dashboard-mode'.")
 
-(define-key bebop-dashboard-mode-map (kbd "h") #'bebop-dashboard-next-tab)
+;; Bound at top level, not inside the defvar: a reload never re-runs a
+;; defvar, so a key added there would never reach a running Emacs (the
+;; remote dashboard's map stayed stale for weeks that way).
+(dolist (b '(("n"      . bebop-new-session)
+             ("RET"    . bebop-activate-at-point)
+             ("<down>" . bebop--next-session)
+             ("<up>"   . bebop--prev-session)
+             ("j"      . bebop--next-session)
+             ("p"      . bebop--prev-session)
+             ("g"      . bebop-refresh)
+             ("D"      . bebop-debug-pane)
+             ("h"      . bebop-dashboard-next-tab)))
+  (define-key bebop-dashboard-mode-map (kbd (car b)) (cdr b)))
 
 ;; Explicit, unconditional: `define-derived-mode' only sets the keymap
 ;; parent when the map has none, and `defvar' does not reinitialize on
