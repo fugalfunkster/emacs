@@ -1204,7 +1204,26 @@ None on the resident host, which has no far host to show."
         (set-window-buffer win remote))
       (bebop-remote-refresh)
       (bebop-remote--start-stream)
+      (bebop-remote--ensure-utility-session)
       (bebop-remote--ensure-terminals frame))))
+
+(defcustom bebop-remote-utility-session "bebop"
+  "The local utility session a client keeps running, or nil for none."
+  :type '(choice (const :tag "None" nil) string)
+  :group 'bebop)
+
+(defun bebop-remote--ensure-utility-session ()
+  "Start the client's utility session unless it is already running.
+The previous selection stays selected."
+  (when-let ((name bebop-remote-utility-session))
+    (unless (assoc name bebop--live-sessions)
+      (let ((active bebop--active-session)
+            (chart (expand-file-name (concat name ".org")
+                                     (expand-file-name bebop-charts-dir))))
+        (bebop--create-session name nil (and (file-exists-p chart) chart))
+        (when (and active (assoc active bebop--live-sessions))
+          (bebop-select-session active))
+        (message "Bebop: started the %s utility session" name)))))
 
 (defun bebop-remote--ensure-terminals (frame)
   "Give the D terminal a Ghostty tab per host tab, then refocus FRAME.

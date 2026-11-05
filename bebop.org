@@ -9891,6 +9891,15 @@ that exists is only selected, so a reframe costs nothing. Making the
 window is the one step that takes focus, so Emacs takes it back when
 the calls finish. A machine without Ghostty or =bebop-term= skips it.
 
+A client also keeps one local session: the utility session =bebop=
+(=bebop-remote-utility-session=). It is the client's hands. The mailbox
+dispatches only an allowlist, which is what makes a Dropbox-writable
+call file safe, so it cannot pull, reload, or probe a terminal; an
+agent can, behind Claude's own permission checks. =M-x bebop= starts it
+when it is not running, in =~/Code= with its chart if one exists, and
+leaves your selection alone. The relay skips it, as it skips every
+utility session, so "the client runs no sessions" means none but this.
+
 #+begin_src emacs-lisp
 (defcustom bebop-remote-client nil
   "Non-nil makes this machine a client of `bebop-remote-host'.
@@ -10095,7 +10104,26 @@ None on the resident host, which has no far host to show."
         (set-window-buffer win remote))
       (bebop-remote-refresh)
       (bebop-remote--start-stream)
+      (bebop-remote--ensure-utility-session)
       (bebop-remote--ensure-terminals frame))))
+
+(defcustom bebop-remote-utility-session "bebop"
+  "The local utility session a client keeps running, or nil for none."
+  :type '(choice (const :tag "None" nil) string)
+  :group 'bebop)
+
+(defun bebop-remote--ensure-utility-session ()
+  "Start the client's utility session unless it is already running.
+The previous selection stays selected."
+  (when-let ((name bebop-remote-utility-session))
+    (unless (assoc name bebop--live-sessions)
+      (let ((active bebop--active-session)
+            (chart (expand-file-name (concat name ".org")
+                                     (expand-file-name bebop-charts-dir))))
+        (bebop--create-session name nil (and (file-exists-p chart) chart))
+        (when (and active (assoc active bebop--live-sessions))
+          (bebop-select-session active))
+        (message "Bebop: started the %s utility session" name)))))
 
 (defun bebop-remote--ensure-terminals (frame)
   "Give the D terminal a Ghostty tab per host tab, then refocus FRAME.
