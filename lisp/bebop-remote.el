@@ -1085,7 +1085,33 @@ None on the resident host, which has no far host to show."
       (when (and bebop-remote-client (window-live-p win))
         (set-window-buffer win remote))
       (bebop-remote-refresh)
-      (bebop-remote--start-stream))))
+      (bebop-remote--start-stream)
+      (bebop-remote--ensure-terminals frame))))
+
+(defun bebop-remote--ensure-terminals (frame)
+  "Give the D terminal a Ghostty tab per host tab, then refocus FRAME.
+Runs `bebop-term' for each host in turn; an existing tab is only
+selected. Skipped where Ghostty or `bebop-term' is missing."
+  (when (and (file-directory-p "/Applications/Ghostty.app")
+             (or (executable-find bebop-remote-term-program)
+                 (ignore (message "Bebop: %s is not on exec-path; no D terminal"
+                                  bebop-remote-term-program))))
+    (let ((hosts (list "local" (bebop-remote--target))))
+      (cl-labels
+          ((next (hosts)
+             (if (null hosts)
+                 (when (frame-live-p frame)
+                   (select-frame-set-input-focus frame))
+               (make-process
+                :name "bebop-term"
+                :command (list bebop-remote-term-program "D" (car hosts))
+                :connection-type 'pipe
+                :noquery t
+                :buffer nil
+                :sentinel (lambda (proc _event)
+                            (unless (process-live-p proc)
+                              (next (cdr hosts))))))))
+        (next hosts)))))
 
 (advice-add 'bebop-frame--setup-conductor :after #'bebop-remote--conductor-dashboard)
 
