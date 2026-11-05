@@ -209,7 +209,7 @@ The remote counterpart of `bebop--active-session'.")
           (bebop-remote--mark-names (point-min) (point))))
         (insert "\n")
         (dolist (line '("RET: select  TAB: fold  g: refresh  .: mark seen"
-                        "n: new  r: resume  a: attach (mosh)"
+                        "n: new  k: kill  r: resume  a: attach (mosh)"
                         "w: pin W  W: workbench  P: forward port"))
           (insert (propertize (concat line "\n")
                               'face '(:inherit shadow :height 0.75))))
@@ -321,6 +321,7 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
     (define-key map (kbd "w")      #'bebop-remote-workbench)
     (define-key map (kbd "W")      #'bebop-remote-workbench-layout)
     (define-key map (kbd "r")      #'bebop-remote-resume)
+    (define-key map (kbd "k")      #'bebop-remote-kill)
     (define-key map (kbd "n")      #'bebop-remote-new-session)
     (define-key map (kbd "j")      #'bebop-remote--next)
     (define-key map (kbd "p")      #'bebop-remote--prev)
@@ -428,6 +429,29 @@ from the local Dropbox before any network call."
   "Composition buffer for a far session; \\[bebop-remote-send-buffer] sends over ssh."
   :lighter " Remote"
   :keymap bebop-remote-compose-mode-map)
+
+(defun bebop-remote-kill (&optional name)
+  "Kill far session NAME (or the one at point) on the host.
+Confirms as `k' does locally, by typing the name or \"see ya\"; the
+host then pauses it without prompts (`bebop-stop-session')."
+  (interactive)
+  (let* ((name (or name
+                   (get-text-property (point) 'bebop-remote-name)
+                   (user-error "No session at point")))
+         (s (seq-find (lambda (s) (equal (plist-get s :name) name))
+                      bebop-remote--sessions)))
+    (unless (plist-get s :live)
+      (user-error "%s is not running on %s" name bebop-remote-host))
+    (let ((typed (read-string
+                  (format "Type \"%s\" (or \"see ya\") to kill it on %s: "
+                          name bebop-remote-host))))
+      (unless (member typed (list name "see ya"))
+        (user-error "Cancelled (name mismatch)")))
+    (bebop-remote--eval-json (format "(bebop-stop-session %S)" name))
+    (when (equal name bebop-remote--active)
+      (setq bebop-remote--active nil))
+    (message "Bebop: killed %s on %s" name bebop-remote-host)
+    (bebop-remote-refresh)))
 
 (defun bebop-remote-resume (&optional name)
   "Resume the far on-deck session NAME (or the one at point) on the host."

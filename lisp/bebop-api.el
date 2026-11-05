@@ -93,6 +93,15 @@ The citizen form of `bebop-resume', for callers with no minibuffer."
                           :chart (or chart :null)
                           :venue (or venue :null)))))
 
+(defun bebop-stop-session (name)
+  "Kill live session NAME without prompts; it returns to On deck. JSON.
+The citizen form of `bebop-kill-session', for callers with no minibuffer."
+  (unless (assoc name bebop--live-sessions)
+    (error "bebop-stop-session: %s is not running" name))
+  (bebop--reap-runtime name)
+  (bebop-refresh)
+  (json-serialize (list :stopped name)))
+
 (defun bebop-list-repos ()
   "Return the repositories under `bebop-repos-dir' as a JSON array."
   (json-serialize (vconcat (bebop--list-repos))))
