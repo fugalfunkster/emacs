@@ -1246,19 +1246,24 @@ None on the resident host, which has no far host to show."
              (setq header-line-format '((:eval (bebop--dashboard-header)))))))))
 
 (defun bebop-remote--conductor-dashboard (frame)
-  "Give FRAME's dashboard window host tabs; a client opens on the host's."
-  (unless (equal (bebop--host-name) bebop-resident-host)
-    (let ((win (frame-parameter frame 'bebop-dashboard-window))
-          (remote (get-buffer-create bebop-remote-buffer-name)))
-      (with-current-buffer remote
-        (unless (derived-mode-p 'bebop-remote-mode)
-          (bebop-remote-mode)))
-      (when (and bebop-remote-client (window-live-p win))
-        (set-window-buffer win remote))
-      (bebop-remote-refresh)
-      (bebop-remote--start-stream)
-      (bebop-remote--ensure-utility-session)
-      (bebop-remote--ensure-terminals frame))))
+  "Finish the cold start for FRAME: utility session, D terminal, host tabs.
+Every machine gets its bebop utility session and a D tab on its own
+tmux; a client also opens on the host's dashboard and gets a D tab
+on the host. The resident host has no far host, so it stops there."
+  (let ((resident (equal (bebop--host-name) bebop-resident-host)))
+    (unless resident
+      (let ((win (frame-parameter frame 'bebop-dashboard-window))
+            (remote (get-buffer-create bebop-remote-buffer-name)))
+        (with-current-buffer remote
+          (unless (derived-mode-p 'bebop-remote-mode)
+            (bebop-remote-mode)))
+        (when (and bebop-remote-client (window-live-p win))
+          (set-window-buffer win remote))
+        (bebop-remote-refresh)
+        (bebop-remote--start-stream)))
+    (bebop-remote--ensure-utility-session)
+    (bebop-remote--ensure-terminals frame (unless resident
+                                            (list (bebop-remote--target))))))
 
 (defcustom bebop-remote-utility-session "bebop"
   "The local utility session a client keeps running, or nil for none."
@@ -1278,15 +1283,16 @@ The previous selection stays selected."
           (bebop-select-session active))
         (message "Bebop: started the %s utility session" name)))))
 
-(defun bebop-remote--ensure-terminals (frame)
-  "Give the D terminal a Ghostty tab per host tab, then refocus FRAME.
-Runs `bebop-term' for each host in turn; an existing tab is only
-selected. Skipped where Ghostty or `bebop-term' is missing."
+(defun bebop-remote--ensure-terminals (frame &optional far-hosts)
+  "Give the D terminal a Ghostty tab for this machine and each of FAR-HOSTS.
+Then refocus FRAME. Runs `bebop-term' for each host in turn; an
+existing tab is only selected. Skipped where Ghostty or `bebop-term'
+is missing."
   (when (and (file-directory-p "/Applications/Ghostty.app")
              (or (executable-find bebop-remote-term-program)
                  (ignore (message "Bebop: %s is not on exec-path; no D terminal"
                                   bebop-remote-term-program))))
-    (let ((hosts (list "local" (bebop-remote--target))))
+    (let ((hosts (cons "local" far-hosts)))
       (cl-labels
           ((next (hosts)
              (if (null hosts)
