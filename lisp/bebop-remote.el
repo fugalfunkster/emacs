@@ -348,6 +348,9 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
                'face 'shadow))))))
   (add-hook 'kill-buffer-hook #'bebop-remote--stop-timer nil t)
   (add-hook 'kill-buffer-hook #'bebop-remote--stop-stream nil t)
+  ;; A host tab coming up (or any other display) shows fresh state.
+  (add-hook 'window-buffer-change-functions
+            (lambda (_win) (bebop-remote-refresh)) nil t)
   )
 
 ;;;###autoload
@@ -700,6 +703,22 @@ Tests set this to (\"sh\" \"-c\") to steer the local tmux.")
     (append (list "ssh") bebop-remote-ssh-options
             (list (bebop-remote--target) command))))
 
+(defun bebop-remote--term-tab (role host)
+  "Bring ROLE's Ghostty tab for HOST to the front, without blocking.
+HOST is \"local\" or an ssh destination, as `bebop-term' takes it."
+  (when (executable-find bebop-remote-term-program)
+    (call-process bebop-remote-term-program nil 0 nil "-s" role host)))
+
+(defun bebop-remote--steer-local ()
+  "Steer this machine's own D tab to the active local session."
+  (when bebop--active-session
+    (call-process "tmux" nil 0 nil "select-window" "-t"
+                  (format "%s-D:=%s" bebop-remote-client-name
+                          (bebop--tmux-window-name bebop--active-session)))
+    (bebop-remote--term-tab "D" "local")))
+
+(advice-add 'bebop--apply-active-session :after #'bebop-remote--steer-local)
+
 (defun bebop-remote-steer (role name &optional callback)
   "Show far session NAME in the ROLE terminal, without blocking.
 CALLBACK, if given, gets t on success and nil when that terminal's
@@ -718,13 +737,16 @@ grouped session does not exist."
                  (unless (process-live-p proc)
                    (let ((ok (eq 0 (process-exit-status proc))))
                      (if ok
-                         (setq bebop-remote--missing-roles
-                               (delete role bebop-remote--missing-roles))
+                         (progn
+                           (setq bebop-remote--missing-roles
+                                 (delete role bebop-remote--missing-roles))
+                           (bebop-remote--term-tab role (bebop-remote--target)))
                        (unless (or callback
                                    (member role bebop-remote--missing-roles))
                          (push role bebop-remote--missing-roles)
-                         (message "Bebop: no %s terminal for %s — run %s %s"
-                                  role name bebop-remote-term-program role)))
+                         (message "Bebop: no %s terminal for %s — run %s %s %s"
+                                  role name bebop-remote-term-program role
+                                  (bebop-remote--target))))
                      (when callback (funcall callback ok))))))))
 
 (defun bebop-remote-open-terminal (role &rest ghostty-args)
@@ -1023,18 +1045,43 @@ The host only sees what Dropbox syncs: the org tree."
     (bebop-remote-refresh t)
     (ignore-errors (bebop-remote-select name))))
 
+(defun bebop-remote--tab-name (buffer &optional _buffers)
+  "The host tab label for dashboard BUFFER."
+  (if (equal (buffer-name buffer) bebop-remote-buffer-name)
+      ;; "Matthews-Pro" → "Pro"
+      (car (last (split-string bebop-remote-presence-host "-")))
+    (bebop--host-name)))
+
+(defun bebop-remote--dashboard-tabs ()
+  "The dashboard window's host tabs: this machine, then the host."
+  (seq-filter #'buffer-live-p
+              (list (get-buffer bebop-buffer-name)
+                    (get-buffer bebop-remote-buffer-name))))
+
+(defun bebop-remote--host-tabs (buffer)
+  "Show the host tabs over dashboard BUFFER."
+  (with-current-buffer buffer
+    (setq-local tab-line-tabs-function #'bebop-remote--dashboard-tabs)
+    (setq-local tab-line-tab-name-function #'bebop-remote--tab-name)
+    (setq-local tab-line-close-button-show nil)
+    (setq-local tab-line-new-button-show nil)
+    (tab-line-mode 1)))
+
 (defun bebop-remote--conductor-dashboard (frame)
-  "On a client, show the host's sessions in FRAME's dashboard window."
-  (when bebop-remote-client
+  "Give FRAME's dashboard window host tabs; a client opens on the host's."
+  (unless (equal (bebop--host-name) bebop-resident-host)
     (let ((win (frame-parameter frame 'bebop-dashboard-window))
-          (buf (get-buffer-create bebop-remote-buffer-name)))
-      (when (window-live-p win)
-        (with-current-buffer buf
-          (unless (derived-mode-p 'bebop-remote-mode)
-            (bebop-remote-mode)))
-        (set-window-buffer win buf)
-        (bebop-remote-refresh)
-        (bebop-remote--start-stream)))))
+          (local (get-buffer-create bebop-buffer-name))
+          (remote (get-buffer-create bebop-remote-buffer-name)))
+      (with-current-buffer remote
+        (unless (derived-mode-p 'bebop-remote-mode)
+          (bebop-remote-mode)))
+      (bebop-remote--host-tabs local)
+      (bebop-remote--host-tabs remote)
+      (when (and bebop-remote-client (window-live-p win))
+        (set-window-buffer win remote))
+      (bebop-remote-refresh)
+      (bebop-remote--start-stream))))
 
 (advice-add 'bebop-frame--setup-conductor :after #'bebop-remote--conductor-dashboard)
 
