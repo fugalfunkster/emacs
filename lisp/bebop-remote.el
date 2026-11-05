@@ -208,9 +208,10 @@ The remote counterpart of `bebop--active-session'.")
           (insert bebop-remote--body)
           (bebop-remote--mark-names (point-min) (point))))
         (insert "\n")
-        (dolist (line '("RET: select  TAB: fold  g: refresh  .: mark seen"
-                        "n: new  k: kill  r: resume  a: attach (mosh)"
-                        "w: pin W  W: workbench  P: forward port"))
+        (dolist (line '("RET: select  TAB: fold  h: host  g: refresh  .: mark seen"
+                        "n: new  k: kill  r: resume  e: exile"
+                        "C/D: chart  V/W: venue  N: new set  m: move to set"
+                        "w: pin W  L: workbench layout  a: attach (mosh)  P: forward port"))
           (insert (propertize (concat line "\n")
                               'face '(:inherit shadow :height 0.75))))
         (goto-char (point-min))
@@ -319,7 +320,14 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
     (define-key map (kbd "P")      #'bebop-remote-forward-port)
     (define-key map (kbd ".")      #'bebop-remote-mark-all-seen)
     (define-key map (kbd "w")      #'bebop-remote-workbench)
-    (define-key map (kbd "W")      #'bebop-remote-workbench-layout)
+    (define-key map (kbd "L")      #'bebop-remote-workbench-layout)
+    (define-key map (kbd "e")      #'bebop-remote-exile)
+    (define-key map (kbd "C")      #'bebop-remote-associate-chart)
+    (define-key map (kbd "D")      #'bebop-remote-dissociate-chart)
+    (define-key map (kbd "V")      #'bebop-remote-associate-venue)
+    (define-key map (kbd "W")      #'bebop-remote-dissociate-venue)
+    (define-key map (kbd "N")      #'bebop-remote-new-set)
+    (define-key map (kbd "m")      #'bebop-remote-assign-set)
     (define-key map (kbd "r")      #'bebop-remote-resume)
     (define-key map (kbd "k")      #'bebop-remote-kill)
     (define-key map (kbd "n")      #'bebop-remote-new-session)
@@ -1014,63 +1022,149 @@ The host only sees what Dropbox syncs: the org tree."
                   file bebop-org-dir bebop-remote-host))
     (file-relative-name true root)))
 
+(defun bebop-remote--read-venue (&optional none)
+  "Ask for a venue on the host; return its spec (see `bebop-start-session').
+NONE adds a \"none\" choice, which returns nil."
+  (pcase (completing-read (format "Venue on %s: " bebop-remote-host)
+                          (append '("new" "old" "repo") (when none '("none")))
+                          nil t)
+    ("new"
+     (let* ((repo (completing-read
+                   "Repository: "
+                   (bebop-remote--list "(bebop-list-repos)") nil t))
+            (branch (completing-read
+                     "Branch (type a new name to create): "
+                     (bebop-remote--list
+                      (format "(bebop-list-branches %S)" repo)))))
+       (when (string-empty-p (string-trim branch))
+         (user-error "Branch name cannot be empty"))
+       (list "new" repo branch)))
+    ("old" (list "old" (completing-read
+                        "Existing venue: "
+                        (bebop-remote--list "(bebop-list-venues)") nil t)))
+    ("repo" (list "repo" (completing-read
+                          "Repo: "
+                          (bebop-remote--list "(bebop-list-repos)") nil t)))
+    (_ nil)))
+
+(defun bebop-remote--read-chart (&optional none)
+  "Ask for a chart; return its spec (see `bebop-start-session').
+Offers \"from heading\" and \"use this file\" from an org buffer.
+NONE adds a \"none\" choice, which returns nil."
+  (let* ((in-org (derived-mode-p 'org-mode))
+         (at-heading (and in-org
+                          (ignore-errors
+                            (save-excursion (org-back-to-heading t) t))))
+         (current-file (buffer-file-name)))
+    (pcase (completing-read
+            "Chart: "
+            (append (when at-heading '("from heading"))
+                    (when (and in-org current-file) '("use this file"))
+                    '("new" "old" "org")
+                    (when none '("none")))
+            nil t)
+      ("from heading" (list "heading" (bebop--subtree-text)))
+      ("use this file" (list "file" (bebop-remote--org-relative current-file)))
+      ("new" (list "new"))
+      ("old" (list "file" (bebop-remote--org-relative
+                           (bebop--prompt-existing-chart))))
+      ("org" (list "file" (bebop-remote--org-relative
+                           (bebop--prompt-any-org))))
+      (_ nil))))
+
 (defun bebop-remote-new-session ()
   "Create a session on the host: venue, name, chart, as `bebop-new-session'."
   (interactive)
-  (let* ((venue-choice (completing-read
-                        (format "Venue on %s: " bebop-remote-host)
-                        '("new" "old" "repo" "none") nil t))
-         (venue
-          (pcase venue-choice
-            ("new"
-             (let* ((repo (completing-read
-                           "Repository: "
-                           (bebop-remote--list "(bebop-list-repos)") nil t))
-                    (branch (completing-read
-                             "Branch (type a new name to create): "
-                             (bebop-remote--list
-                              (format "(bebop-list-branches %S)" repo)))))
-               (when (string-empty-p (string-trim branch))
-                 (user-error "Branch name cannot be empty"))
-               (list "new" repo branch)))
-            ("old" (list "old" (completing-read
-                                "Existing venue: "
-                                (bebop-remote--list "(bebop-list-venues)") nil t)))
-            ("repo" (list "repo" (completing-read
-                                  "Repo: "
-                                  (bebop-remote--list "(bebop-list-repos)") nil t)))
-            (_ nil)))
+  (let* ((venue (bebop-remote--read-venue t))
          (default-name (pcase venue
                          (`("new" ,repo ,branch)
                           (format "%s--%s" repo (bebop--sanitize-name branch)))
                          (`(,_ ,dir) dir)))
          (name (read-string "Session name: " default-name))
-         (in-org (derived-mode-p 'org-mode))
-         (at-heading (and in-org
-                          (ignore-errors
-                            (save-excursion (org-back-to-heading t) t))))
-         (current-file (buffer-file-name))
-         (chart-choice (completing-read
-                        "Chart: "
-                        (append (when at-heading '("from heading"))
-                                (when (and in-org current-file) '("use this file"))
-                                '("new" "old" "org" "none"))
-                        nil t))
-         (chart
-          (pcase chart-choice
-            ("from heading" (list "heading" (bebop--subtree-text)))
-            ("use this file" (list "file" (bebop-remote--org-relative current-file)))
-            ("new" (list "new"))
-            ("old" (list "file" (bebop-remote--org-relative
-                                 (bebop--prompt-existing-chart))))
-            ("org" (list "file" (bebop-remote--org-relative
-                                 (bebop--prompt-any-org))))
-            (_ nil))))
+         (chart (bebop-remote--read-chart t)))
     (bebop-remote--eval-json
      (format "(bebop-start-session %S '%S '%S)" name venue chart))
     (message "Bebop: started %s on %s" name bebop-remote-host)
     (bebop-remote-refresh t)
     (ignore-errors (bebop-remote-select name))))
+
+(defun bebop-remote--name-at-point ()
+  "The far session on this row, or a user error."
+  (or (get-text-property (point) 'bebop-remote-name)
+      (user-error "No session at point")))
+
+(defun bebop-remote--row (name)
+  "The last snapshot's row plist for far session NAME."
+  (seq-find (lambda (s) (equal (plist-get s :name) name))
+            bebop-remote--sessions))
+
+(defun bebop-remote-exile ()
+  "Exile the far session at point, after the host's own confirmation text."
+  (interactive)
+  (let* ((name (bebop-remote--name-at-point))
+         (desc (bebop-remote--eval-json (format "(bebop-exile-preview %S)" name))))
+    (unless (yes-or-no-p (format "Exile \"%s\" on %s? (%s) "
+                                 name bebop-remote-host desc))
+      (user-error "Exile cancelled"))
+    (bebop-remote--eval-json (format "(bebop-discard-session %S)" name))
+    (when (equal name bebop-remote--active)
+      (setq bebop-remote--active nil))
+    (message "Bebop: exiled %s on %s" name bebop-remote-host)
+    (bebop-remote-refresh)))
+
+(defun bebop-remote-associate-chart ()
+  "Give the far session at point a chart."
+  (interactive)
+  (let ((name (bebop-remote--name-at-point)))
+    (when (plist-get (bebop-remote--row name) :chart)
+      (user-error "%s already has a chart — D dissociates it first" name))
+    (bebop-remote--eval-json
+     (format "(bebop-set-session-chart %S '%S)" name (bebop-remote--read-chart)))
+    (bebop-remote-refresh)))
+
+(defun bebop-remote-dissociate-chart ()
+  "Remove the chart from the far session at point (the file stays)."
+  (interactive)
+  (let ((name (bebop-remote--name-at-point)))
+    (bebop-remote--eval-json (format "(bebop-set-session-chart %S nil)" name))
+    (message "Bebop: dissociated chart from %s" name)
+    (bebop-remote-refresh)))
+
+(defun bebop-remote-associate-venue ()
+  "Give the far session at point a venue."
+  (interactive)
+  (let ((name (bebop-remote--name-at-point)))
+    (when (plist-get (bebop-remote--row name) :venue)
+      (user-error "%s already has a venue — W dissociates it first" name))
+    (bebop-remote--eval-json
+     (format "(bebop-set-session-venue %S '%S)" name (bebop-remote--read-venue)))
+    (bebop-remote-refresh)))
+
+(defun bebop-remote-dissociate-venue ()
+  "Remove the venue from the far session at point (the worktree stays)."
+  (interactive)
+  (let ((name (bebop-remote--name-at-point)))
+    (bebop-remote--eval-json (format "(bebop-set-session-venue %S nil)" name))
+    (message "Bebop: dissociated venue from %s" name)
+    (bebop-remote-refresh)))
+
+(defun bebop-remote-new-set (set)
+  "Declare SET on the host, as N does locally."
+  (interactive (list (read-string (format "New set on %s: " bebop-remote-host))))
+  (when (string-empty-p (string-trim set))
+    (user-error "Set name cannot be empty"))
+  (bebop-remote--eval (format "(progn (bebop-new-set %S) t)" set))
+  (bebop-remote-refresh))
+
+(defun bebop-remote-assign-set ()
+  "Move the far session at point to a set; empty ungroups it."
+  (interactive)
+  (let* ((name (bebop-remote--name-at-point))
+         (set (completing-read (format "Move %s to set (empty to ungroup): " name)
+                               (bebop-remote--list "(bebop-list-sets)"))))
+    (bebop-remote--eval (format "(progn (bebop-assign-set %S %S) t)" name
+                                (unless (string-empty-p (string-trim set)) set)))
+    (bebop-remote-refresh)))
 
 (defun bebop-remote--host-tabs ()
   "The dashboard host tabs as (LABEL . BUFFER): this machine, the host.

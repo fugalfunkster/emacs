@@ -118,6 +118,40 @@ The citizen form of `bebop-kill-session', for callers with no minibuffer."
   "Return the venue directory names as a JSON array."
   (json-serialize (vconcat (bebop--list-venues))))
 
+(defun bebop--venue-from-spec (venue who)
+  "Resolve VENUE spec (see the section text) to a path, or nil.
+WHO names the calling verb in errors."
+  (pcase venue
+    ('nil nil)
+    (`("new" ,repo ,branch) (bebop--add-venue repo branch))
+    (`("old" ,dir)
+     (let ((d (expand-file-name dir (expand-file-name bebop-venues-dir))))
+       (unless (member dir (bebop--list-venues))
+         (error "%s: no venue named %s" who dir))
+       d))
+    (`("repo" ,repo)
+     (unless (member repo (bebop--list-repos))
+       (error "%s: no repository named %s" who repo))
+     (expand-file-name repo (expand-file-name bebop-repos-dir)))
+    (_ (error "%s: bad venue spec %S" who venue))))
+
+(defun bebop--chart-from-spec (name chart who)
+  "Resolve CHART spec for session NAME to a path, or nil.
+A new or heading chart is written here. WHO names the verb in errors."
+  (pcase chart
+    ('nil nil)
+    (`("new") (bebop--create-new-chart name))
+    (`("heading" ,text)
+     (let ((path (bebop--create-new-chart name)))
+       (bebop--cue-to-chart text path)
+       path))
+    (`("file" ,rel)
+     (let ((f (expand-file-name rel (expand-file-name bebop-org-dir))))
+       (unless (file-exists-p f)
+         (error "%s: %s is not here (Dropbox lag?)" who rel))
+       f))
+    (_ (error "%s: bad chart spec %S" who chart))))
+
 (defun bebop-start-session (name venue chart)
   "Create session NAME from the VENUE and CHART specs, asking nothing.
 See the section text for the spec shapes. Returns JSON. The citizen
@@ -125,39 +159,50 @@ form of `bebop-new-session', for callers with no minibuffer."
   (unless (and (stringp name) (not (string-empty-p (string-trim name))))
     (error "bebop-start-session: NAME must be a non-empty string"))
   (bebop--assert-name-available name)
-  (let* ((venue-path
-          (pcase venue
-            ('nil nil)
-            (`("new" ,repo ,branch) (bebop--add-venue repo branch))
-            (`("old" ,dir)
-             (let ((d (expand-file-name dir (expand-file-name bebop-venues-dir))))
-               (unless (member dir (bebop--list-venues))
-                 (error "bebop-start-session: no venue named %s" dir))
-               d))
-            (`("repo" ,repo)
-             (unless (member repo (bebop--list-repos))
-               (error "bebop-start-session: no repository named %s" repo))
-             (expand-file-name repo (expand-file-name bebop-repos-dir)))
-            (_ (error "bebop-start-session: bad venue spec %S" venue))))
-         (chart-path
-          (pcase chart
-            ('nil nil)
-            (`("new") (bebop--create-new-chart name))
-            (`("heading" ,text)
-             (let ((path (bebop--create-new-chart name)))
-               (bebop--cue-to-chart text path)
-               path))
-            (`("file" ,rel)
-             (let ((f (expand-file-name rel (expand-file-name bebop-org-dir))))
-               (unless (file-exists-p f)
-                 (error "bebop-start-session: %s is not here (Dropbox lag?)" rel))
-               f))
-            (_ (error "bebop-start-session: bad chart spec %S" chart)))))
+  (let* ((venue-path (bebop--venue-from-spec venue "bebop-start-session"))
+         (chart-path (bebop--chart-from-spec name chart "bebop-start-session")))
     (bebop--create-session name venue-path chart-path
                            (when bebop-use-docker 'docker))
     (json-serialize (list :started name
                           :venue (or venue-path :null)
                           :chart (or chart-path :null)))))
+
+(defun bebop-exile-preview (name)
+  "Describe what exiling NAME discards, as a JSON string."
+  (unless (member name (bebop--teardown-names))
+    (error "bebop-exile-preview: no session named %s" name))
+  (json-serialize (bebop--teardown-desc name)))
+
+(defun bebop-discard-session (name)
+  "Exile session NAME without prompts. Returns JSON.
+The citizen form of `bebop-exile-session'; confirm before calling."
+  (unless (member name (bebop--teardown-names))
+    (error "bebop-discard-session: no session named %s" name))
+  (bebop-teardown-session name)
+  (json-serialize (list :exiled name)))
+
+(defun bebop-set-session-chart (name chart)
+  "Associate CHART (a spec) with session NAME; nil dissociates. JSON."
+  (if (null chart)
+      (bebop-dissociate-chart name)
+    (when (bebop--session-chart name)
+      (error "%s already has a chart; dissociate it first" name))
+    (let ((path (bebop--chart-from-spec name chart "bebop-set-session-chart")))
+      (bebop--upsert-session name (list :chart path))
+      (bebop--render)))
+  (json-serialize (list :session name :chart (or (bebop--session-chart name) :null))))
+
+(defun bebop-set-session-venue (name venue)
+  "Associate VENUE (a spec) with session NAME; nil dissociates. JSON.
+As locally, a running agent's working directory does not move."
+  (if (null venue)
+      (bebop-dissociate-venue name)
+    (when (bebop--session-venue name)
+      (error "%s already has a venue; dissociate it first" name))
+    (let ((path (bebop--venue-from-spec venue "bebop-set-session-venue")))
+      (bebop--upsert-session name (list :venue path))
+      (bebop--render)))
+  (json-serialize (list :session name :venue (or (bebop--session-venue name) :null))))
 
 (defconst bebop--snapshot-props
   '(face font-lock-face display bebop-session-name bebop-on-deck-name bebop-fold)
