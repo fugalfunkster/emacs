@@ -3038,6 +3038,9 @@ Move point backward to the previous pair line.
 Select the session at point as active and focus the composition buffer.
 
 #+begin_src emacs-lisp
+(declare-function bebop-derived-act "bebop-set")
+(declare-function bebop-derived--item-at-point "bebop-set")
+
 (defun bebop-activate-at-point ()
   "Select the session under point as active and focus the composition buffer."
   (interactive)
@@ -3052,7 +3055,10 @@ Select the session at point as active and focus the composition buffer.
                                 (get-buffer (format "*bebop-session: %s*" name))))))
             (when comp-win
               (select-window comp-win))))
-      (message "No pair at point"))))
+      (if-let ((item (and (fboundp 'bebop-derived--item-at-point)
+                          (bebop-derived--item-at-point))))
+          (bebop-derived-act item)
+        (message "No pair at point")))))
 #+end_src
 
 
@@ -6282,7 +6288,7 @@ hoisting within sections, piercing through folds, kind glyphs on
 headings — and the predicate outlived it.
 
 #+begin_src emacs-lisp
-(defconst bebop-set--attention-order '(blocked waiting pipeline comments)
+(defconst bebop-set--attention-order '(blocked waiting pipeline comments merge)
   "Attention kinds, worst first — the HUD's severity scale.")
 
 (defun bebop-set--attention-kinds (row)
@@ -6298,11 +6304,14 @@ or draft MR: a closed or merged MR's threads ask nothing of you."
          kinds)
     (let ((e (bebop-mr--entry name)))
       (when (and e
-                 (member (plist-get e :state) '("open" "draft"))
-                 (> (or (plist-get e :unresolved) 0) 0)
                  (not (bebop-mr--stale-p e))
                  (bebop-set--unseen-mr-p name (bebop-mr--key e)))
-        (push 'comments kinds)))
+        (cond ((and (member (plist-get e :state) '("open" "draft"))
+                    (> (bebop-mr--on-me e) 0))
+               (push 'comments kinds))
+              ((and (equal (plist-get e :state) "open")
+                    (plist-get e :mergeable))
+               (push 'merge kinds)))))
     (let ((p (bebop-pipeline--entry name)))
       (when (and p (equal (plist-get p :status) "failed")
                  (not (bebop-pipeline--stale-p p))
@@ -6345,11 +6354,11 @@ the older one for as long as the hour digits agree."
   "Return ROWS' attention counts by kind as a string, or nil when quiet.
 =● 2 ✗ 1 ◆ 3= — agents needing you (blocked and waiting share the
 glyph: one ask, a human at the keyboard), failed pipelines, unseen
-comments; zero-count kinds vanish. The one spelling of
-attention-by-kind: set headings and the mode-line periphery both
-render this string, so they can never disagree. Unpropertized —
-each surface picks its own face."
-  (let ((dots 0) (pipes 0) (mrs 0))
+comments, MRs ready to merge (⤵); zero-count kinds vanish. The one
+spelling of attention-by-kind: set headings and the mode-line
+periphery both render this string, so they can never disagree.
+Unpropertized — each surface picks its own face."
+  (let ((dots 0) (pipes 0) (mrs 0) (merges 0))
     (dolist (r rows)
       (let ((kinds (bebop-set--attention-kinds r)))
         (when (or (memq 'blocked kinds) (memq 'waiting kinds))
@@ -6357,14 +6366,17 @@ each surface picks its own face."
         (when (memq 'pipeline kinds)
           (setq pipes (1+ pipes)))
         (when (memq 'comments kinds)
-          (setq mrs (1+ mrs)))))
-    (when (> (+ dots pipes mrs) 0)
+          (setq mrs (1+ mrs)))
+        (when (memq 'merge kinds)
+          (setq merges (1+ merges)))))
+    (when (> (+ dots pipes mrs merges) 0)
       (mapconcat
        #'identity
        (delq nil
              (list (when (> dots 0) (format "● %d" dots))
                    (when (> pipes 0) (format "✗ %d" pipes))
-                   (when (> mrs 0) (format "◆ %d" mrs))))
+                   (when (> mrs 0) (format "◆ %d" mrs))
+                   (when (> merges 0) (format "⤵ %d" merges))))
        "  "))))
 #+end_src
 
@@ -6922,7 +6934,12 @@ signal that pulse has stopped beating."
 
 (defvar bebop--external-cache nil
   "Alist of (SESSION . PLIST). PLIST keys: :mr :pipeline.
-:mr is (:state :unresolved :iid :at); :pipeline is (:status :at).")
+:mr is (:state :unresolved :iid :at :on-me :mergeable); :pipeline is
+\(:status :at). :on-me is nil when the writer did not count it.")
+
+(defvar bebop--derived nil
+  "Alist of (SET . (:at STAMP :items LIST)) for the derived sets.
+Items are hash tables, as pulse wrote them. See *** Derived sets.")
 
 (defun bebop-external--load ()
   "Load this host's external-status cache.
@@ -6933,7 +6950,8 @@ config tree, so a fresh host with no sidecar of its own imported
 whichever machine wrote that file last, and presented weeks-old MR
 state as this machine's current view. A host whose own sidecar is
 missing has no MR history; the next pulse gives it one."
-  (setq bebop--external-cache nil)
+  (setq bebop--external-cache nil
+        bebop--derived nil)
   (when (file-exists-p bebop-external-cache-file)
     (condition-case nil
         (let* ((doc (with-temp-buffer
@@ -6950,14 +6968,23 @@ missing has no MR history; the next pulse gives it one."
                                     (list :state (gethash "state" m)
                                           :unresolved (or (gethash "unresolved" m) 0)
                                           :iid (gethash "iid" m)
-                                          :at (gethash "at" m))))
+                                          :at (gethash "at" m)
+                                          :on-me (gethash "on_me" m)
+                                          :mergeable (eq t (gethash "mergeable" m)))))
                             (when-let ((p (gethash "pipeline" e)))
                               (list :pipeline
                                     (list :status (gethash "status" p)
                                           :at (gethash "at" p))))))
                      bebop--external-cache))
-             sessions)))
-      (error (setq bebop--external-cache nil)))))
+             sessions))
+          (when-let ((derived (gethash "derived" doc)))
+            (maphash (lambda (set d)
+                       (push (cons set (list :at (gethash "at" d)
+                                             :items (append (gethash "items" d) nil)))
+                             bebop--derived))
+                     derived)))
+      (error (setq bebop--external-cache nil
+                   bebop--derived nil)))))
 
 (defun bebop-external--save ()
   "Persist the external-status cache."
@@ -6971,6 +6998,8 @@ missing has no MR history; the next pulse gives it one."
             (puthash "unresolved" (or (plist-get m :unresolved) 0) h)
             (when (plist-get m :iid) (puthash "iid" (plist-get m :iid) h))
             (when (plist-get m :at) (puthash "at" (plist-get m :at) h))
+            (when (plist-get m :on-me) (puthash "on_me" (plist-get m :on-me) h))
+            (when (plist-get m :mergeable) (puthash "mergeable" t h))
             (puthash "mr" h e)))
         (when-let ((p (plist-get (cdr cell) :pipeline)))
           (let ((h (make-hash-table :test #'equal)))
@@ -6981,6 +7010,14 @@ missing has no MR history; the next pulse gives it one."
           (puthash (car cell) e sessions))))
     (puthash "version" 1 doc)
     (puthash "sessions" sessions doc)
+    (when bebop--derived
+      (let ((derived (make-hash-table :test #'equal)))
+        (dolist (cell bebop--derived)
+          (let ((d (make-hash-table :test #'equal)))
+            (puthash "at" (plist-get (cdr cell) :at) d)
+            (puthash "items" (vconcat (plist-get (cdr cell) :items)) d)
+            (puthash (car cell) d derived)))
+        (puthash "derived" derived doc)))
     (make-directory (file-name-directory bebop-external-cache-file) t)
     (with-temp-file bebop-external-cache-file
       (insert (json-serialize doc)))))
@@ -6992,22 +7029,28 @@ missing has no MR history; the next pulse gives it one."
         (push cell bebop--external-cache)
         cell)))
 
-(defun bebop-mr-cache-set (session state unresolved &optional iid)
+(defun bebop-mr-cache-set (session state unresolved &optional iid on-me mergeable)
   "Cache MR STATE (\"draft\"|\"open\"|\"merged\") and UNRESOLVED count for SESSION.
+ON-ME counts the unresolved threads where a teammate spoke last;
+MERGEABLE is non-nil for an approved MR GitLab would merge now. Both
+are optional: a writer that does not count them (roundup) leaves ON-ME
+nil, and the glyph then treats every unresolved thread as yours.
 Citizen write verb — pulse and roundup call it as a byproduct of
 their GitLab fetches; the render path only reads. Stamps now.
 A rising unresolved count dings (see Periphery); a first observation
 never does — a transition needs a before."
   (let* ((cell (bebop-external--cell session))
          (prior (plist-get (cdr cell) :mr))
-         (old (and prior (or (plist-get prior :unresolved) 0)))
+         (old (and prior (bebop-mr--on-me prior)))
          (new (or unresolved 0)))
     (setcdr cell (plist-put (cdr cell) :mr
                             (list :state state
                                   :unresolved new
                                   :iid iid
-                                  :at (bebop--now-string))))
-    (when (and old (> new old))
+                                  :at (bebop--now-string)
+                                  :on-me on-me
+                                  :mergeable (and mergeable t))))
+    (when (and old (> (or on-me new) old))
       (bebop-hud--notify "new MR comment on %s (%d unresolved)"
                          session new)))
   (bebop-external--save)
@@ -7048,13 +7091,25 @@ observation never does."
   "Return SESSION's cached pipeline plist, or nil."
   (plist-get (cdr (assoc session bebop--external-cache)) :pipeline))
 
+(defun bebop-mr--on-me (entry)
+  "Return how many of ENTRY's unresolved threads wait on you.
+Falls back to the unresolved count when the writer did not count."
+  (or (plist-get entry :on-me) (plist-get entry :unresolved) 0))
+
 (defun bebop-mr--key (entry)
   "Return ENTRY's comparable state key, e.g. \"open:2\", or nil.
 State plus unresolved count — a new comment on an unchanged MR is
-still a change worth surfacing. This is what ack snapshots store."
+still a change worth surfacing. This is what ack snapshots store.
+Whose move and mergeability extend the key only when they say more
+than the count: \"open:2/1\" (one of two threads waits on you),
+\"open:0:merge\". Keys written before those fields stay valid, so an
+upgrade does not flash every MR unseen."
   (when entry
-    (format "%s:%d" (or (plist-get entry :state) "?")
-            (or (plist-get entry :unresolved) 0))))
+    (let ((unresolved (or (plist-get entry :unresolved) 0))
+          (on-me (plist-get entry :on-me)))
+      (concat (format "%s:%d" (or (plist-get entry :state) "?") unresolved)
+              (if (and on-me (/= on-me unresolved)) (format "/%d" on-me) "")
+              (if (plist-get entry :mergeable) ":merge" "")))))
 
 (defun bebop-external--stale-p (entry hours)
   "Return non-nil if ENTRY's :at is older than HOURS.
@@ -7081,9 +7136,11 @@ Status alone: a re-run that lands on the same status is not a change."
 
 (defun bebop-mr--gutter-glyph (session)
   "Return the single-char MR gutter glyph for SESSION, or nil if uncached.
-◆ = unresolved teammate comments — colored even when acked, because
-the comments still want answers; ✓ merged, ✎ draft, ◇ open render
-dim — they ask nothing of you. A glyph whose state changed since your
+◆ = threads where a teammate spoke last — colored even when acked,
+because they still want answers; a ◆ whose threads all wait on the
+other side renders dim. ⤵ = approved and mergeable, colored until
+you merge. ✓ merged, ✎ draft, ◇ open render dim — they ask nothing
+of you. A glyph whose state changed since your
 last visit renders bold in full color until acked (the seen-unseen
 mechanic; merged flashes green once, then dims). Stale entries render
 dim regardless — never emphasize old news. The exact unresolved count
@@ -7092,15 +7149,21 @@ stays one char wide."
   (when-let ((e (bebop-mr--entry session)))
     (let* ((state (plist-get e :state))
            (unresolved (or (plist-get e :unresolved) 0))
+           (on-me (bebop-mr--on-me e))
            (stale (bebop-mr--stale-p e))
            (unseen (and (not stale)
                         (bebop-set--unseen-mr-p session (bebop-mr--key e))))
            (spec (cond
                   ;; ◆ only for open/draft: comments on a closed or
                   ;; merged MR ask nothing of you.
-                  ((and (> unresolved 0)
+                  ((and (> on-me 0)
                         (member state '("open" "draft")))
                    (cons "◆" 'bebop-dot-waiting-face))
+                  ((and (plist-get e :mergeable) (equal state "open"))
+                   (cons "⤵" 'bebop-dot-active-face))
+                  ((and (> unresolved 0)
+                        (member state '("open" "draft")))
+                   (cons "◆" nil))
                   ((equal state "merged") (cons "✓" (and unseen 'bebop-dot-active-face)))
                   ((equal state "draft")  (cons "✎" nil))
                   ((equal state "open")   (cons "◇" nil))
@@ -7114,12 +7177,15 @@ stays one char wide."
       (when spec
         (propertize (car spec)
                     'face fc 'font-lock-face fc
-                    'help-echo (format "MR !%s · %s%s%s"
+                    'help-echo (format "MR !%s · %s%s%s%s"
                                        (or (plist-get e :iid) "?")
                                        (or state "?")
                                        (if (> unresolved 0)
-                                           (format " · %d unresolved" unresolved)
+                                           (format " · %d unresolved, %d on you"
+                                                   unresolved on-me)
                                          "")
+                                       (if (plist-get e :mergeable)
+                                           " · ready to merge" "")
                                        (if stale " · stale" "")))))))
 
 (defun bebop-pipeline--gutter-glyph (session)
@@ -7399,7 +7465,8 @@ and its unacked rows pierced through below it
 
 (defun bebop-set--render-body ()
   "Insert the setlist tree — the dashboard body.
-Order: live ungrouped sessions (flat strip), sets, Ungrouped.
+Order: live ungrouped sessions (flat strip), sets, the derived sets
+\(`bebop-derived--insert-region'), Ungrouped.
 Attention renders in place: hoisted to the top of its section
 (`bebop-set--child<'), pierced through a folded one
 (`bebop-set--insert-pierced'), counted by kind on the heading."
@@ -7421,6 +7488,7 @@ Attention renders in place: hoisted to the top of its section
           (insert "\n")))
       (dolist (g (plist-get groups :sets))
         (bebop-set--insert-set g width))
+      (bebop-derived--insert-region width)
       (when-let ((un (plist-get groups :ungrouped)))
         (insert "\n")
         (let ((section
@@ -7437,6 +7505,235 @@ Attention renders in place: hoisted to the top of its section
           (bebop-set--insert-pierced section un width))))))
 #+end_src
 
+*** Derived sets
+
+A set you declare holds sessions. A derived set holds GitLab merge
+requests, and bebop builds it rather than you: pulse rewrites it on
+every beat (see the Pulse chapter, /Derived sets/). There are two:
+
+- *Unsessioned* — your open MRs that no session holds.
+- *Reviewing* — teammates' MRs that name you as reviewer.
+
+They sit in their own region below the sets and above Ungrouped,
+folded by default. A folded heading still says what it holds:
+=Reviewing  3 your move · 14=. Open, your-move rows lead, newest
+first. Whose move is pulse's call, made per item:
+
+- Unsessioned: a thread where a teammate spoke last (◆), approved and
+  mergeable (⤵), or a failed pipeline (✗).
+- Reviewing: you have not approved, and either you have not spoken
+  yet (◇) or someone answered in a thread you spoke in (◆).
+
+=RET= acts on the item. On Reviewing it sends =review PROJECT!IID= to
+the =review-mr= session, which runs the review skill. On Unsessioned
+it offers to start a session on the MR's branch, with a new venue and
+chart; orientation then reads the ticket. =o= opens the MR in the
+browser. The rows carry =bebop-mr-item=, a plist of plain strings and
+numbers, so the remote dashboard can act on them too.
+
+The sets live in the status sidecar beside the per-session MR cache,
+under ="derived"=, because they are the same kind of thing: what
+GitLab told this host, rewritten whole, stale when pulse stops.
+
+#+begin_src emacs-lisp
+(defconst bebop-derived-set-names '("Unsessioned" "Reviewing")
+  "The derived sets, in render order.")
+
+(defcustom bebop-review-session "review-mr"
+  "Session that reviews MRs; RET on a Reviewing item jams it."
+  :type 'string
+  :group 'bebop)
+
+(defun bebop-derived--your-move-p (item)
+  "Non-nil when ITEM waits on you. Pulse decides; JSON false is not t."
+  (eq t (gethash "your_move" item)))
+
+(defun bebop-derived-set-put (set json)
+  "Replace derived SET's items with the JSON array, stamped now.
+Citizen write verb for pulse. Dings once for each item that became
+your move since the last beat."
+  (unless (member set bebop-derived-set-names)
+    (error "bebop-derived-set-put: unknown derived set %s" set))
+  (let* ((items (append (json-parse-string json) nil))
+         (before (mapcar (lambda (it) (gethash "url" it))
+                         (seq-filter #'bebop-derived--your-move-p
+                                     (plist-get (cdr (assoc set bebop--derived))
+                                                :items))))
+         (first (null (assoc set bebop--derived))))
+    (setf (alist-get set bebop--derived nil nil #'equal)
+          (list :at (bebop--now-string) :items items))
+    (unless first
+      (dolist (it items)
+        (when (and (bebop-derived--your-move-p it)
+                   (not (member (gethash "url" it) before)))
+          (bebop-hud--notify "%s: %s" set (gethash "ref" it)))))
+    (bebop-external--save)
+    (format "derived set %s: %d" set (length items))))
+
+(defun bebop-derived--item-plist (set item)
+  "The `bebop-mr-item' property for ITEM of SET: plain, printable."
+  (list :set set
+        :ref (gethash "ref" item)
+        :project (gethash "project" item)
+        :iid (gethash "iid" item)
+        :branch (gethash "branch" item)
+        :url (gethash "url" item)))
+
+(defun bebop-derived--glyphs (set item)
+  "Return the gutter string for ITEM of SET: MR glyph at 6, pipeline at 8."
+  (let* ((move (bebop-derived--your-move-p item))
+         (mr (if (equal set "Reviewing")
+                 (cond ((equal (gethash "review" item) "approved")
+                        (cons "✓" 'shadow))
+                       ((eq t (gethash "replied" item))
+                        (cons "◆" 'bebop-dot-waiting-face))
+                       (move (cons "◇" 'bebop-dot-waiting-face))
+                       (t (cons "◆" 'shadow)))
+               (cond ((> (or (gethash "on_me" item) 0) 0)
+                      (cons "◆" 'bebop-dot-waiting-face))
+                     ((eq t (gethash "mergeable" item))
+                      (cons "⤵" 'bebop-dot-active-face))
+                     ((> (or (gethash "unresolved" item) 0) 0)
+                      (cons "◆" 'shadow))
+                     (t (cons "◇" 'shadow)))))
+         (pipeline (gethash "pipeline" item))
+         (pipe (cond ((equal pipeline "failed")
+                      (bebop-set--prop "✗" 'bebop-dot-waiting-face))
+                     ((member pipeline '("running" "pending" "created"))
+                      (bebop-set--prop "⟳" 'shadow)))))
+    (concat (bebop-set--stop 6)
+            (bebop-set--prop (car mr) (cdr mr))
+            (bebop-set--stop 8)
+            (or pipe "")
+            (bebop-set--stop bebop-set--name-col))))
+
+(defun bebop-derived--insert-item (set item width)
+  "Insert one MR line for ITEM of derived SET."
+  (let* ((move (bebop-derived--your-move-p item))
+         (start (point))
+         (title-col (+ bebop-set--name-col width))
+         (room (max 20 (- (window-width) title-col 7)))
+         (age (bebop-set--age-string (gethash "updated" item))))
+    (insert (bebop-derived--glyphs set item)
+            "    "
+            (bebop-set--prop (gethash "ref" item)
+                             (if move 'bebop-session-face 'shadow))
+            (bebop-set--stop title-col)
+            (bebop-set--prop
+             (truncate-string-to-width
+              (concat (gethash "title" item)
+                      (if (equal set "Reviewing")
+                          (format " — %s" (gethash "author" item))
+                        ""))
+              room nil nil "…")
+             'shadow))
+    (when age
+      (insert (bebop-set--stop '(- right 5))
+              (bebop-set--prop (format "%4s" age) 'shadow)))
+    (insert "\n")
+    (put-text-property start (point) 'bebop-mr-item
+                       (bebop-derived--item-plist set item))))
+
+(defun bebop-derived--item< (a b)
+  "Your-move items first, then the most recently updated."
+  (let ((ma (bebop-derived--your-move-p a))
+        (mb (bebop-derived--your-move-p b)))
+    (if (eq ma mb)
+        (string> (gethash "updated" a "") (gethash "updated" b ""))
+      ma)))
+
+(defun bebop-derived--insert-region (width)
+  "Insert the derived sets that have items, each a folded section."
+  (dolist (set bebop-derived-set-names)
+    (when-let* ((cell (cdr (assoc set bebop--derived)))
+                (items (plist-get cell :items)))
+      (let* ((moves (seq-count #'bebop-derived--your-move-p items))
+             (stale (bebop-external--stale-p cell bebop-mr-stale-hours)))
+        (insert "\n")
+        (magit-insert-section (bebop-derived (concat "derived/" set) t)
+          (magit-insert-heading
+            (concat (bebop-set--stop bebop-set--name-col)
+                    (bebop-set--prop set '(:weight bold))
+                    (bebop-set--stop (+ bebop-set--name-col width))
+                    " "
+                    (if (and (> moves 0) (not stale))
+                        (bebop-set--prop (format "%d your move" moves)
+                                         '(bebop-hud-unseen-face
+                                           bebop-dot-waiting-face))
+                      "")
+                    (bebop-set--prop
+                     (format "%s%d%s" (if (and (> moves 0) (not stale)) " · " "")
+                             (length items) (if stale " · stale" ""))
+                     'shadow)))
+          (dolist (it (sort (copy-sequence items) #'bebop-derived--item<))
+            (bebop-derived--insert-item set it width)))))))
+
+(defun bebop-derived--item-at-point ()
+  "Return the `bebop-mr-item' plist at point, or nil."
+  (get-text-property (point) 'bebop-mr-item))
+
+(defun bebop-derived--repo (item)
+  "Return the local repository name for ITEM's project."
+  (car (last (split-string (plist-get item :project) "/"))))
+
+(defun bebop-derived--session-name (item)
+  "Name for a session on ITEM's branch: the venue name it will get."
+  (format "%s--%s" (bebop-derived--repo item)
+          (bebop--sanitize-name (plist-get item :branch))))
+
+(defun bebop-derived-review (item)
+  "Send ITEM to the review session as a review request. Asks nothing.
+Citizen verb: the remote dashboard calls it on the host."
+  (unless (assoc bebop-review-session bebop--live-sessions)
+    (user-error "No live %s session — r resumes it" bebop-review-session))
+  (bebop-jam bebop-review-session
+             (format "review %s%s" (plist-get item :project)
+                     (substring (plist-get item :ref)
+                                (string-search "!" (plist-get item :ref)))))
+  bebop-review-session)
+
+(defun bebop-derived-start (item)
+  "Start a session on ITEM's branch with a new venue and chart. Asks nothing.
+Fetches the branch first, so an MR pushed from another machine has a
+local branch to check out. Returns the session name. Citizen verb."
+  (let* ((repo (bebop-derived--repo item))
+         (branch (plist-get item :branch))
+         (repo-path (expand-file-name repo (expand-file-name bebop-repos-dir)))
+         (name (bebop-derived--session-name item)))
+    (unless (file-directory-p repo-path)
+      (user-error "No repository %s in %s" repo bebop-repos-dir))
+    (call-process "git" nil nil nil "-C" repo-path "fetch" "-q" "origin" branch)
+    (unless (eq 0 (call-process "git" nil nil nil "-C" repo-path
+                                "rev-parse" "-q" "--verify"
+                                (concat "refs/heads/" branch)))
+      (unless (eq 0 (call-process "git" nil nil nil "-C" repo-path
+                                  "branch" "--track" branch
+                                  (concat "origin/" branch)))
+        (user-error "Cannot make a local branch %s in %s" branch repo)))
+    (bebop-start-session name (list "new" repo branch) (list "new"))
+    name))
+
+(defun bebop-derived-act (item)
+  "Act on derived ITEM: review it, or start a session for it."
+  (pcase (plist-get item :set)
+    ("Reviewing"
+     (let ((session (bebop-derived-review item)))
+       (bebop-select-session session)
+       (message "Bebop: %s asked to review %s" session (plist-get item :ref))))
+    ("Unsessioned"
+     (let ((name (bebop-derived--session-name item)))
+       (when (y-or-n-p (format "Start %s on %s? " name (plist-get item :branch)))
+         (bebop-derived-start item)
+         (message "Bebop: started %s" name))))))
+
+(defun bebop-derived-browse ()
+  "Open the MR at point in the browser."
+  (interactive)
+  (if-let ((item (bebop-derived--item-at-point)))
+      (browse-url (plist-get item :url))
+    (user-error "No merge request at point")))
+#+end_src
+
 *** Plug in: renderer, keybindings, cheatsheet
 
 #+begin_src emacs-lisp
@@ -7446,7 +7743,8 @@ Attention renders in place: hoisted to the top of its section
       '("RET: select  TAB: fold"
         "n: new  k: kill  r: resume  e: exile"
         "C/D: chart  V/W: venue"
-        "N: new set  m: move to set  g: refresh  .: mark seen"))
+        "N: new set  m: move to set  g: refresh  .: mark seen"
+        "o: open MR in browser (derived sets)"))
 
 (defun bebop-set-toggle ()
   "Toggle the section at point, then re-render the dashboard.
@@ -7464,6 +7762,7 @@ not merely flip magit's visibility overlays."
 (define-key bebop-dashboard-mode-map (kbd "N") #'bebop-new-set)
 (define-key bebop-dashboard-mode-map (kbd "m") #'bebop-assign-set)
 (define-key bebop-dashboard-mode-map (kbd ".") #'bebop-mark-all-seen)
+(define-key bebop-dashboard-mode-map (kbd "o") #'bebop-derived-browse)
 
 (bebop-set--load)
 (bebop-external--load)
@@ -7800,7 +8099,8 @@ escaped.
 
 #+begin_src emacs-lisp
 (defconst bebop--snapshot-props
-  '(face font-lock-face display bebop-session-name bebop-on-deck-name bebop-fold)
+  '(face font-lock-face display bebop-session-name bebop-on-deck-name bebop-fold
+         bebop-mr-item)
   "Text properties a dashboard snapshot keeps.")
 
 (defun bebop--snapshot-clean (string)
@@ -7840,7 +8140,7 @@ value → `hide' or `show'. See the section prose for the reply shape."
               (bebop-set--render-body)
               (let ((tops (oref magit-root-section children)))
                 (dolist (s tops)
-                  (when (memq (oref s type) '(bebop-set bebop-ungrouped))
+                  (when (memq (oref s type) '(bebop-set bebop-ungrouped bebop-derived))
                     (put-text-property (oref s start)
                                        (or (oref s content) (oref s end))
                                        'bebop-fold
@@ -8869,7 +9169,8 @@ The remote counterpart of `bebop--active-session'.")
         (dolist (line '("RET: select  TAB: fold  h: host  g: refresh  .: mark seen"
                         "n: new  k: kill  r: resume  e: exile"
                         "C/D: chart  V/W: venue  N: new set  m: move to set"
-                        "w: pin W  L: workbench layout  a: attach (mosh)  P: forward port"))
+                        "w: pin W  L: workbench layout  a: attach (mosh)  P: forward port"
+                        "o: open MR in browser (derived sets)"))
           (insert (propertize (concat line "\n")
                               'face '(:inherit shadow :height 0.75))))
         (goto-char (point-min))
@@ -8971,6 +9272,7 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "g")      #'bebop-remote-refresh)
     (define-key map (kbd "RET")    #'bebop-remote-select)
+    (define-key map (kbd "o")      #'bebop-remote-browse)
     (define-key map (kbd "h")      #'bebop-dashboard-next-tab)
     (define-key map (kbd "TAB")    #'bebop-remote-toggle)
     (define-key map (kbd "<tab>")  #'bebop-remote-toggle)
@@ -9164,12 +9466,49 @@ host then pauses it without prompts (`bebop-stop-session')."
                                  bebop-session-header-color 2.0))
     buf))
 
+(defun bebop-remote--act-item (item)
+  "Act on derived-set ITEM on the host, as RET does locally.
+Reviewing jams the host's review session and selects it here;
+Unsessioned asks here, then starts the session there."
+  (pcase (plist-get item :set)
+    ("Reviewing"
+     (let ((session (car (read-from-string
+                          (bebop-remote--eval
+                           (format "(bebop-derived-review '%S)" item))))))
+       (bebop-remote-select session)
+       (message "Bebop: %s on %s asked to review %s"
+                session bebop-remote-host (plist-get item :ref))))
+    ("Unsessioned"
+     (let ((name (format "%s--%s"
+                         (car (last (split-string (plist-get item :project) "/")))
+                         (bebop--sanitize-name (plist-get item :branch)))))
+       (when (y-or-n-p (format "Start %s on %s? " name bebop-remote-host))
+         (bebop-remote--eval (format "(bebop-derived-start '%S)" item))
+         (bebop-remote-refresh)
+         (message "Bebop: started %s on %s" name bebop-remote-host))))))
+
+(defun bebop-remote-browse ()
+  "Open the MR at point in this machine's browser."
+  (interactive)
+  (if-let ((item (get-text-property (point) 'bebop-mr-item)))
+      (browse-url (plist-get item :url))
+    (user-error "No merge request at point")))
+
 (defun bebop-remote-select (&optional name)
   "Select far session NAME (or the one at point), as RET does locally.
 Its composition buffer takes the Conductor's composition window (or
 another window when there is no Conductor), the D terminal switches to
-it, and it counts as seen. Moving point alone changes nothing."
+it, and it counts as seen. Moving point alone changes nothing. On a
+derived-set row, RET acts on the MR instead (`bebop-remote--act-item')."
   (interactive)
+  (if-let ((item (and (null name)
+                      (null (get-text-property (point) 'bebop-remote-name))
+                      (get-text-property (point) 'bebop-mr-item))))
+      (bebop-remote--act-item item)
+    (bebop-remote--select-session name)))
+
+(defun bebop-remote--select-session (name)
+  "Select far session NAME, or the one at point. See `bebop-remote-select'."
   (let* ((name (or name
                    (get-text-property (point) 'bebop-remote-name)
                    (user-error "No session at point")))
@@ -10265,6 +10604,29 @@ touches the file or derives a host name — that is
 =bebop-external-cache-file='s job, and the reason a garbled sidecar is
 an Emacs-side bug (see =bebop--host-name=), never a fetcher bug.
 
+/Whose move/ (2026-11-05). An unresolved count says a thread exists,
+not who owes the next word. Pulse also counts the threads *on you*:
+unresolved, and the last note is by a teammate rather than you or a
+bot (Duo's threads ask less of you than a person's). It reads
+=detailed_merge_status= too, so an approved, green MR shows as ready
+to merge. Both go to =bebop-mr-cache-set= as optional arguments.
+
+/Derived sets/. After the venue walk, pulse fills two sets that no
+one declares, from GitLab alone (=bebop-derived-set-put=):
+
+- *Unsessioned* — your open, non-draft MRs that no session holds. A
+  session holds an MR when its venue sits on the MR's branch, or,
+  failing that, when its name carries the MR's ticket key. An MR held
+  by an on-deck session gets that session's MR glyph instead, so a
+  shelved session whose reviewer replied still says so.
+- *Reviewing* — open, non-draft MRs that name you as reviewer, by
+  others. Your move unless you approved: either you have not spoken
+  yet, or someone answered in a thread you spoke in.
+
+Pulse drops =GITLAB_TOKEN= from its environment and uses glab's own
+login: a stale token in the environment wins over the login and turns
+every call into a 401.
+
 Registered in cron every 10 minutes, stdout/stderr to
 =~/.emacs.d/pulse.log= (overwritten each run — the log answers "what
 did the last beat do," history is not its job):
@@ -10282,11 +10644,13 @@ spartan environment to disappoint.)
 Tangled from bebop.org (HUD design, phase 4) — do not edit directly.
 Walks the live venues' branches, asks GitLab for MR review state and
 head-pipeline status, writes the sidecar through the citizen verbs.
-No Jira, no chart writes, no opinions.
+Then the derived sets: your open MRs that no session holds, and the
+MRs you review. No Jira, no chart writes, no opinions.
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 from urllib.parse import quote
@@ -10294,6 +10658,12 @@ from urllib.parse import quote
 # cron's PATH has neither glab nor emacsclient
 os.environ["PATH"] = ("/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:"
                       + os.environ.get("PATH", ""))
+# glab prefers GITLAB_TOKEN over its own login; a stale one in the
+# environment would turn every call into a 401. Use the login.
+os.environ.pop("GITLAB_TOKEN", None)
+
+BOTS = {"GitLabDuo"}
+TICKET = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 
 
 def sh(args, cwd=None, timeout=60):
@@ -10314,6 +10684,16 @@ def el_string(expr):
     return json.loads(el(expr))
 
 
+def el_quote(s):
+    # A JSON string literal is a valid elisp string literal once it is
+    # pure ASCII: \" \\ \n and \uXXXX read the same in both.
+    return json.dumps(s, ensure_ascii=True)
+
+
+def api(path, cwd=None):
+    return json.loads(sh(["glab", "api", path], cwd=cwd))
+
+
 def mr_state(mr):
     if mr["state"] == "merged":
         return "merged"
@@ -10322,25 +10702,160 @@ def mr_state(mr):
     return mr["state"]
 
 
+def is_bot(username):
+    return username in BOTS or "bot" in username.lower()
+
+
+def threads(discussions):
+    """Yield the unresolved, resolvable threads as lists of human-ish notes."""
+    for d in discussions:
+        notes = [n for n in d.get("notes", []) if not n.get("system")]
+        if (notes and notes[0].get("resolvable")
+                and not notes[0].get("resolved")):
+            yield notes
+
+
+def on_me(discussions, me):
+    """Count unresolved threads where a human other than ME spoke last.
+    A thread whose last note is mine waits on them; a bot's (Duo's)
+    thread asks less of me than a teammate's and does not count."""
+    return sum(1 for notes in threads(discussions)
+               if notes[-1]["author"]["username"] not in (me,)
+               and not is_bot(notes[-1]["author"]["username"]))
+
+
+def mr_status(project, iid, me, cwd=None):
+    """Fetch one MR's detail and threads; return the facts pulse keeps."""
+    base = f"projects/{project}/merge_requests/{iid}"
+    detail = api(base, cwd)
+    discussions = api(f"{base}/discussions?per_page=100", cwd)
+    return {
+        "detail": detail,
+        "discussions": discussions,
+        "unresolved": sum(1 for _ in threads(discussions)),
+        "on_me": on_me(discussions, me),
+        "mergeable": detail.get("detailed_merge_status") == "mergeable",
+        "pipeline": (detail.get("head_pipeline") or {}).get("status"),
+    }
+
+
+def cache(name, st):
+    el(f'(bebop-mr-cache-set {el_quote(name)} "{mr_state(st["detail"])}"'
+       f' {st["unresolved"]} {st["detail"]["iid"]}'
+       f' {st["on_me"]} {"t" if st["mergeable"] else "nil"})')
+    if st["pipeline"]:
+        el(f'(bebop-pipeline-cache-set {el_quote(name)}'
+           f' "{st["pipeline"]}")')
+
+
+def item(mr, **facts):
+    """The derived-set row for MR: what the dashboard draws and acts on."""
+    return dict({
+        "ref": mr["references"]["full"].split("/")[-1],
+        "project": mr["references"]["full"].split("!")[0],
+        "iid": mr["iid"],
+        "title": mr["title"],
+        "author": mr["author"]["username"],
+        "branch": mr["source_branch"],
+        "url": mr["web_url"],
+        "updated": mr["updated_at"],
+    }, **facts)
+
+
+def session_for(mr, branches, sessions):
+    """Name the session that holds MR, or None.
+    A venue on the MR's branch holds it; failing that, a session named
+    for the MR's ticket in the same repo (charts without venues)."""
+    if mr["source_branch"] in branches:
+        return branches[mr["source_branch"]]
+    m = TICKET.search(mr["source_branch"]) or TICKET.search(mr["title"])
+    if not m:
+        return None
+    repo = mr["references"]["full"].split("!")[0].split("/")[-1]
+    key = m.group(0).lower()
+    for s in sessions:
+        name = s["name"].lower()
+        if key in name and ("--" not in name or name.startswith(repo + "--")):
+            return s["name"]
+    return None
+
+
+def derived(me, sessions, branches, done):
+    """Write the Unsessioned and Reviewing derived sets."""
+    unsessioned = []
+    for mr in api("merge_requests?scope=created_by_me&state=opened"
+                  "&per_page=100"):
+        if mr.get("draft"):
+            continue
+        name = session_for(mr, branches, sessions)
+        if name in done:
+            continue  # the venue walk already cached it
+        st = mr_status(mr["project_id"], mr["iid"], me)
+        if name:
+            cache(name, st)  # an on-deck session's MR still wants you
+            continue
+        unsessioned.append(item(
+            mr, on_me=st["on_me"], unresolved=st["unresolved"],
+            mergeable=st["mergeable"], pipeline=st["pipeline"],
+            your_move=bool(st["on_me"] or st["mergeable"]
+                           or st["pipeline"] == "failed")))
+    el(f'(bebop-derived-set-put "Unsessioned"'
+       f' {el_quote(json.dumps(unsessioned))})')
+
+    reviewing = []
+    for mr in api("merge_requests?scope=all&state=opened"
+                  f"&reviewer_username={me}&per_page=100"):
+        if mr.get("draft") or mr["author"]["username"] == me:
+            continue
+        base = f"projects/{mr['project_id']}/merge_requests/{mr['iid']}"
+        mine = [r for r in api(f"{base}/reviewers")
+                if r["user"]["username"] == me]
+        state = mine[0]["state"] if mine else "unreviewed"
+        replied = False
+        spoke = False
+        if state != "approved":
+            for d in api(f"{base}/discussions?per_page=100"):
+                notes = [n for n in d.get("notes", []) if not n.get("system")]
+                authors = [n["author"]["username"] for n in notes]
+                if me in authors:
+                    spoke = True
+                    if (authors[-1] != me and not is_bot(authors[-1])
+                            and not notes[0].get("resolved")):
+                        replied = True
+        reviewing.append(item(
+            mr, review=state, replied=replied,
+            your_move=state != "approved" and (replied or not spoke)))
+    el(f'(bebop-derived-set-put "Reviewing"'
+       f' {el_quote(json.dumps(reviewing))})')
+    return len(unsessioned), len(reviewing)
+
+
 def main():
     try:
         sessions = json.loads(el_string("(bebop-list-sessions)"))
     except Exception:
         return  # Emacs isn't up; pulse skips a beat, silently
+    me = api("user")["username"]
     beats = 0
+    done = set()
+    branches = {}
     for s in sessions:
         name, venue = s.get("name"), s.get("venue")
-        if not (s.get("live") and venue and os.path.isdir(venue)):
+        if not (venue and os.path.isdir(venue)):
             continue
         try:
             branch = sh(["git", "-C", venue,
                          "rev-parse", "--abbrev-ref", "HEAD"])
-            mrs = json.loads(sh(
-                ["glab", "api",
-                 "projects/:id/merge_requests"
-                 f"?source_branch={quote(branch, safe='')}"
-                 "&state=all&per_page=5"],
-                cwd=venue))
+        except Exception as e:
+            print(f"pulse: {name}: {e}", file=sys.stderr)
+            continue
+        branches[branch] = name
+        if not s.get("live"):
+            continue
+        try:
+            mrs = api("projects/:id/merge_requests"
+                      f"?source_branch={quote(branch, safe='')}"
+                      "&state=all&per_page=5", venue)
             # Open beats merged; closed MRs are skipped outright —
             # bebop-mr-cache-set's contract is draft|open|merged, and
             # a closed MR's threads ask nothing of anyone.
@@ -10348,27 +10863,17 @@ def main():
                   or next((m for m in mrs if m["state"] == "merged"), None))
             if mr is None:
                 continue
-            iid = mr["iid"]
-            detail = json.loads(sh(
-                ["glab", "api", f"projects/:id/merge_requests/{iid}"],
-                cwd=venue))
-            discussions = json.loads(sh(
-                ["glab", "api",
-                 f"projects/:id/merge_requests/{iid}/discussions?per_page=100"],
-                cwd=venue))
-            unresolved = sum(
-                1 for d in discussions
-                if d.get("notes")
-                and d["notes"][0].get("resolvable")
-                and not d["notes"][0].get("resolved"))
-            el(f'(bebop-mr-cache-set "{name}" "{mr_state(detail)}"'
-               f' {unresolved} {iid})')
-            pipeline = (detail.get("head_pipeline") or {}).get("status")
-            if pipeline:
-                el(f'(bebop-pipeline-cache-set "{name}" "{pipeline}")')
+            cache(name, mr_status(":id", mr["iid"], me, venue))
+            done.add(name)
             beats += 1
         except Exception as e:
             print(f"pulse: {name}: {e}", file=sys.stderr)
+    try:
+        counts = derived(me, sessions, branches, done)
+        print(f"pulse: derived sets: {counts[0]} unsessioned,"
+              f" {counts[1]} reviewing")
+    except Exception as e:
+        print(f"pulse: derived sets: {e}", file=sys.stderr)
     try:
         el("(bebop--render)")
     except Exception:

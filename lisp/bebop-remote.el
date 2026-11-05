@@ -211,7 +211,8 @@ The remote counterpart of `bebop--active-session'.")
         (dolist (line '("RET: select  TAB: fold  h: host  g: refresh  .: mark seen"
                         "n: new  k: kill  r: resume  e: exile"
                         "C/D: chart  V/W: venue  N: new set  m: move to set"
-                        "w: pin W  L: workbench layout  a: attach (mosh)  P: forward port"))
+                        "w: pin W  L: workbench layout  a: attach (mosh)  P: forward port"
+                        "o: open MR in browser (derived sets)"))
           (insert (propertize (concat line "\n")
                               'face '(:inherit shadow :height 0.75))))
         (goto-char (point-min))
@@ -313,6 +314,7 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "g")      #'bebop-remote-refresh)
     (define-key map (kbd "RET")    #'bebop-remote-select)
+    (define-key map (kbd "o")      #'bebop-remote-browse)
     (define-key map (kbd "h")      #'bebop-dashboard-next-tab)
     (define-key map (kbd "TAB")    #'bebop-remote-toggle)
     (define-key map (kbd "<tab>")  #'bebop-remote-toggle)
@@ -490,12 +492,49 @@ host then pauses it without prompts (`bebop-stop-session')."
                                  bebop-session-header-color 2.0))
     buf))
 
+(defun bebop-remote--act-item (item)
+  "Act on derived-set ITEM on the host, as RET does locally.
+Reviewing jams the host's review session and selects it here;
+Unsessioned asks here, then starts the session there."
+  (pcase (plist-get item :set)
+    ("Reviewing"
+     (let ((session (car (read-from-string
+                          (bebop-remote--eval
+                           (format "(bebop-derived-review '%S)" item))))))
+       (bebop-remote-select session)
+       (message "Bebop: %s on %s asked to review %s"
+                session bebop-remote-host (plist-get item :ref))))
+    ("Unsessioned"
+     (let ((name (format "%s--%s"
+                         (car (last (split-string (plist-get item :project) "/")))
+                         (bebop--sanitize-name (plist-get item :branch)))))
+       (when (y-or-n-p (format "Start %s on %s? " name bebop-remote-host))
+         (bebop-remote--eval (format "(bebop-derived-start '%S)" item))
+         (bebop-remote-refresh)
+         (message "Bebop: started %s on %s" name bebop-remote-host))))))
+
+(defun bebop-remote-browse ()
+  "Open the MR at point in this machine's browser."
+  (interactive)
+  (if-let ((item (get-text-property (point) 'bebop-mr-item)))
+      (browse-url (plist-get item :url))
+    (user-error "No merge request at point")))
+
 (defun bebop-remote-select (&optional name)
   "Select far session NAME (or the one at point), as RET does locally.
 Its composition buffer takes the Conductor's composition window (or
 another window when there is no Conductor), the D terminal switches to
-it, and it counts as seen. Moving point alone changes nothing."
+it, and it counts as seen. Moving point alone changes nothing. On a
+derived-set row, RET acts on the MR instead (`bebop-remote--act-item')."
   (interactive)
+  (if-let ((item (and (null name)
+                      (null (get-text-property (point) 'bebop-remote-name))
+                      (get-text-property (point) 'bebop-mr-item))))
+      (bebop-remote--act-item item)
+    (bebop-remote--select-session name)))
+
+(defun bebop-remote--select-session (name)
+  "Select far session NAME, or the one at point. See `bebop-remote-select'."
   (let* ((name (or name
                    (get-text-property (point) 'bebop-remote-name)
                    (user-error "No session at point")))

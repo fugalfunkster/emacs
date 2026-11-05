@@ -843,6 +843,9 @@ the far session's."
     (unless (get-text-property (point) 'bebop-session-name)
       (goto-char start))))
 
+(declare-function bebop-derived-act "bebop-set")
+(declare-function bebop-derived--item-at-point "bebop-set")
+
 (defun bebop-activate-at-point ()
   "Select the session under point as active and focus the composition buffer."
   (interactive)
@@ -857,7 +860,10 @@ the far session's."
                                 (get-buffer (format "*bebop-session: %s*" name))))))
             (when comp-win
               (select-window comp-win))))
-      (message "No pair at point"))))
+      (if-let ((item (and (fboundp 'bebop-derived--item-at-point)
+                          (bebop-derived--item-at-point))))
+          (bebop-derived-act item)
+        (message "No pair at point")))))
 
 (defvar bebop-dashboard-mode-map
   (let ((map (make-sparse-keymap)))

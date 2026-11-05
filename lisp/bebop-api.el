@@ -205,7 +205,8 @@ As locally, a running agent's working directory does not move."
   (json-serialize (list :session name :venue (or (bebop--session-venue name) :null))))
 
 (defconst bebop--snapshot-props
-  '(face font-lock-face display bebop-session-name bebop-on-deck-name bebop-fold)
+  '(face font-lock-face display bebop-session-name bebop-on-deck-name bebop-fold
+         bebop-mr-item)
   "Text properties a dashboard snapshot keeps.")
 
 (defun bebop--snapshot-clean (string)
@@ -245,7 +246,7 @@ value → `hide' or `show'. See the section prose for the reply shape."
               (bebop-set--render-body)
               (let ((tops (oref magit-root-section children)))
                 (dolist (s tops)
-                  (when (memq (oref s type) '(bebop-set bebop-ungrouped))
+                  (when (memq (oref s type) '(bebop-set bebop-ungrouped bebop-derived))
                     (put-text-property (oref s start)
                                        (or (oref s content) (oref s end))
                                        'bebop-fold
