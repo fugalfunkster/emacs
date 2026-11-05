@@ -150,6 +150,77 @@ form of `bebop-new-session', for callers with no minibuffer."
                           :venue (or venue-path :null)
                           :chart (or chart-path :null)))))
 
+(defconst bebop--snapshot-props
+  '(face font-lock-face display bebop-session-name bebop-on-deck-name bebop-fold)
+  "Text properties a dashboard snapshot keeps.")
+
+(defun bebop--snapshot-clean (string)
+  "Copy STRING keeping only `bebop--snapshot-props'."
+  (let ((out (copy-sequence string))
+        (len (length string))
+        (pos 0))
+    (set-text-properties 0 len nil out)
+    (while (< pos len)
+      (let ((next (next-property-change pos string len))
+            (props (text-properties-at pos string)))
+        (cl-loop for (k v) on props by #'cddr
+                 when (memq k bebop--snapshot-props)
+                 do (put-text-property pos next k v out))
+        (setq pos next)))
+    out))
+
+(defun bebop-dashboard-snapshot (&optional active folds)
+  "Render the setlist tree for a remote client; return it printed.
+ACTIVE is the client's selected session; FOLDS an alist of section
+value → `hide' or `show'. See the section prose for the reply shape."
+  (when-let ((row (and active
+                       (seq-find (lambda (r) (equal (plist-get r :name) active))
+                                 (bebop-set--rows)))))
+    (when (bebop-set--attention-p row)
+      (bebop-set-ack-session active)))
+  (let* ((rows (bebop-set--rows))
+         (body
+          (with-temp-buffer
+            (magit-section-mode)
+            (let ((inhibit-read-only t)
+                  (bebop--active-session active)
+                  (bebop-hud--pulses nil)
+                  (magit-section-set-visibility-hook
+                   (list (lambda (section)
+                           (cdr (assoc (oref section value) folds))))))
+              (bebop-set--render-body)
+              (let ((tops (oref magit-root-section children)))
+                (dolist (s tops)
+                  (when (memq (oref s type) '(bebop-set bebop-ungrouped))
+                    (put-text-property (oref s start)
+                                       (or (oref s content) (oref s end))
+                                       'bebop-fold
+                                       (cons (oref s value) (oref s hidden)))))
+                ;; Cut folded bodies last-first so earlier positions hold.
+                (dolist (s (reverse tops))
+                  (when (and (oref s hidden) (oref s content))
+                    (delete-region (oref s content) (oref s end)))))
+              (bebop--snapshot-clean (buffer-string))))))
+    (let ((print-escape-multibyte t)
+          (print-escape-nonascii t)
+          (print-length nil)
+          (print-level nil))
+      (prin1-to-string
+       (list :body body
+             :rows (mapcar
+                    (lambda (r)
+                      (let ((live (plist-get r :live)))
+                        (list :name (plist-get r :name)
+                              :live (and live t)
+                              :status (and live
+                                           (symbol-name
+                                            (or (plist-get live :status) 'unknown)))
+                              :attention (and (bebop-set--attention-p r) t)
+                              :set (plist-get r :set)
+                              :chart (plist-get r :chart)
+                              :venue (plist-get r :venue))))
+                    rows))))))
+
 (defun bebop-propose-exile (name)
   "Queue session NAME for exile approval. Returns the queue as JSON."
   (unless (member name bebop--exile-proposals)

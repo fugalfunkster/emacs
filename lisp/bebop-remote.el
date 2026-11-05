@@ -119,45 +119,74 @@ both arrive as nil."
 The remote counterpart of `bebop--active-session'.")
 
 (defvar bebop-remote--sessions nil
-  "Last fetched session list (a list of plists), or nil.")
+  "Rows from the last snapshot (a list of plists), or nil.")
+
+(defvar bebop-remote--body nil
+  "The host's last rendered tree, a propertized string, or nil.")
+
+(defvar bebop-remote--folds nil
+  "Alist of section value → `hide' or `show', for sections you toggled.")
 
 (defvar bebop-remote--error nil
   "Error string from the last failed refresh, or nil when reachable.")
 
 (defvar bebop-remote--timer nil)
 
-(defun bebop-remote--insert-row (s)
-  "Insert one dashboard line for session plist S."
-  (let* ((name (plist-get s :name))
-         (live (plist-get s :live))
-         (status (bebop-remote--status s))
-         (set (plist-get s :set))
-         (dot-face (cond ((not live) 'shadow)
-                         ((member status '("blocked" "waiting"))
-                          'bebop-dot-waiting-face)
-                         ((member status '("unknown" "degraded" "gone"))
-                          'bebop-dot-degraded-face)
-                         (t 'bebop-dot-active-face)))
-         (dot-face (if (and live (bebop-remote--unseen-p name status))
-                       (list '(:weight bold) dot-face)
-                     dot-face))
-         (start (point)))
-    (insert (propertize (if live "●" "○") 'face dot-face))
-    (insert " ")
-    (insert (propertize name 'face (cond ((not live) 'shadow)
-                                         ((equal name bebop-remote--active)
-                                          'bebop-selected-face)
-                                         (t 'bebop-session-face))))
-    (when set
-      (insert (propertize (format "  [%s]" set) 'face 'shadow)))
-    (insert "\n")
-    (add-text-properties start (point) (list 'bebop-remote-name name))
-    (when live
-      (when-let ((children (plist-get (car (bebop-remote--hook name)) :children)))
-        (bebop--insert-subagent-rows name "  " children)))))
+(defvar bebop-remote--fetch nil "The snapshot fetch in flight, or nil.")
+
+(defvar bebop-remote--refetch nil
+  "Non-nil when a refresh was asked for while a fetch was in flight.")
+
+(defun bebop-remote--snapshot-expr ()
+  "The host expression that renders the dashboard for this client."
+  (format "(bebop-dashboard-snapshot %S '%S)"
+          bebop-remote--active bebop-remote--folds))
+
+(defun bebop-remote--take-snapshot (printed)
+  "Install the host's reply, PRINTED as emacsclient returned it."
+  (let ((p (car (read-from-string (car (read-from-string printed))))))
+    (setq bebop-remote--body (plist-get p :body)
+          bebop-remote--sessions (plist-get p :rows)
+          bebop-remote--error nil)))
+
+(defun bebop-remote--fetch-failed (msg)
+  (setq bebop-remote--error msg)
+  (bebop-remote--stop-timer))
+
+(defun bebop-remote--fetch-sentinel (proc _event)
+  "Install a finished fetch, redraw, and run a refresh that waited."
+  (unless (process-live-p proc)
+    (let* ((buf (process-buffer proc))
+           (out (with-current-buffer buf (string-trim (buffer-string)))))
+      (kill-buffer buf)
+      (when (eq proc bebop-remote--fetch)
+        (setq bebop-remote--fetch nil))
+      (if (eq (process-exit-status proc) 0)
+          (condition-case err
+              (progn (bebop-remote--take-snapshot out)
+                     (bebop-remote--start-timer))
+            (error (bebop-remote--fetch-failed (error-message-string err))))
+        (bebop-remote--fetch-failed
+         (if (string-empty-p out)
+             (format "ssh exit %s" (process-exit-status proc))
+           out)))
+      (bebop-remote--render)
+      (when bebop-remote--refetch
+        (bebop-remote-refresh)))))
+
+(defun bebop-remote--mark-names (beg end)
+  "Give each session line between BEG and END a `bebop-remote-name'."
+  (save-excursion
+    (goto-char beg)
+    (while (< (point) end)
+      (when-let ((name (or (get-text-property (point) 'bebop-session-name)
+                           (get-text-property (point) 'bebop-on-deck-name))))
+        (put-text-property (point) (line-beginning-position 2)
+                           'bebop-remote-name name))
+      (forward-line 1))))
 
 (defun bebop-remote--render ()
-  "Redraw the remote dashboard from the last fetched state."
+  "Redraw the remote dashboard from the last snapshot."
   (let ((buf (get-buffer-create bebop-remote-buffer-name)))
     (with-current-buffer buf
       (unless (derived-mode-p 'bebop-remote-mode)
@@ -172,26 +201,18 @@ The remote counterpart of `bebop--active-session'.")
                    (format "  %s unreachable — g to retry\n  %s\n"
                            bebop-remote-host bebop-remote--error)
                    'face 'shadow)))
-         ((null bebop-remote--sessions)
-          (insert (propertize "  No sessions on the host.\n" 'face 'shadow)))
+         ((null bebop-remote--body)
+          (insert (propertize "  Fetching…\n" 'face 'shadow)))
          (t
           (bebop-remote--notice-edges)
-          ;; Unseen attention goes first; the rest keep the host's order.
-          (let ((live (seq-filter (lambda (s) (plist-get s :live))
-                                  bebop-remote--sessions)))
-            (dolist (s (append (seq-filter #'bebop-remote--attention-p live)
-                               (seq-remove #'bebop-remote--attention-p live)))
-              (bebop-remote--insert-row s)))
-          (let ((deck (seq-remove (lambda (s) (plist-get s :live))
-                                  bebop-remote--sessions)))
-            (when deck
-              (insert (propertize "\n  On deck\n" 'face 'shadow))
-              (dolist (s deck)
-                (bebop-remote--insert-row s))))))
+          (insert bebop-remote--body)
+          (bebop-remote--mark-names (point-min) (point))))
         (insert "\n")
-        (insert (propertize
-                 "g: refresh  RET: select  n: new  r: resume  w: pin W  W: workbench  a: attach (mosh)  P: forward port  .: mark seen\n"
-                 'face '(:inherit shadow :height 0.75)))
+        (dolist (line '("RET: select  TAB: fold  g: refresh  .: mark seen"
+                        "n: new  r: resume  a: attach (mosh)"
+                        "w: pin W  W: workbench  P: forward port"))
+          (insert (propertize (concat line "\n")
+                              'face '(:inherit shadow :height 0.75))))
         (goto-char (point-min))
         (let ((found nil))
           (when saved-name
@@ -204,19 +225,45 @@ The remote counterpart of `bebop--active-session'.")
             (goto-char (point-min))
             (forward-line (1- saved-line))))))))
 
-(defun bebop-remote-refresh ()
-  "Fetch the host's session pool and re-render; restart polling on success."
+(defun bebop-remote-refresh (&optional sync)
+  "Fetch the host's dashboard and redraw; restart polling on success.
+SYNC waits for the reply; otherwise the fetch runs in the background."
   (interactive)
-  (condition-case err
-      (progn
-        (setq bebop-remote--sessions
-              (append (bebop-remote--eval-json "(bebop-list-sessions)") nil)
-              bebop-remote--error nil)
-        (bebop-remote--start-timer))
-    (error
-     (setq bebop-remote--error (error-message-string err))
-     (bebop-remote--stop-timer)))
-  (bebop-remote--render))
+  (cond
+   (sync
+    (condition-case err
+        (progn
+          (bebop-remote--take-snapshot
+           (bebop-remote--eval (bebop-remote--snapshot-expr)))
+          (bebop-remote--start-timer))
+      (error (bebop-remote--fetch-failed (error-message-string err))))
+    (bebop-remote--render))
+   ((process-live-p bebop-remote--fetch)
+    (setq bebop-remote--refetch t))
+   (t
+    (setq bebop-remote--refetch nil
+          bebop-remote--fetch
+          (make-process
+           :name "bebop-remote-fetch"
+           :buffer (generate-new-buffer " *bebop-remote-fetch*")
+           :command (append (list "ssh") bebop-remote-ssh-options
+                            (list (bebop-remote--target)
+                                  (format "%s --eval %s" bebop-remote-emacsclient
+                                          (shell-quote-argument
+                                           (bebop-remote--snapshot-expr)))))
+           :connection-type 'pipe
+           :noquery t
+           :sentinel #'bebop-remote--fetch-sentinel)))))
+
+(defun bebop-remote-toggle ()
+  "Fold or unfold the set heading at point; the host re-renders."
+  (interactive)
+  (let ((fold (get-text-property (point) 'bebop-fold)))
+    (unless fold
+      (user-error "No set heading at point"))
+    (setf (alist-get (car fold) bebop-remote--folds nil nil #'equal)
+          (if (cdr fold) 'show 'hide))
+    (bebop-remote-refresh)))
 
 (defun bebop-remote--poll ()
   (let ((buf (get-buffer bebop-remote-buffer-name)))
@@ -236,6 +283,7 @@ The remote counterpart of `bebop--active-session'.")
   (when (timerp bebop-remote--timer)
     (cancel-timer bebop-remote--timer))
   (setq bebop-remote--timer nil))
+
 
 (defun bebop-remote--next ()
   "Move point to the next session line."
@@ -264,6 +312,8 @@ The remote counterpart of `bebop--active-session'.")
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "g")      #'bebop-remote-refresh)
     (define-key map (kbd "RET")    #'bebop-remote-select)
+    (define-key map (kbd "TAB")    #'bebop-remote-toggle)
+    (define-key map (kbd "<tab>")  #'bebop-remote-toggle)
     (define-key map (kbd "a")      #'bebop-remote-attach)
     (define-key map (kbd "P")      #'bebop-remote-forward-port)
     (define-key map (kbd ".")      #'bebop-remote-mark-all-seen)
@@ -346,7 +396,11 @@ from the local Dropbox before any network call."
                          (bebop-remote--window-name
                           bebop-remote--compose-session)))
          (qt (shell-quote-argument target))
-         (cmd (format "%s load-buffer - && %s paste-buffer -d -t %s && %s send-keys -t %s C-m"
+         ;; The pause matters: on the host the three tmux calls land in
+         ;; microseconds, and Claude Code reads an Enter that arrives
+         ;; inside the paste burst as a newline in the prompt, not a
+         ;; submit. Locally, process spawn latency hides this.
+         (cmd (format "%s load-buffer - && %s paste-buffer -d -t %s && sleep 0.3 && %s send-keys -t %s C-m"
                       bebop-remote-tmux bebop-remote-tmux qt
                       bebop-remote-tmux qt))
          (code (apply #'call-process-region (point-min) (point-max)
@@ -425,8 +479,8 @@ it, and it counts as seen. Moving point alone changes nothing."
                                display-buffer-pop-up-window)
                               (inhibit-same-window . t)))))
     (bebop-remote-steer "D" name)
-    (bebop-remote-ack name)
-    (bebop-remote--render)
+    ;; The host acks the selected session as it renders.
+    (bebop-remote-refresh)
     (message "Bebop: %s on %s — compose, then C-c C-c to send"
              name bebop-remote-host)))
 
@@ -437,9 +491,9 @@ it, and it counts as seen. Moving point alone changes nothing."
                   (get-text-property (point) 'bebop-remote-name)
                   (user-error "No session at point"))))
     (pop-to-buffer (bebop-remote--compose-buffer name))
-    (bebop-remote-ack name)
+    (bebop-remote--eval (format "(bebop-set-ack-session %S)" name))
     (when (get-buffer bebop-remote-buffer-name)
-      (bebop-remote--render))))
+      (bebop-remote-refresh))))
 
 (defcustom bebop-remote-events-dir "~/.emacs.d-local/bebop-events"
   "The host's hook event directory — its `bebop-events-dir'."
@@ -485,7 +539,7 @@ stream sets them up again each time it connects.")
     (buffer-string)))
 
 (defun bebop-remote--stream-filter (proc output)
-  "Fold each whole line of stream OUTPUT; redraw once the burst ends."
+  "Fold each whole line of stream OUTPUT; refresh once the burst ends."
   (let ((buf (concat (or (process-get proc :partial) "") output))
         (start 0))
     (while (string-match "\n" buf start)
@@ -507,7 +561,7 @@ stream sets them up again each time it connects.")
     (when (timerp bebop-remote--stream-render-timer)
       (cancel-timer bebop-remote--stream-render-timer))
     (setq bebop-remote--stream-render-timer
-          (run-at-time 0.2 nil #'bebop-remote--render))))
+          (run-at-time 0.3 nil #'bebop-remote-refresh))))
 
 (defun bebop-remote--stream-sentinel (proc _event)
   "Reconnect a dropped stream while the remote dashboard lives."
@@ -567,123 +621,52 @@ stream sets them up again each time it connects.")
     (when (plist-get st :state)
       (cons (bebop--hook-effective st) (plist-get st :at)))))
 
-(defun bebop-remote--status (s)
-  "The status string to draw for far session plist S.
-The stream wins: it is newer than the host's poll. One exception, as on
-the host: no hook fires on an Esc interrupt, so a session the events
-still call `working' is idle when the host's pane check says so and no
-event came for a while."
-  (let* ((hook (bebop-remote--hook (plist-get s :name)))
-         (eff (car hook))
-         (polled (plist-get s :status)))
-    (cond
-     ((null eff) polled)
-     ((and (equal (plist-get eff :state) "working")
-           (equal polled "waiting")
-           (> (- (float-time) (or (cdr hook) 0)) 10))
-      polled)
-     (t (pcase (plist-get eff :state)
-          ("working" "active")
-          ((or "blocked" "error") "blocked")
-          (_ "waiting"))))))
-
-(defcustom bebop-remote-acks-file "~/.emacs.d-local/bebop-remote-acks.eld"
-  "Where this machine keeps its seen marks for the host's sessions."
-  :type 'file
-  :group 'bebop)
-
-(defvar bebop-remote--acks nil
-  "Alist of far session name → status string as of your last look.
-Loaded from `bebop-remote-acks-file' on first use.")
-
-(defvar bebop-remote--acks-loaded nil)
-
-(defvar bebop-remote--seen-status nil
-  "Alist of far session name → the status last drawn, for edge detection.")
+(defvar bebop-remote--seen-attention t
+  "Names that held attention at the last snapshot; t before the first.")
 
 (defvar bebop-remote--periphery nil
   "Cached mode-line segment for far attention, or nil when there is none.")
 
-(defun bebop-remote--load-acks ()
-  "Read the seen marks once per Emacs."
-  (unless bebop-remote--acks-loaded
-    (setq bebop-remote--acks-loaded t
-          bebop-remote--acks
-          (ignore-errors
-            (with-temp-buffer
-              (insert-file-contents (expand-file-name bebop-remote-acks-file))
-              (read (current-buffer)))))))
-
-(defun bebop-remote--save-acks ()
-  "Write the seen marks."
-  (let ((file (expand-file-name bebop-remote-acks-file)))
-    (make-directory (file-name-directory file) t)
-    (with-temp-file file
-      (prin1 bebop-remote--acks (current-buffer)))))
-
-(defun bebop-remote-ack (name &optional no-save)
-  "Mark far session NAME seen as of the status last drawn.
-NO-SAVE skips the write, for callers that ack many and save once."
-  (bebop-remote--load-acks)
-  (when-let ((status (alist-get name bebop-remote--seen-status nil nil #'equal)))
-    (setf (alist-get name bebop-remote--acks nil nil #'equal) status)
-    (unless no-save (bebop-remote--save-acks))))
-
 (defun bebop-remote-mark-all-seen ()
-  "Mark every far session seen."
+  "Mark every far session seen, on the host."
   (interactive)
-  (dolist (c bebop-remote--seen-status)
-    (bebop-remote-ack (car c) t))
-  (bebop-remote--save-acks)
-  (bebop-remote--render)
+  (bebop-remote--eval "(bebop-mark-all-seen)")
+  (bebop-remote-refresh)
   (message "Bebop: all %s sessions marked seen" bebop-remote-host))
-
-(defun bebop-remote--unseen-p (name status)
-  "Non-nil if far session NAME's STATUS differs from its seen mark."
-  (bebop-remote--load-acks)
-  (when-let ((acked (alist-get name bebop-remote--acks nil nil #'equal)))
-    (not (equal acked status))))
-
-(defun bebop-remote--attention-p (s)
-  "Non-nil if far session plist S waits for you and you have not looked."
-  (let ((status (bebop-remote--status s)))
-    (and (plist-get s :live)
-         (member status '("waiting" "blocked"))
-         (bebop-remote--unseen-p (plist-get s :name) status))))
 
 (defun bebop-remote--watching-p (name)
   "Non-nil if far session NAME is the one you selected (RET)."
   (equal name bebop-remote--active))
 
 (defun bebop-remote--notice-edges ()
-  "Alert on far sessions that started to wait; refresh the mode line.
-Called before each render, so every source of a new status — the
-stream or the poll — passes through here."
-  (let ((quiet (< (float-time) bebop-remote--quiet-until)))
-    (dolist (s bebop-remote--sessions)
-      (when (plist-get s :live)
-        (let* ((name (plist-get s :name))
-               (status (bebop-remote--status s))
-               (before (alist-get name bebop-remote--seen-status nil nil #'equal)))
-          (setf (alist-get name bebop-remote--seen-status nil nil #'equal) status)
-          (when (and before (not (equal before status)))
-            (if (bebop-remote--watching-p name)
-                (bebop-remote-ack name)
-              (when (and (not quiet) (member status '("waiting" "blocked")))
-                (let ((msg (plist-get (car (bebop-remote--hook name)) :msg)))
-                  (bebop-alert)
-                  (message "Bebop: %s on %s is %s%s" name bebop-remote-host
-                           (if (equal status "blocked") "blocked" "waiting")
-                           (if msg (format " — %s" msg) ""))))))))))
-  (let ((n (seq-count #'bebop-remote--attention-p bebop-remote--sessions)))
+  "Alert on far sessions that gained attention; refresh the mode line.
+Called before each render of a fresh snapshot."
+  (let* ((quiet (< (float-time) bebop-remote--quiet-until))
+         (now (seq-filter (lambda (s) (plist-get s :attention))
+                          bebop-remote--sessions))
+         (names (mapcar (lambda (s) (plist-get s :name)) now)))
+    (unless (or quiet (eq bebop-remote--seen-attention t))
+      (dolist (s now)
+        (let ((name (plist-get s :name)))
+          (unless (or (member name bebop-remote--seen-attention)
+                      (bebop-remote--watching-p name))
+            (let ((msg (plist-get (car (bebop-remote--hook name)) :msg))
+                  (status (plist-get s :status)))
+              (bebop-alert)
+              (message "Bebop: %s on %s %s%s" name bebop-remote-host
+                       (if (member status '("waiting" "blocked"))
+                           (concat "is " status)
+                         "needs a look")
+                       (if msg (format " — %s" msg) "")))))))
+    (setq bebop-remote--seen-attention names)
     (setq bebop-remote--periphery
-          (when (> n 0)
+          (when now
             (concat " " (propertize (format "%s ● %d"
                                             ;; "Matthews-Pro" → "Pro"
                                             (car (last (split-string
                                                         bebop-remote-presence-host
                                                         "-")))
-                                            n)
+                                            (length now))
                                     'face 'bebop-dot-waiting-face)
                     " "))))
   (force-mode-line-update t))
@@ -1039,7 +1022,7 @@ The host only sees what Dropbox syncs: the org tree."
     (bebop-remote--eval-json
      (format "(bebop-start-session %S '%S '%S)" name venue chart))
     (message "Bebop: started %s on %s" name bebop-remote-host)
-    (bebop-remote-refresh)
+    (bebop-remote-refresh t)
     (ignore-errors (bebop-remote-select name))))
 
 (defun bebop-remote--conductor-dashboard (frame)
