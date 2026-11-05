@@ -929,9 +929,12 @@ missing has no MR history; the next pulse gives it one."
              sessions))
           (when-let ((derived (gethash "derived" doc)))
             (maphash (lambda (set d)
+                       ;; A retired derived set (Unsessioned became
+                       ;; Authored) is dropped, not carried forever.
+                       (when (member set bebop-derived-set-names)
                        (push (cons set (list :at (gethash "at" d)
                                              :items (append (gethash "items" d) nil)))
-                             bebop--derived))
+                             bebop--derived)))
                      derived)))
       (error (setq bebop--external-cache nil
                    bebop--derived nil)))))
@@ -1454,7 +1457,7 @@ Attention renders in place: hoisted to the top of its section
                    (bebop-set--insert-row r width "    ")))))
           (bebop-set--insert-pierced section un width))))))
 
-(defconst bebop-derived-set-names '("Unsessioned" "Reviewing")
+(defconst bebop-derived-set-names '("Authored" "Reviewing")
   "The derived sets, in render order.")
 
 (defcustom bebop-review-session "review-mr"
@@ -1491,6 +1494,7 @@ your move since the last beat."
 (defun bebop-derived--item-plist (set item)
   "The `bebop-mr-item' property for ITEM of SET: plain, printable."
   (list :set set
+        :session (let ((s (gethash "session" item))) (and (stringp s) s))
         :ref (gethash "ref" item)
         :project (gethash "project" item)
         :iid (gethash "iid" item)
@@ -1513,6 +1517,8 @@ your move since the last beat."
                       (cons "⤵" 'bebop-dot-active-face))
                      ((> (or (gethash "unresolved" item) 0) 0)
                       (cons "◆" 'shadow))
+                     ((equal (gethash "state" item) "draft")
+                      (cons "✎" 'shadow))
                      (t (cons "◇" 'shadow)))))
          (pipeline (gethash "pipeline" item))
          (pipe (cond ((equal pipeline "failed")
@@ -1542,7 +1548,9 @@ your move since the last beat."
             (bebop-set--stop title-col)
             (bebop-set--prop
              (truncate-string-to-width
-              (concat (gethash "title" item)
+              (concat (let ((s (gethash "session" item)))
+                        (if (stringp s) (format "⇢ %s · " s) ""))
+                      (gethash "title" item)
                       (if (equal set "Reviewing")
                           (format " — %s" (gethash "author" item))
                         ""))
@@ -1652,11 +1660,15 @@ local branch to check out. Returns the session name. Citizen verb."
      (let ((session (bebop-derived-review item)))
        (bebop-select-session session)
        (message "Bebop: %s asked to review %s" session (plist-get item :ref))))
-    ("Unsessioned"
-     (let ((name (bebop-derived--session-name item)))
-       (when (y-or-n-p (format "Start %s on %s? " name (plist-get item :branch)))
-         (bebop-derived-start item)
-         (message "Bebop: started %s" name))))))
+    ("Authored"
+     (if-let ((session (plist-get item :session)))
+         (if (assoc session bebop--live-sessions)
+             (bebop-select-session session)
+           (message "Bebop: %s is on deck — r on its row resumes it" session))
+       (let ((name (bebop-derived--session-name item)))
+         (when (y-or-n-p (format "Start %s on %s? " name (plist-get item :branch)))
+           (bebop-derived-start item)
+           (message "Bebop: started %s" name)))))))
 
 (defun bebop-derived-browse ()
   "Open the MR at point in the browser."

@@ -6990,9 +6990,12 @@ missing has no MR history; the next pulse gives it one."
              sessions))
           (when-let ((derived (gethash "derived" doc)))
             (maphash (lambda (set d)
+                       ;; A retired derived set (Unsessioned became
+                       ;; Authored) is dropped, not carried forever.
+                       (when (member set bebop-derived-set-names)
                        (push (cons set (list :at (gethash "at" d)
                                              :items (append (gethash "items" d) nil)))
-                             bebop--derived))
+                             bebop--derived)))
                      derived)))
       (error (setq bebop--external-cache nil
                    bebop--derived nil)))))
@@ -7522,23 +7525,30 @@ A set you declare holds sessions. A derived set holds GitLab merge
 requests, and bebop builds it rather than you: pulse rewrites it on
 every beat (see the Pulse chapter, /Derived sets/). There are two:
 
-- *Unsessioned* — your open MRs that no session holds.
-- *Reviewing* — teammates' MRs that name you as reviewer.
+- *Authored* — your open MRs, drafts too: yours to shepherd to merge.
+- *Reviewing* — teammates' MRs that name you as reviewer: yours to
+  contribute to, not to manage.
+
+They are views by role, not inboxes. Sets answer where a piece of
+work lives; these answer what you owe as author and as reviewer. An
+MR whose session sits in some epic's set still shows in Authored,
+naming its session — the same work seen two ways, never moved.
 
 They sit in their own region below the sets and above Ungrouped,
 folded by default. A folded heading still says what it holds:
 =Reviewing  3 your move · 14=. Open, your-move rows lead, newest
 first. Whose move is pulse's call, made per item:
 
-- Unsessioned: a thread where a teammate spoke last (◆), approved and
-  mergeable (⤵), or a failed pipeline (✗).
+- Authored: a thread where a teammate spoke last (◆), approved and
+  mergeable (⤵), or a failed pipeline (✗). ✎ marks a draft.
 - Reviewing: you have not approved, and either you have not spoken
   yet (◇) or someone answered in a thread you spoke in (◆).
 
 =RET= acts on the item. On Reviewing it sends =review PROJECT!IID= to
-the =review-mr= session, which runs the review skill. On Unsessioned
-it offers to start a session on the MR's branch, with a new venue and
-chart; orientation then reads the ticket. =o= opens the MR in the
+the =review-mr= session, which runs the review skill. On Authored it
+selects the MR's session, or, when none holds it, offers to start one
+on the MR's branch with a new venue and chart; orientation then reads
+the ticket. =o= opens the MR in the
 browser. The rows carry =bebop-mr-item=, a plist of plain strings and
 numbers, so the remote dashboard can act on them too.
 
@@ -7547,7 +7557,7 @@ under ="derived"=, because they are the same kind of thing: what
 GitLab told this host, rewritten whole, stale when pulse stops.
 
 #+begin_src emacs-lisp
-(defconst bebop-derived-set-names '("Unsessioned" "Reviewing")
+(defconst bebop-derived-set-names '("Authored" "Reviewing")
   "The derived sets, in render order.")
 
 (defcustom bebop-review-session "review-mr"
@@ -7584,6 +7594,7 @@ your move since the last beat."
 (defun bebop-derived--item-plist (set item)
   "The `bebop-mr-item' property for ITEM of SET: plain, printable."
   (list :set set
+        :session (let ((s (gethash "session" item))) (and (stringp s) s))
         :ref (gethash "ref" item)
         :project (gethash "project" item)
         :iid (gethash "iid" item)
@@ -7606,6 +7617,8 @@ your move since the last beat."
                       (cons "⤵" 'bebop-dot-active-face))
                      ((> (or (gethash "unresolved" item) 0) 0)
                       (cons "◆" 'shadow))
+                     ((equal (gethash "state" item) "draft")
+                      (cons "✎" 'shadow))
                      (t (cons "◇" 'shadow)))))
          (pipeline (gethash "pipeline" item))
          (pipe (cond ((equal pipeline "failed")
@@ -7635,7 +7648,9 @@ your move since the last beat."
             (bebop-set--stop title-col)
             (bebop-set--prop
              (truncate-string-to-width
-              (concat (gethash "title" item)
+              (concat (let ((s (gethash "session" item)))
+                        (if (stringp s) (format "⇢ %s · " s) ""))
+                      (gethash "title" item)
                       (if (equal set "Reviewing")
                           (format " — %s" (gethash "author" item))
                         ""))
@@ -7745,11 +7760,15 @@ local branch to check out. Returns the session name. Citizen verb."
      (let ((session (bebop-derived-review item)))
        (bebop-select-session session)
        (message "Bebop: %s asked to review %s" session (plist-get item :ref))))
-    ("Unsessioned"
-     (let ((name (bebop-derived--session-name item)))
-       (when (y-or-n-p (format "Start %s on %s? " name (plist-get item :branch)))
-         (bebop-derived-start item)
-         (message "Bebop: started %s" name))))))
+    ("Authored"
+     (if-let ((session (plist-get item :session)))
+         (if (assoc session bebop--live-sessions)
+             (bebop-select-session session)
+           (message "Bebop: %s is on deck — r on its row resumes it" session))
+       (let ((name (bebop-derived--session-name item)))
+         (when (y-or-n-p (format "Start %s on %s? " name (plist-get item :branch)))
+           (bebop-derived-start item)
+           (message "Bebop: started %s" name)))))))
 
 (defun bebop-derived-browse ()
   "Open the MR at point in the browser."
@@ -9505,8 +9524,8 @@ host then pauses it without prompts (`bebop-stop-session')."
 
 (defun bebop-remote--act-item (item)
   "Act on derived-set ITEM on the host, as RET does locally.
-Reviewing jams the host's review session and selects it here;
-Unsessioned asks here, then starts the session there."
+Reviewing jams the host's review session and selects it here.
+Authored selects the MR's session, or asks here and starts one there."
   (pcase (plist-get item :set)
     ("Reviewing"
      (let ((session (car (read-from-string
@@ -9515,14 +9534,16 @@ Unsessioned asks here, then starts the session there."
        (bebop-remote-select session)
        (message "Bebop: %s on %s asked to review %s"
                 session bebop-remote-host (plist-get item :ref))))
-    ("Unsessioned"
+    ("Authored"
+     (if-let ((session (plist-get item :session)))
+         (bebop-remote-select session)
      (let ((name (format "%s--%s"
                          (car (last (split-string (plist-get item :project) "/")))
                          (bebop--sanitize-name (plist-get item :branch)))))
        (when (y-or-n-p (format "Start %s on %s? " name bebop-remote-host))
          (bebop-remote--eval (format "(bebop-derived-start '%S)" item))
          (bebop-remote-refresh)
-         (message "Bebop: started %s on %s" name bebop-remote-host))))))
+         (message "Bebop: started %s on %s" name bebop-remote-host)))))))
 
 (defun bebop-remote-browse ()
   "Open the MR at point in this machine's browser."
@@ -10651,11 +10672,14 @@ to merge. Both go to =bebop-mr-cache-set= as optional arguments.
 /Derived sets/. After the venue walk, pulse fills two sets that no
 one declares, from GitLab alone (=bebop-derived-set-put=):
 
-- *Unsessioned* — your open, non-draft MRs that no session holds. A
+- *Authored* — every MR you have open, drafts included, whether or
+  not a session holds it: these are yours to shepherd, and a session
+  filed under some epic's set must not take one out of sight. A
   session holds an MR when its venue sits on the MR's branch, or,
-  failing that, when its name carries the MR's ticket key. An MR held
-  by an on-deck session gets that session's MR glyph instead, so a
-  shelved session whose reviewer replied still says so.
+  failing that, when its name carries the MR's ticket key; the item
+  then names it. An MR held by an on-deck session also gets that
+  session's MR glyph, so a shelved session whose reviewer replied
+  still says so.
 - *Reviewing* — open, non-draft MRs that name you as reviewer, by
   others. Your move unless you approved: either you have not spoken
   yet, or someone answered in a thread you spoke in.
@@ -10821,26 +10845,25 @@ def session_for(mr, branches, sessions):
 
 
 def derived(me, sessions, branches, done):
-    """Write the Unsessioned and Reviewing derived sets."""
-    unsessioned = []
+    """Write the Authored and Reviewing derived sets."""
+    authored = []
     for mr in api("merge_requests?scope=created_by_me&state=opened"
                   "&per_page=100"):
-        if mr.get("draft"):
-            continue
         name = session_for(mr, branches, sessions)
-        if name in done:
-            continue  # the venue walk already cached it
-        st = mr_status(mr["project_id"], mr["iid"], me)
-        if name:
-            cache(name, st)  # an on-deck session's MR still wants you
-            continue
-        unsessioned.append(item(
-            mr, on_me=st["on_me"], unresolved=st["unresolved"],
+        if name in done and done[name]["detail"]["iid"] == mr["iid"]:
+            st = done[name]  # the venue walk already fetched it
+        else:
+            st = mr_status(mr["project_id"], mr["iid"], me)
+            if name:
+                cache(name, st)  # an on-deck session's MR still wants you
+        authored.append(item(
+            mr, session=name, state=mr_state(mr),
+            on_me=st["on_me"], unresolved=st["unresolved"],
             mergeable=st["mergeable"], pipeline=st["pipeline"],
             your_move=bool(st["on_me"] or st["mergeable"]
                            or st["pipeline"] == "failed")))
-    el(f'(bebop-derived-set-put "Unsessioned"'
-       f' {el_quote(json.dumps(unsessioned))})')
+    el(f'(bebop-derived-set-put "Authored"'
+       f' {el_quote(json.dumps(authored))})')
 
     reviewing = []
     for mr in api("merge_requests?scope=all&state=opened"
@@ -10867,7 +10890,7 @@ def derived(me, sessions, branches, done):
             your_move=state != "approved" and (replied or not spoke)))
     el(f'(bebop-derived-set-put "Reviewing"'
        f' {el_quote(json.dumps(reviewing))})')
-    return len(unsessioned), len(reviewing)
+    return len(authored), len(reviewing)
 
 
 def main():
@@ -10877,7 +10900,7 @@ def main():
         return  # Emacs isn't up; pulse skips a beat, silently
     me = api("user")["username"]
     beats = 0
-    done = set()
+    done = {}
     branches = {}
     for s in sessions:
         name, venue = s.get("name"), s.get("venue")
@@ -10903,14 +10926,15 @@ def main():
                   or next((m for m in mrs if m["state"] == "merged"), None))
             if mr is None:
                 continue
-            cache(name, mr_status(":id", mr["iid"], me, venue))
-            done.add(name)
+            st = mr_status(":id", mr["iid"], me, venue)
+            cache(name, st)
+            done[name] = st
             beats += 1
         except Exception as e:
             print(f"pulse: {name}: {e}", file=sys.stderr)
     try:
         counts = derived(me, sessions, branches, done)
-        print(f"pulse: derived sets: {counts[0]} unsessioned,"
+        print(f"pulse: derived sets: {counts[0]} authored,"
               f" {counts[1]} reviewing")
     except Exception as e:
         print(f"pulse: derived sets: {e}", file=sys.stderr)

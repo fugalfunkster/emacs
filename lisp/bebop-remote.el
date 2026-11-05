@@ -506,8 +506,8 @@ host then pauses it without prompts (`bebop-stop-session')."
 
 (defun bebop-remote--act-item (item)
   "Act on derived-set ITEM on the host, as RET does locally.
-Reviewing jams the host's review session and selects it here;
-Unsessioned asks here, then starts the session there."
+Reviewing jams the host's review session and selects it here.
+Authored selects the MR's session, or asks here and starts one there."
   (pcase (plist-get item :set)
     ("Reviewing"
      (let ((session (car (read-from-string
@@ -516,14 +516,16 @@ Unsessioned asks here, then starts the session there."
        (bebop-remote-select session)
        (message "Bebop: %s on %s asked to review %s"
                 session bebop-remote-host (plist-get item :ref))))
-    ("Unsessioned"
+    ("Authored"
+     (if-let ((session (plist-get item :session)))
+         (bebop-remote-select session)
      (let ((name (format "%s--%s"
                          (car (last (split-string (plist-get item :project) "/")))
                          (bebop--sanitize-name (plist-get item :branch)))))
        (when (y-or-n-p (format "Start %s on %s? " name bebop-remote-host))
          (bebop-remote--eval (format "(bebop-derived-start '%S)" item))
          (bebop-remote-refresh)
-         (message "Bebop: started %s on %s" name bebop-remote-host))))))
+         (message "Bebop: started %s on %s" name bebop-remote-host)))))))
 
 (defun bebop-remote-browse ()
   "Open the MR at point in this machine's browser."

@@ -141,26 +141,25 @@ def session_for(mr, branches, sessions):
 
 
 def derived(me, sessions, branches, done):
-    """Write the Unsessioned and Reviewing derived sets."""
-    unsessioned = []
+    """Write the Authored and Reviewing derived sets."""
+    authored = []
     for mr in api("merge_requests?scope=created_by_me&state=opened"
                   "&per_page=100"):
-        if mr.get("draft"):
-            continue
         name = session_for(mr, branches, sessions)
-        if name in done:
-            continue  # the venue walk already cached it
-        st = mr_status(mr["project_id"], mr["iid"], me)
-        if name:
-            cache(name, st)  # an on-deck session's MR still wants you
-            continue
-        unsessioned.append(item(
-            mr, on_me=st["on_me"], unresolved=st["unresolved"],
+        if name in done and done[name]["detail"]["iid"] == mr["iid"]:
+            st = done[name]  # the venue walk already fetched it
+        else:
+            st = mr_status(mr["project_id"], mr["iid"], me)
+            if name:
+                cache(name, st)  # an on-deck session's MR still wants you
+        authored.append(item(
+            mr, session=name, state=mr_state(mr),
+            on_me=st["on_me"], unresolved=st["unresolved"],
             mergeable=st["mergeable"], pipeline=st["pipeline"],
             your_move=bool(st["on_me"] or st["mergeable"]
                            or st["pipeline"] == "failed")))
-    el(f'(bebop-derived-set-put "Unsessioned"'
-       f' {el_quote(json.dumps(unsessioned))})')
+    el(f'(bebop-derived-set-put "Authored"'
+       f' {el_quote(json.dumps(authored))})')
 
     reviewing = []
     for mr in api("merge_requests?scope=all&state=opened"
@@ -187,7 +186,7 @@ def derived(me, sessions, branches, done):
             your_move=state != "approved" and (replied or not spoke)))
     el(f'(bebop-derived-set-put "Reviewing"'
        f' {el_quote(json.dumps(reviewing))})')
-    return len(unsessioned), len(reviewing)
+    return len(authored), len(reviewing)
 
 
 def main():
@@ -197,7 +196,7 @@ def main():
         return  # Emacs isn't up; pulse skips a beat, silently
     me = api("user")["username"]
     beats = 0
-    done = set()
+    done = {}
     branches = {}
     for s in sessions:
         name, venue = s.get("name"), s.get("venue")
@@ -223,14 +222,15 @@ def main():
                   or next((m for m in mrs if m["state"] == "merged"), None))
             if mr is None:
                 continue
-            cache(name, mr_status(":id", mr["iid"], me, venue))
-            done.add(name)
+            st = mr_status(":id", mr["iid"], me, venue)
+            cache(name, st)
+            done[name] = st
             beats += 1
         except Exception as e:
             print(f"pulse: {name}: {e}", file=sys.stderr)
     try:
         counts = derived(me, sessions, branches, done)
-        print(f"pulse: derived sets: {counts[0]} unsessioned,"
+        print(f"pulse: derived sets: {counts[0]} authored,"
               f" {counts[1]} reviewing")
     except Exception as e:
         print(f"pulse: derived sets: {e}", file=sys.stderr)
