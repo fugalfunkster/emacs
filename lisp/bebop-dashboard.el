@@ -947,7 +947,13 @@ A tab label is clickable; =h= cycles the tabs from the keyboard."
               (concat " " (car tab))
               (unless (eq buf (current-buffer))
                 (face-attribute 'shadow :foreground nil t)))
-             'mouse-face 'highlight
+             ;; Hover as the eshell tabs do: the text lightens, no
+             ;; background or box (`tab-line-highlight' in emacs.org).
+             'mouse-face (list :foreground
+                               (face-attribute (if (facep 'tab-line-highlight)
+                                                   'tab-line-highlight
+                                                 'default)
+                                               :foreground nil t))
              'help-echo (format "Show %s" (car tab))
              'local-map map)))
         tabs "")))))
