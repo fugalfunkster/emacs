@@ -1573,8 +1573,7 @@ your move since the last beat."
         (insert "\n")
         (magit-insert-section (bebop-derived (concat "derived/" set) t)
           (magit-insert-heading
-            (propertize
-             (concat (bebop-set--stop bebop-set--name-col)
+            (concat (bebop-set--stop bebop-set--name-col)
                     (bebop-set--prop set '(:weight bold))
                     (bebop-set--stop (+ bebop-set--name-col width))
                     " "
@@ -1586,8 +1585,11 @@ your move since the last beat."
                     (bebop-set--prop
                      (format "%s%d%s" (if (and (> moves 0) (not stale)) " · " "")
                              (length items) (if stale " · stale" ""))
-                     'shadow))
-             'bebop-mr-heading set))
+                     'shadow)))
+          ;; magit-insert-heading drops unknown properties, so the
+          ;; arrow-key stop goes on after it (see `bebop--nav-stop-p').
+          (put-text-property (line-beginning-position 0) (point)
+                             'bebop-mr-heading set)
           ;; Titles align to this set's longest ref, not to the
           ;; session-name column: that one is sized for session names,
           ;; and on an 80-column dashboard it leaves titles no room.
