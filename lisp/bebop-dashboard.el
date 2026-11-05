@@ -872,6 +872,8 @@ the far session's."
     map)
   "Keymap for `bebop-dashboard-mode'.")
 
+(define-key bebop-dashboard-mode-map (kbd "h") #'bebop-dashboard-next-tab)
+
 ;; Explicit, unconditional: `define-derived-mode' only sets the keymap
 ;; parent when the map has none, and `defvar' does not reinitialize on
 ;; hot-reload — so a live session that predates the magit-section
@@ -885,8 +887,8 @@ the far session's."
 ;; intentional. Lives outside the defvar so hot-reloads apply it.
 (define-key bebop-dashboard-mode-map (kbd "q") #'ignore)
 
-(defun bebop--header-propertize (text)
-  "TEXT styled as the dashboard header: bold, large, the header color.
+(defun bebop--header-propertize (text &optional color)
+  "TEXT styled as the dashboard header: bold, large, COLOR or the header blue.
 Sized from the default face, so it ignores any text-scale."
   (let* ((resolved (and (fboundp 'bebop--resolve-font) (bebop--resolve-font)))
          (base-h (let ((dh (face-attribute 'default :height nil t)))
@@ -894,8 +896,61 @@ Sized from the default face, so it ignores any text-scale."
          (abs-h (round (* bebop-header-height base-h))))
     (propertize text
                 'face `(:height ,abs-h :weight bold
-                        :foreground ,bebop-header-color
+                        :foreground ,(or color bebop-header-color)
                         ,@(when resolved (list :family resolved))))))
+
+(defvar bebop-dashboard-tabs-function nil
+  "Function returning the dashboard tabs as (LABEL . BUFFER), or nil.
+When it returns tabs, the header reads \"Bebop: LABEL LABEL ...\", the
+current buffer's label in the header blue. bebop-remote sets it to the
+host tabs: this machine's *bebop* and the host's *bebop-remote*.")
+
+(defun bebop-dashboard-switch-tab (buffer)
+  "Show dashboard BUFFER in the selected window, keeping its dedication."
+  (let ((dedicated (window-dedicated-p)))
+    (set-window-dedicated-p nil nil)
+    (switch-to-buffer buffer nil t)
+    (set-window-dedicated-p nil dedicated)))
+
+(defun bebop-dashboard-next-tab ()
+  "Show the next dashboard tab in this window."
+  (interactive)
+  (let* ((tabs (and bebop-dashboard-tabs-function
+                    (funcall bebop-dashboard-tabs-function)))
+         (bufs (mapcar #'cdr tabs))
+         (here (seq-position bufs (current-buffer))))
+    (if (cdr bufs)
+        (bebop-dashboard-switch-tab
+         (nth (mod (1+ (or here -1)) (length bufs)) bufs))
+      (message "Bebop: no other dashboard tab"))))
+
+(defun bebop--dashboard-header ()
+  "The header text: \"Bebop\", then the tabs inline when there are any.
+A tab label is clickable; =h= cycles the tabs from the keyboard."
+  (let ((tabs (and bebop-dashboard-tabs-function
+                   (funcall bebop-dashboard-tabs-function))))
+    (if (null (cdr tabs))
+        (bebop--header-propertize (concat " " bebop-header-text))
+      (concat
+       (bebop--header-propertize (concat " " bebop-header-text ":"))
+       (mapconcat
+        (lambda (tab)
+          (let ((buf (cdr tab))
+                (map (make-sparse-keymap)))
+            (define-key map [header-line mouse-1]
+                        (lambda (ev)
+                          (interactive "e")
+                          (with-selected-window (posn-window (event-start ev))
+                            (bebop-dashboard-switch-tab buf))))
+            (propertize
+             (bebop--header-propertize
+              (concat " " (car tab))
+              (unless (eq buf (current-buffer))
+                (face-attribute 'shadow :foreground nil t)))
+             'mouse-face 'highlight
+             'help-echo (format "Show %s" (car tab))
+             'local-map map)))
+        tabs "")))))
 
 (defun bebop--dashboard-look ()
   "Give the current buffer the dashboard's look.
@@ -927,8 +982,7 @@ fold state preserved across poll re-renders via the visibility cache.
 \\{bebop-dashboard-mode-map}"
   (setq-local magit-section-cache-visibility t)
   (bebop--dashboard-look)
-  (setq header-line-format
-        '((:eval (bebop--header-propertize (concat " " bebop-header-text)))))
+  (setq header-line-format '((:eval (bebop--dashboard-header))))
   (add-hook 'kill-buffer-hook #'bebop--stop-poll nil t))
 
 (defun bebop--notify-waiting (name)

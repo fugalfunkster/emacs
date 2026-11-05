@@ -312,6 +312,7 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "g")      #'bebop-remote-refresh)
     (define-key map (kbd "RET")    #'bebop-remote-select)
+    (define-key map (kbd "h")      #'bebop-dashboard-next-tab)
     (define-key map (kbd "TAB")    #'bebop-remote-toggle)
     (define-key map (kbd "<tab>")  #'bebop-remote-toggle)
     (define-key map (kbd "a")      #'bebop-remote-attach)
@@ -335,9 +336,9 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
   (setq header-line-format
         '((:eval
            (concat
-            ;; The same header as *bebop*: the host tab names the
-            ;; machine, and switching tabs must not shift the tree.
-            (bebop--header-propertize (concat " " bebop-header-text))
+            ;; The same header as *bebop*, tabs inline: the tab names
+            ;; the machine, and switching tabs must not shift the tree.
+            (bebop--dashboard-header)
             (unless (process-live-p bebop-remote--stream)
               (propertize "  stream down" 'face 'shadow))
             (when bebop-remote--forwards
@@ -1047,45 +1048,40 @@ The host only sees what Dropbox syncs: the org tree."
     (bebop-remote-refresh t)
     (ignore-errors (bebop-remote-select name))))
 
-(defun bebop-remote--tab-name (buffer &optional _buffers)
-  "The host tab label for dashboard BUFFER."
-  (if (equal (buffer-name buffer) bebop-remote-buffer-name)
-      ;; "Matthews-Pro" → "Pro"
-      (car (last (split-string bebop-remote-presence-host "-")))
-    (bebop--host-name)))
+(defun bebop-remote--host-tabs ()
+  "The dashboard host tabs as (LABEL . BUFFER): this machine, the host.
+None on the resident host, which has no far host to show."
+  (unless (equal (bebop--host-name) bebop-resident-host)
+    (seq-filter (lambda (tab) (buffer-live-p (cdr tab)))
+                (list (cons (bebop--host-name) (get-buffer bebop-buffer-name))
+                      ;; "Matthews-Pro" → "Pro"
+                      (cons (car (last (split-string bebop-remote-presence-host "-")))
+                            (get-buffer bebop-remote-buffer-name))))))
 
-(defun bebop-remote--dashboard-tabs ()
-  "The dashboard window's host tabs: this machine, then the host."
-  (seq-filter #'buffer-live-p
-              (list (get-buffer bebop-buffer-name)
-                    (get-buffer bebop-remote-buffer-name))))
+(setq bebop-dashboard-tabs-function #'bebop-remote--host-tabs)
 
-(defun bebop-remote--host-tabs (buffer)
-  "Show the host tabs over dashboard BUFFER."
-  (with-current-buffer buffer
-    (setq-local tab-line-tabs-function #'bebop-remote--dashboard-tabs)
-    (setq-local tab-line-tab-name-function #'bebop-remote--tab-name)
-    (setq-local tab-line-close-button-show nil)
-    (setq-local tab-line-new-button-show nil)
-    ;; The tab you are on wears the header blue, whether or not the
-    ;; dashboard window is selected; the other tab stays shadowed.
-    (dolist (face '(tab-line-tab tab-line-tab-current))
-      (face-remap-add-relative face :foreground bebop-header-color
-                               :weight 'bold))
-    (face-remap-add-relative 'tab-line-tab-inactive :inherit 'shadow)
-    (tab-line-mode 1)))
+;; Headers are buffer-local forms set when the mode starts, so a reload
+;; re-arms the live dashboards, and takes down the tab line the first
+;; version of host tabs used.
+(dolist (b (list bebop-buffer-name bebop-remote-buffer-name))
+  (when-let ((buf (get-buffer b)))
+    (with-current-buffer buf
+      (when (bound-and-true-p tab-line-mode)
+        (tab-line-mode -1))
+      (cond ((derived-mode-p 'bebop-remote-mode)
+             (let ((inhibit-read-only t)) (bebop-remote-mode))
+             (bebop-remote--render))
+            ((derived-mode-p 'bebop-dashboard-mode)
+             (setq header-line-format '((:eval (bebop--dashboard-header)))))))))
 
 (defun bebop-remote--conductor-dashboard (frame)
   "Give FRAME's dashboard window host tabs; a client opens on the host's."
   (unless (equal (bebop--host-name) bebop-resident-host)
     (let ((win (frame-parameter frame 'bebop-dashboard-window))
-          (local (get-buffer-create bebop-buffer-name))
           (remote (get-buffer-create bebop-remote-buffer-name)))
       (with-current-buffer remote
         (unless (derived-mode-p 'bebop-remote-mode)
           (bebop-remote-mode)))
-      (bebop-remote--host-tabs local)
-      (bebop-remote--host-tabs remote)
       (when (and bebop-remote-client (window-live-p win))
         (set-window-buffer win remote))
       (bebop-remote-refresh)

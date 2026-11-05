@@ -3072,6 +3072,8 @@ Select the session at point as active and focus the composition buffer.
     map)
   "Keymap for `bebop-dashboard-mode'.")
 
+(define-key bebop-dashboard-mode-map (kbd "h") #'bebop-dashboard-next-tab)
+
 ;; Explicit, unconditional: `define-derived-mode' only sets the keymap
 ;; parent when the map has none, and `defvar' does not reinitialize on
 ;; hot-reload — so a live session that predates the magit-section
@@ -3085,8 +3087,8 @@ Select the session at point as active and focus the composition buffer.
 ;; intentional. Lives outside the defvar so hot-reloads apply it.
 (define-key bebop-dashboard-mode-map (kbd "q") #'ignore)
 
-(defun bebop--header-propertize (text)
-  "TEXT styled as the dashboard header: bold, large, the header color.
+(defun bebop--header-propertize (text &optional color)
+  "TEXT styled as the dashboard header: bold, large, COLOR or the header blue.
 Sized from the default face, so it ignores any text-scale."
   (let* ((resolved (and (fboundp 'bebop--resolve-font) (bebop--resolve-font)))
          (base-h (let ((dh (face-attribute 'default :height nil t)))
@@ -3094,8 +3096,61 @@ Sized from the default face, so it ignores any text-scale."
          (abs-h (round (* bebop-header-height base-h))))
     (propertize text
                 'face `(:height ,abs-h :weight bold
-                        :foreground ,bebop-header-color
+                        :foreground ,(or color bebop-header-color)
                         ,@(when resolved (list :family resolved))))))
+
+(defvar bebop-dashboard-tabs-function nil
+  "Function returning the dashboard tabs as (LABEL . BUFFER), or nil.
+When it returns tabs, the header reads \"Bebop: LABEL LABEL ...\", the
+current buffer's label in the header blue. bebop-remote sets it to the
+host tabs: this machine's *bebop* and the host's *bebop-remote*.")
+
+(defun bebop-dashboard-switch-tab (buffer)
+  "Show dashboard BUFFER in the selected window, keeping its dedication."
+  (let ((dedicated (window-dedicated-p)))
+    (set-window-dedicated-p nil nil)
+    (switch-to-buffer buffer nil t)
+    (set-window-dedicated-p nil dedicated)))
+
+(defun bebop-dashboard-next-tab ()
+  "Show the next dashboard tab in this window."
+  (interactive)
+  (let* ((tabs (and bebop-dashboard-tabs-function
+                    (funcall bebop-dashboard-tabs-function)))
+         (bufs (mapcar #'cdr tabs))
+         (here (seq-position bufs (current-buffer))))
+    (if (cdr bufs)
+        (bebop-dashboard-switch-tab
+         (nth (mod (1+ (or here -1)) (length bufs)) bufs))
+      (message "Bebop: no other dashboard tab"))))
+
+(defun bebop--dashboard-header ()
+  "The header text: \"Bebop\", then the tabs inline when there are any.
+A tab label is clickable; =h= cycles the tabs from the keyboard."
+  (let ((tabs (and bebop-dashboard-tabs-function
+                   (funcall bebop-dashboard-tabs-function))))
+    (if (null (cdr tabs))
+        (bebop--header-propertize (concat " " bebop-header-text))
+      (concat
+       (bebop--header-propertize (concat " " bebop-header-text ":"))
+       (mapconcat
+        (lambda (tab)
+          (let ((buf (cdr tab))
+                (map (make-sparse-keymap)))
+            (define-key map [header-line mouse-1]
+                        (lambda (ev)
+                          (interactive "e")
+                          (with-selected-window (posn-window (event-start ev))
+                            (bebop-dashboard-switch-tab buf))))
+            (propertize
+             (bebop--header-propertize
+              (concat " " (car tab))
+              (unless (eq buf (current-buffer))
+                (face-attribute 'shadow :foreground nil t)))
+             'mouse-face 'highlight
+             'help-echo (format "Show %s" (car tab))
+             'local-map map)))
+        tabs "")))))
 
 (defun bebop--dashboard-look ()
   "Give the current buffer the dashboard's look.
@@ -3127,8 +3182,7 @@ fold state preserved across poll re-renders via the visibility cache.
 \\{bebop-dashboard-mode-map}"
   (setq-local magit-section-cache-visibility t)
   (bebop--dashboard-look)
-  (setq header-line-format
-        '((:eval (bebop--header-propertize (concat " " bebop-header-text)))))
+  (setq header-line-format '((:eval (bebop--dashboard-header))))
   (add-hook 'kill-buffer-hook #'bebop--stop-poll nil t))
 #+end_src
 
@@ -8825,6 +8879,7 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "g")      #'bebop-remote-refresh)
     (define-key map (kbd "RET")    #'bebop-remote-select)
+    (define-key map (kbd "h")      #'bebop-dashboard-next-tab)
     (define-key map (kbd "TAB")    #'bebop-remote-toggle)
     (define-key map (kbd "<tab>")  #'bebop-remote-toggle)
     (define-key map (kbd "a")      #'bebop-remote-attach)
@@ -8848,9 +8903,9 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
   (setq header-line-format
         '((:eval
            (concat
-            ;; The same header as *bebop*: the host tab names the
-            ;; machine, and switching tabs must not shift the tree.
-            (bebop--header-propertize (concat " " bebop-header-text))
+            ;; The same header as *bebop*, tabs inline: the tab names
+            ;; the machine, and switching tabs must not shift the tree.
+            (bebop--dashboard-header)
             (unless (process-live-p bebop-remote--stream)
               (propertize "  stream down" 'face 'shadow))
             (when bebop-remote--forwards
@@ -9694,9 +9749,10 @@ the relay moves them over. Nothing new starts here.
 
 The dashboard window carries host tabs, as the shell window carries
 its directory tabs: one tab for this machine (=*bebop*=) and one for
-the host (=*bebop-remote*=), labelled =iMac= and =Pro=. The current
-tab is drawn in the header blue. Both buffers share the =Bebop=
-header, since the tab already names the machine. Every client
+the host (=*bebop-remote*=), labelled =iMac= and =Pro=. The tabs sit
+inline in the header, =Bebop: iMac Pro=, with =Bebop= and the current
+tab in the header blue and the other tab dimmed. Click a tab, or press
+=h= on either dashboard to cycle. Every client
 gets them, client mode or not; client mode only decides which tab the
 Conductor opens on. The resident host gets none, since it has no far
 host to show. The remote buffer refreshes the moment its tab comes up,
@@ -9783,45 +9839,40 @@ The host only sees what Dropbox syncs: the org tree."
     (bebop-remote-refresh t)
     (ignore-errors (bebop-remote-select name))))
 
-(defun bebop-remote--tab-name (buffer &optional _buffers)
-  "The host tab label for dashboard BUFFER."
-  (if (equal (buffer-name buffer) bebop-remote-buffer-name)
-      ;; "Matthews-Pro" → "Pro"
-      (car (last (split-string bebop-remote-presence-host "-")))
-    (bebop--host-name)))
+(defun bebop-remote--host-tabs ()
+  "The dashboard host tabs as (LABEL . BUFFER): this machine, the host.
+None on the resident host, which has no far host to show."
+  (unless (equal (bebop--host-name) bebop-resident-host)
+    (seq-filter (lambda (tab) (buffer-live-p (cdr tab)))
+                (list (cons (bebop--host-name) (get-buffer bebop-buffer-name))
+                      ;; "Matthews-Pro" → "Pro"
+                      (cons (car (last (split-string bebop-remote-presence-host "-")))
+                            (get-buffer bebop-remote-buffer-name))))))
 
-(defun bebop-remote--dashboard-tabs ()
-  "The dashboard window's host tabs: this machine, then the host."
-  (seq-filter #'buffer-live-p
-              (list (get-buffer bebop-buffer-name)
-                    (get-buffer bebop-remote-buffer-name))))
+(setq bebop-dashboard-tabs-function #'bebop-remote--host-tabs)
 
-(defun bebop-remote--host-tabs (buffer)
-  "Show the host tabs over dashboard BUFFER."
-  (with-current-buffer buffer
-    (setq-local tab-line-tabs-function #'bebop-remote--dashboard-tabs)
-    (setq-local tab-line-tab-name-function #'bebop-remote--tab-name)
-    (setq-local tab-line-close-button-show nil)
-    (setq-local tab-line-new-button-show nil)
-    ;; The tab you are on wears the header blue, whether or not the
-    ;; dashboard window is selected; the other tab stays shadowed.
-    (dolist (face '(tab-line-tab tab-line-tab-current))
-      (face-remap-add-relative face :foreground bebop-header-color
-                               :weight 'bold))
-    (face-remap-add-relative 'tab-line-tab-inactive :inherit 'shadow)
-    (tab-line-mode 1)))
+;; Headers are buffer-local forms set when the mode starts, so a reload
+;; re-arms the live dashboards, and takes down the tab line the first
+;; version of host tabs used.
+(dolist (b (list bebop-buffer-name bebop-remote-buffer-name))
+  (when-let ((buf (get-buffer b)))
+    (with-current-buffer buf
+      (when (bound-and-true-p tab-line-mode)
+        (tab-line-mode -1))
+      (cond ((derived-mode-p 'bebop-remote-mode)
+             (let ((inhibit-read-only t)) (bebop-remote-mode))
+             (bebop-remote--render))
+            ((derived-mode-p 'bebop-dashboard-mode)
+             (setq header-line-format '((:eval (bebop--dashboard-header)))))))))
 
 (defun bebop-remote--conductor-dashboard (frame)
   "Give FRAME's dashboard window host tabs; a client opens on the host's."
   (unless (equal (bebop--host-name) bebop-resident-host)
     (let ((win (frame-parameter frame 'bebop-dashboard-window))
-          (local (get-buffer-create bebop-buffer-name))
           (remote (get-buffer-create bebop-remote-buffer-name)))
       (with-current-buffer remote
         (unless (derived-mode-p 'bebop-remote-mode)
           (bebop-remote-mode)))
-      (bebop-remote--host-tabs local)
-      (bebop-remote--host-tabs remote)
       (when (and bebop-remote-client (window-live-p win))
         (set-window-buffer win remote))
       (bebop-remote-refresh)
