@@ -94,8 +94,7 @@ malformed read is retried on the next poll rather than erroring."
          (all (append existing (list entry))))
     (when (> (length all) 50)
       (setq all (nthcdr (- (length all) 50) all)))
-    (with-temp-file file
-      (insert (json-serialize (vconcat all))))))
+    (bebop--write-json file (vconcat all))))
 
 (defun bebop-call--dispatch (call)
   "Answer CALL (a parsed hash table) unless already seen."
@@ -130,19 +129,19 @@ malformed read is retried on the next poll rather than erroring."
   "Write this host's presence heartbeat to the mailbox."
   (let* ((rows (bebop-set--rows))
          (live (seq-filter (lambda (r) (plist-get r :live)) rows)))
-    (with-temp-file (bebop-call--presence-file)
-      (insert (json-serialize
-               (list :host bebop-call-host
-                     :at (bebop--now-string)
-                     :live (length live)
-                     :sessions
-                     (vconcat
-                      (mapcar (lambda (r)
-                                (list :name (plist-get r :name)
-                                      :status (symbol-name
-                                               (or (plist-get (plist-get r :live) :status)
-                                                   'unknown))))
-                              live))))))
+    (bebop--write-json
+     (bebop-call--presence-file)
+     (list :host bebop-call-host
+           :at (bebop--now-string)
+           :live (length live)
+           :sessions
+           (vconcat
+            (mapcar (lambda (r)
+                      (list :name (plist-get r :name)
+                            :status (symbol-name
+                                     (or (plist-get (plist-get r :live) :status)
+                                         'unknown))))
+                    live))))
     (setq bebop-call--presence-at (current-time))))
 
 (defun bebop-call--maybe-presence ()
@@ -162,8 +161,7 @@ malformed read is retried on the next poll rather than erroring."
   "Write ENTRIES to this host's own ledger, keeping the last 100."
   (when (> (length entries) 100)
     (setq entries (nthcdr (- (length entries) 100) entries)))
-  (with-temp-file (bebop-ledger--file)
-    (insert (json-serialize (vconcat entries)))))
+  (bebop--write-json (bebop-ledger--file) (vconcat entries)))
 
 (defun bebop-ledger-read (&optional host)
   "Return HOST's ledger (default: this host) as a JSON string."

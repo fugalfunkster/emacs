@@ -80,8 +80,7 @@ save once after — N acks should not mean N file writes.")
     (when bebop--exile-proposals
       (puthash "proposals" (vconcat bebop--exile-proposals) doc))
     (make-directory (file-name-directory bebop-set-state-file) t)
-    (with-temp-file bebop-set-state-file
-      (insert (json-serialize doc))))))
+    (bebop--write-json bebop-set-state-file doc))))
 
 (defun bebop-set--load ()
   "Load sets and session choices from `bebop-set-state-file'.
@@ -972,8 +971,7 @@ missing has no MR history; the next pulse gives it one."
             (puthash (car cell) d derived)))
         (puthash "derived" derived doc)))
     (make-directory (file-name-directory bebop-external-cache-file) t)
-    (with-temp-file bebop-external-cache-file
-      (insert (json-serialize doc)))))
+    (bebop--write-json bebop-external-cache-file doc)))
 
 (defun bebop-external--cell (session)
   "Return SESSION's cache cell, creating it if absent."

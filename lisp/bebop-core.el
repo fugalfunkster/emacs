@@ -80,6 +80,12 @@ wrong-but-obvious host component beats a wrong-and-invisible one."
         short
       bebop-host-fallback)))
 
+(defun bebop--write-json (file object)
+  "Write OBJECT to FILE as UTF-8 JSON, without ever prompting."
+  (let ((coding-system-for-write 'utf-8-unix))
+    (with-temp-file file
+      (insert (json-serialize object)))))
+
 (defcustom bebop-alert-sound nil
   "Sound file bebop alerts play, or nil for silent alerts.
 Silent by default. To opt in, set it to a system sound, for example
