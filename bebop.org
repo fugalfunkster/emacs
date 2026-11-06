@@ -6740,8 +6740,14 @@ Roundup writes a whole JQL pass this way. Return the count."
                             :at (or (plist-get tk :at) :null)))
     "null"))
 
+(defconst bebop-set--lane-legend
+  "○ To Do  ◔ In Progress  ◑ Code Review  ◕ Desk Review, Test, Ready  ◉ Done
+Blue: on the Jira board. Dim: backlog, an unknown status, or stale."
+  "The lane column's legend, under every lane tooltip.")
+
 (defun bebop-set--lane-glyph (name)
-  "Return the ticket-lane gutter glyph for NAME, or nil without a ticket."
+  "Return the ticket-lane gutter glyph for NAME, or nil without a ticket.
+Its tooltip names the ticket, then explains the column."
   (when-let* ((tk (bebop-ticket--plist name))
               (status (plist-get tk :status)))
     (let* ((lane (bebop-ticket--lane status))
@@ -6751,10 +6757,11 @@ Roundup writes a whole JQL pass this way. Return the count."
                        (t 'shadow))))
       (propertize
        (bebop-set--prop (or (nth 1 lane) "◌") (list 'bebop-lane-glyph-face face))
-       'help-echo (format "%s · %s · %s ago%s"
+       'help-echo (format "%s · %s · %s ago%s\n\n%s"
                           (plist-get tk :key) status
                           (or (bebop-set--age-string (plist-get tk :at)) "?")
-                          (if stale " · stale" ""))))))
+                          (if stale " · stale" "")
+                          bebop-set--lane-legend)))))
 #+end_src
 
 *** Attention
@@ -7637,12 +7644,20 @@ Unparseable or missing timestamps count as stale — dim if unsure."
 Status alone: a re-run that lands on the same status is not a change."
   (plist-get entry :status))
 
+(defconst bebop-mr--legend
+  "✎ red: threads wait on you, or the pipeline failed
+✎ green: approved and ready to merge
+✎ dim: nothing for you (draft, open, merged, or threads wait on them)"
+  "The MR column's legend, under every MR tooltip.")
+
 (defun bebop-mr--gutter-glyph (session)
   "Return the single-char MR gutter glyph for SESSION, or nil if uncached.
 Every MR state is ✎; the color says the state, so the column keeps
 one width (2026-11-06, Matthew). Red = threads where a teammate spoke
-last — red even when acked, because they still want answers. Green =
-approved and mergeable, until you merge. Dim = draft, open, merged, or
+last, or a failed pipeline — red even when acked, because they still
+want answers and the build is still broken. The pipeline has no column
+of its own any more: only a failure asks anything of you, so it
+borrows the MR's red. Green = approved and mergeable, until you merge. Dim = draft, open, merged, or
 threads that all wait on the other side — they ask nothing of you;
 the tooltip names the state. A glyph whose state changed since your
 last visit renders bold in full color until acked (the seen-unseen
@@ -7655,13 +7670,21 @@ stays one char wide."
            (unresolved (or (plist-get e :unresolved) 0))
            (on-me (bebop-mr--on-me e))
            (stale (bebop-mr--stale-p e))
+           (p (bebop-pipeline--entry session))
+           (failed (and p (equal (plist-get p :status) "failed")
+                        (not (bebop-pipeline--stale-p p))
+                        (member state '("open" "draft"))))
            (unseen (and (not stale)
-                        (bebop-set--unseen-mr-p session (bebop-mr--key e))))
+                        (or (bebop-set--unseen-mr-p session (bebop-mr--key e))
+                            (and failed
+                                 (bebop-set--unseen-pipeline-p
+                                  session (bebop-pipeline--key p))))))
            (spec (cond
-                  ;; Red only for open/draft: comments on a closed or
-                  ;; merged MR ask nothing of you.
-                  ((and (> on-me 0)
-                        (member state '("open" "draft")))
+                  ;; Red only for open/draft: comments or a failed
+                  ;; build on a closed or merged MR ask nothing of you.
+                  ((or failed
+                       (and (> on-me 0)
+                            (member state '("open" "draft"))))
                    (cons "✎" 'bebop-dot-waiting-face))
                   ((and (plist-get e :mergeable) (equal state "open"))
                    (cons "✎" 'bebop-dot-active-face))
@@ -7677,7 +7700,7 @@ stays one char wide."
       (when spec
         (propertize (car spec)
                     'face fc 'font-lock-face fc
-                    'help-echo (format "MR !%s · %s%s%s%s"
+                    'help-echo (format "MR !%s · %s%s%s%s%s\n\n%s"
                                        (or (plist-get e :iid) "?")
                                        (or state "?")
                                        (if (> unresolved 0)
@@ -7686,46 +7709,11 @@ stays one char wide."
                                          "")
                                        (if (plist-get e :mergeable)
                                            " · ready to merge" "")
-                                       (if stale " · stale" "")))))))
-
-(defun bebop-pipeline--gutter-glyph (session)
-  "Return the single-char pipeline gutter glyph for SESSION, or nil.
-✗ failed — red even when acked, because the build is still broken;
-◦ running-ish states, dim; • passed renders dim — a green build asks
-nothing of you (it flashes green once while unseen, like a merged
-MR). Small glyphs, so the column keeps one width; passed no longer
-shares ✓ with a merged MR. Other statuses (canceled, skipped, manual) cache but render
-nothing — deliberate: they ask nothing and earn no ink. Unseen
-changes render bold in full color until acked; stale entries render
-dim regardless, and staleness here doubles as pulse's own health
-meter. The raw status lives in the tooltip."
-  (when-let ((e (bebop-pipeline--entry session)))
-    (let* ((status (plist-get e :status))
-           (stale (bebop-pipeline--stale-p e))
-           (unseen (and (not stale)
-                        (bebop-set--unseen-pipeline-p
-                         session (bebop-pipeline--key e))))
-           (spec (cond
-                  ((equal status "failed")
-                   (cons "✗" 'bebop-dot-waiting-face))
-                  ((equal status "success")
-                   (cons "•" (and unseen 'bebop-dot-active-face)))
-                  ((member status '("running" "pending" "created"
-                                    "preparing" "waiting_for_resource"))
-                   (cons "◦" nil))
-                  (t nil)))
-           (fc (cond
-                (stale 'shadow)
-                (unseen (if (cdr spec)
-                            (list 'bebop-hud-unseen-face (cdr spec))
-                          'bebop-hud-unseen-face))
-                (t (or (cdr spec) 'shadow)))))
-      (when spec
-        (propertize (car spec)
-                    'face fc 'font-lock-face fc
-                    'help-echo (format "pipeline · %s%s"
-                                       (or status "?")
-                                       (if stale " · stale" "")))))))
+                                       (if p (format " · pipeline %s"
+                                                     (plist-get p :status))
+                                         "")
+                                       (if stale " · stale" "")
+                                       bebop-mr--legend))))))
 
 (defun bebop-set--prop (string face)
   "Propertize STRING with FACE as both `face' and `font-lock-face'.
@@ -7743,10 +7731,10 @@ so every gutter row is as tall as a row with a pie (see Ticket lanes)."
   (propertize (bebop-set--prop " " 'bebop-lane-glyph-face)
               'display `(space :align-to ,column)))
 
-(defconst bebop-set--name-col 14
-  "Column where the name field begins, after the seven-glyph gutter.
-Each gutter glyph (dot 0, chart 2, venue 4, lane 6, MR 8, pipeline 10,
-handoff 12) gets a two-column slot because the glyphs run wider than
+(defconst bebop-set--name-col 12
+  "Column where the name field begins, after the six-glyph gutter.
+Each gutter glyph (dot 0, chart 2, venue 4, lane 6, MR 8, handoff 10)
+gets a two-column slot because the glyphs run wider than
 one character cell — a one-column slot lets a wide glyph overrun its stop and shove the
 name right, breaking alignment between rows that have the glyph and
 rows that don't. All right-region anchors are measured from here.")
@@ -7754,13 +7742,13 @@ rows that don't. All right-region anchors are measured from here.")
 (defun bebop-set--gutter (row)
   "Return the fixed-column gutter string for ROW, or blank stops if nil.
 Dot at column 0, chart glyph at 2, venue glyph at 4, ticket lane at
-6, MR glyph at 8, pipeline glyph at 10, handoff glyph (↪) at 12, text
-begins at 14. The handoff column is persisted ledger state, never
-stale: a task stays until you ack it. The lane, MR and pipeline columns
-are the gutter's cached, stale-able members — everything left of them
-is live and derived; they dim when their snapshots age out (see
-`bebop-set--lane-glyph', `bebop-mr--gutter-glyph' and
-`bebop-pipeline--gutter-glyph')."
+6, MR glyph at 8, handoff glyph (↪) at 10, text begins at 12. A failed
+pipeline shows as a red MR glyph; it has no column (2026-11-06). The
+handoff column is persisted ledger state, never stale: a task stays
+until you ack it. The lane and MR columns are the gutter's cached,
+stale-able members — everything left of them is live and derived;
+they dim when their snapshots age out (see `bebop-set--lane-glyph'
+and `bebop-mr--gutter-glyph')."
   (if (null row)
       (bebop-set--stop bebop-set--name-col)
     (let* ((name (plist-get row :name))
@@ -7788,14 +7776,12 @@ is live and derived; they dim when their snapshots age out (see
                     (bebop-set--prop "⎇" 'shadow)))
            (lane (bebop-set--lane-glyph name))
            (mr (bebop-mr--gutter-glyph name))
-           (pipe (bebop-pipeline--gutter-glyph name))
            (handoff (bebop-set--handoff-glyph name)))
       (concat dot (bebop-set--stop 2)
               (or chart "") (bebop-set--stop 4)
               (or venue "") (bebop-set--stop 6)
               (or lane "") (bebop-set--stop 8)
               (or mr "") (bebop-set--stop 10)
-              (or pipe "") (bebop-set--stop 12)
               (or handoff "") (bebop-set--stop bebop-set--name-col)))))
 
 (defun bebop-set--name-width (rows set-names)
@@ -8035,8 +8021,8 @@ folded by default. A folded heading still says what it holds:
 =Reviewing  3 your move · 14=. Open, your-move rows lead, newest
 first. Whose move is pulse's call, made per item:
 
-- Authored: a thread where a teammate spoke last (red ✎), approved
-  and mergeable (green ✎), or a failed pipeline (✗).
+- Authored: a thread where a teammate spoke last or a failed pipeline
+  (red ✎), or approved and mergeable (green ✎).
 - Reviewing: you have not approved, and either you have not spoken
   yet or someone answered in a thread you spoke in (red ✎).
 
@@ -8104,28 +8090,41 @@ your move since the last beat."
         :branch (gethash "branch" item)
         :url (gethash "url" item)))
 
+(defconst bebop-derived--reviewing-legend
+  "✎ red: your move (you have not spoken yet, or someone replied to you)
+✎ dim: approved, or your threads wait on the author"
+  "The MR legend for Reviewing rows, where you are the reviewer.")
+
 (defun bebop-derived--glyphs (set item)
-  "Return the gutter string for ITEM of SET: MR glyph at 6, pipeline at 8."
+  "Return the gutter string for ITEM of SET: the MR glyph at column 8.
+A failed pipeline turns an Authored MR's glyph red, as on session rows."
   (let* ((move (bebop-derived--your-move-p item))
-         (mr (if (equal set "Reviewing")
-                 (cons "✎" (if (and move (not (equal (gethash "review" item)
-                                                       "approved")))
-                               'bebop-dot-waiting-face
-                             'shadow))
-               (cons "✎" (cond ((> (or (gethash "on_me" item) 0) 0)
-                                'bebop-dot-waiting-face)
-                               ((eq t (gethash "mergeable" item))
-                                'bebop-dot-active-face)
-                               (t 'shadow)))))
          (pipeline (gethash "pipeline" item))
-         (pipe (cond ((equal pipeline "failed")
-                      (bebop-set--prop "✗" 'bebop-dot-waiting-face))
-                     ((member pipeline '("running" "pending" "created"))
-                      (bebop-set--prop "◦" 'shadow)))))
+         (face (if (equal set "Reviewing")
+                   (if (and move (not (equal (gethash "review" item)
+                                             "approved")))
+                       'bebop-dot-waiting-face
+                     'shadow)
+                 (cond ((or (> (or (gethash "on_me" item) 0) 0)
+                            (equal pipeline "failed"))
+                        'bebop-dot-waiting-face)
+                       ((eq t (gethash "mergeable" item))
+                        'bebop-dot-active-face)
+                       (t 'shadow))))
+         (tip (if (equal set "Reviewing")
+                  (format "%s · %s%s\n\n%s"
+                          (gethash "ref" item) (or (gethash "review" item) "?")
+                          (if (eq t (gethash "replied" item)) " · replied" "")
+                          bebop-derived--reviewing-legend)
+                (format "%s · %s%s%s\n\n%s"
+                        (gethash "ref" item) (or (gethash "state" item) "?")
+                        (let ((n (or (gethash "on_me" item) 0)))
+                          (if (> n 0) (format " · %d on you" n) ""))
+                        (if (stringp pipeline)
+                            (format " · pipeline %s" pipeline) "")
+                        bebop-mr--legend))))
     (concat (bebop-set--stop 8)
-            (bebop-set--prop (car mr) (cdr mr))
-            (bebop-set--stop 10)
-            (or pipe "")
+            (propertize (bebop-set--prop "✎" face) 'help-echo tip)
             (bebop-set--stop bebop-set--name-col))))
 
 (defun bebop-derived--insert-item (set item title-col)
