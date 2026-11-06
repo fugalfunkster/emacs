@@ -481,6 +481,75 @@ process — interrupt or take over explicitly first. Returns the slug."
   (setq bebop--backlines (assoc-delete-all slug bebop--backlines))
   (message "Backline %s: killed" slug))
 
+(defun bebop--session-backline-slug (name)
+  "Return the backline slug session NAME owns.
+The venue's directory name, falling back to NAME: the rule teardown
+uses, so the sweep and teardown agree about ownership."
+  (let ((venue (or (plist-get (bebop--session-info name) :venue)
+                   (plist-get (bebop--session-artifacts name) :venue))))
+    (if venue (bebop--backline-slug-for-dir venue) name)))
+
+(defun bebop--backline-attended-slugs (&optional except)
+  "Return the backline slugs of running sessions, minus session EXCEPT."
+  (delq nil
+        (mapcar (lambda (pair)
+                  (unless (equal (car pair) except)
+                    (bebop--session-backline-slug (car pair))))
+                bebop--live-sessions)))
+
+(defun bebop-backline--in-view-p (slug)
+  "Return non-nil if a tmux client is showing backline SLUG's window."
+  (when-let ((id (bebop--backline-window-id slug)))
+    (member id (split-string (or (bebop--tmux-output
+                                  "list-clients" "-F" "#{window_id}")
+                                 "")
+                             "\n" t))))
+
+(defun bebop-backline--close-if-idle (slug)
+  "Close backline SLUG if it is idle and no client shows it.
+Return `closed', or why it stayed: `busy' or `in-view'."
+  (cond ((bebop--backline-busy-p slug) 'busy)
+        ((bebop-backline--in-view-p slug) 'in-view)
+        (t (bebop-backline-kill slug) 'closed)))
+
+(defun bebop-backline-orphans ()
+  "Return the slugs of backline windows no running session attends."
+  (let ((attended (bebop--backline-attended-slugs)))
+    (seq-remove (lambda (slug) (member slug attended))
+                (bebop--backline-slugs))))
+
+(defun bebop-backline-sweep ()
+  "Close every idle orphan backline. Return an alist (SLUG . OUTCOME).
+OUTCOME is `closed', `busy' or `in-view'. Busy orphans keep running."
+  (interactive)
+  (let ((report (mapcar (lambda (slug)
+                          (cons slug (bebop-backline--close-if-idle slug)))
+                        (bebop-backline-orphans))))
+    (when (called-interactively-p 'interactive)
+      (message "Backline sweep: closed %d%s"
+               (seq-count (lambda (r) (eq (cdr r) 'closed)) report)
+               (let ((kept (seq-remove (lambda (r) (eq (cdr r) 'closed))
+                                       report)))
+                 (if kept
+                     (format "; kept %s"
+                             (mapconcat (lambda (r)
+                                          (format "%s (%s)" (car r) (cdr r)))
+                                        kept ", "))
+                   ""))))
+    report))
+
+(defun bebop-backline--on-session-end (name)
+  "Close session NAME's backline if it is idle. Hook target.
+A busy backline stays, and the message names what it runs."
+  (let ((slug (bebop--session-backline-slug name)))
+    (when (and (bebop--backline-live-p slug)
+               (not (member slug (bebop--backline-attended-slugs name)))
+               (eq (bebop-backline--close-if-idle slug) 'busy))
+      (message "Bebop: %s ended; its backline still runs %s"
+               name (bebop--backline-current-command slug)))))
+
+(add-hook 'bebop-session-end-functions #'bebop-backline--on-session-end)
+
 (defun bebop-backline-status (&optional slug)
   "Return a status plist for backline SLUG, or a list for all backlines.
 Keys: :slug :dir :busy :command :ports :last-command :started-at.
@@ -548,13 +617,16 @@ tmux for the shells — so the buffer is a snapshot, not a registry."
                             hidden (if (= hidden 1) "" "s")
                             bebop-backline-fleet-ephemeral-floor))))
         (insert "\nVenue work shells\n\n")
-        (let ((shells (bebop-backline-status)))
+        (let ((shells (bebop-backline-status))
+              (orphans (bebop-backline-orphans)))
           (if (null shells)
               (insert "  (none)\n")
             (dolist (st shells)
-              (insert (format "%-24s %-7s %s\n"
+              (insert (format "%-24s %-7s %-9s %s\n"
                               (plist-get st :slug)
                               (if (plist-get st :busy) "busy" "idle")
+                              (if (member (plist-get st :slug) orphans)
+                                  "orphan" "")
                               (let ((ports (plist-get st :ports)))
                                 (if ports
                                     (mapconcat (lambda (p) (format ":%d" p))

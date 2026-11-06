@@ -164,6 +164,14 @@ to the agent — composition buffer or jam). Downstream modules subscribe
 to keep time; the dashboard itself stores nothing. This is the HUD's
 timekeeping signal — see the HUD design section.")
 
+(defvar bebop-session-end-functions nil
+  "Abnormal hook run with NAME when a session's runtime ends.
+Fires on a pause (`bebop-kill-session') and when the poll finds the
+window gone, before the registries drop NAME, so subscribers can still
+resolve its venue. Teardown does not fire it: teardown reaps every
+facet itself. The backline subscribes to close the ended session's
+idle work shell.")
+
 (defun bebop--tmux-window-name (pair-name)
   "Return the tmux window name for PAIR-NAME.
 If PAIR-NAME starts with /, the window name is everything after the /."
@@ -614,6 +622,7 @@ and registers the pair in the dashboard."
 (defun bebop--handle-orphan (name)
   "Handle a pair whose tmux window no longer exists."
   (message "Bebop: agent pair \"%s\" disappeared (tmux window gone)" name)
+  (run-hook-with-args 'bebop-session-end-functions name)
   (setq bebop--live-sessions
         (cl-remove-if (lambda (p) (equal (car p) name))
                       bebop--live-sessions))

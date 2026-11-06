@@ -297,6 +297,16 @@ value → `hide' or `show'. See the section prose for the reply shape."
   "Remove every set with no members. Returns the removed names as JSON."
   (json-serialize (vconcat (bebop-set-prune-empty))))
 
+(declare-function bebop-backline-sweep "bebop-backline")
+
+(defun bebop-sweep-backlines ()
+  "Close idle orphan backlines. Return [{slug, outcome}] as JSON."
+  (json-serialize
+   (vconcat (when (fboundp 'bebop-backline-sweep)
+              (mapcar (lambda (r)
+                        (list :slug (car r) :outcome (symbol-name (cdr r))))
+                      (bebop-backline-sweep))))))
+
 (provide 'bebop-api)
 
 ;;; bebop-api.el ends here

@@ -2032,6 +2032,14 @@ waiting, per the poll loop's edge detection) or `send' (a prompt went
 to the agent — composition buffer or jam). Downstream modules subscribe
 to keep time; the dashboard itself stores nothing. This is the HUD's
 timekeeping signal — see the HUD design section.")
+
+(defvar bebop-session-end-functions nil
+  "Abnormal hook run with NAME when a session's runtime ends.
+Fires on a pause (`bebop-kill-session') and when the poll finds the
+window gone, before the registries drop NAME, so subscribers can still
+resolve its venue. Teardown does not fire it: teardown reaps every
+facet itself. The backline subscribes to close the ended session's
+idle work shell.")
 #+end_src
 
 *** Helpers
@@ -2756,6 +2764,7 @@ Remove a disappeared pair from state and update the active selection if needed.
 (defun bebop--handle-orphan (name)
   "Handle a pair whose tmux window no longer exists."
   (message "Bebop: agent pair \"%s\" disappeared (tmux window gone)" name)
+  (run-hook-with-args 'bebop-session-end-functions name)
   (setq bebop--live-sessions
         (cl-remove-if (lambda (p) (equal (car p) name))
                       bebop--live-sessions))
@@ -4688,6 +4697,7 @@ whether this is a pause or a discard."
 The runtime goes (tmux window, composition buffer, Solo frame, chart
 buffer); the chart and venue stay on disk and the session reappears in
 On deck, resumable. To discard instead, use `bebop-exile-session'."
+  (run-hook-with-args 'bebop-session-end-functions name)
   (bebop--reap-runtime name t)
   (bebop-refresh)
   (message "Killed Bebop session: %s" name))
@@ -5547,6 +5557,95 @@ process — interrupt or take over explicitly first. Returns the slug."
   (message "Backline %s: killed" slug))
 #+end_src
 
+*** Orphan sweep
+
+A backline outlives its session whenever the session ends by any path
+but teardown: a pause, a Claude that exits, a venue removed by hand. The
+shell then sits in tmux with nobody attending it. Idle ones cost nothing
+but clutter; a busy one may still hold a port another venue wants.
+
+Two parts close the gap. When a session's runtime ends,
+=bebop-session-end-functions= closes its backline if it is idle. For
+everything that ended while Emacs was not watching,
+=bebop-backline-sweep= closes every idle backline no running session
+attends. Neither touches a busy shell: a running server is reported, and
+stopping it stays a human call. Neither closes the window a tmux client
+is looking at, because someone may be typing in it.
+
+Ownership uses the same rule as teardown: the venue's directory name,
+falling back to the session name.
+
+#+begin_src emacs-lisp
+(defun bebop--session-backline-slug (name)
+  "Return the backline slug session NAME owns.
+The venue's directory name, falling back to NAME: the rule teardown
+uses, so the sweep and teardown agree about ownership."
+  (let ((venue (or (plist-get (bebop--session-info name) :venue)
+                   (plist-get (bebop--session-artifacts name) :venue))))
+    (if venue (bebop--backline-slug-for-dir venue) name)))
+
+(defun bebop--backline-attended-slugs (&optional except)
+  "Return the backline slugs of running sessions, minus session EXCEPT."
+  (delq nil
+        (mapcar (lambda (pair)
+                  (unless (equal (car pair) except)
+                    (bebop--session-backline-slug (car pair))))
+                bebop--live-sessions)))
+
+(defun bebop-backline--in-view-p (slug)
+  "Return non-nil if a tmux client is showing backline SLUG's window."
+  (when-let ((id (bebop--backline-window-id slug)))
+    (member id (split-string (or (bebop--tmux-output
+                                  "list-clients" "-F" "#{window_id}")
+                                 "")
+                             "\n" t))))
+
+(defun bebop-backline--close-if-idle (slug)
+  "Close backline SLUG if it is idle and no client shows it.
+Return `closed', or why it stayed: `busy' or `in-view'."
+  (cond ((bebop--backline-busy-p slug) 'busy)
+        ((bebop-backline--in-view-p slug) 'in-view)
+        (t (bebop-backline-kill slug) 'closed)))
+
+(defun bebop-backline-orphans ()
+  "Return the slugs of backline windows no running session attends."
+  (let ((attended (bebop--backline-attended-slugs)))
+    (seq-remove (lambda (slug) (member slug attended))
+                (bebop--backline-slugs))))
+
+(defun bebop-backline-sweep ()
+  "Close every idle orphan backline. Return an alist (SLUG . OUTCOME).
+OUTCOME is `closed', `busy' or `in-view'. Busy orphans keep running."
+  (interactive)
+  (let ((report (mapcar (lambda (slug)
+                          (cons slug (bebop-backline--close-if-idle slug)))
+                        (bebop-backline-orphans))))
+    (when (called-interactively-p 'interactive)
+      (message "Backline sweep: closed %d%s"
+               (seq-count (lambda (r) (eq (cdr r) 'closed)) report)
+               (let ((kept (seq-remove (lambda (r) (eq (cdr r) 'closed))
+                                       report)))
+                 (if kept
+                     (format "; kept %s"
+                             (mapconcat (lambda (r)
+                                          (format "%s (%s)" (car r) (cdr r)))
+                                        kept ", "))
+                   ""))))
+    report))
+
+(defun bebop-backline--on-session-end (name)
+  "Close session NAME's backline if it is idle. Hook target.
+A busy backline stays, and the message names what it runs."
+  (let ((slug (bebop--session-backline-slug name)))
+    (when (and (bebop--backline-live-p slug)
+               (not (member slug (bebop--backline-attended-slugs name)))
+               (eq (bebop-backline--close-if-idle slug) 'busy))
+      (message "Bebop: %s ended; its backline still runs %s"
+               name (bebop--backline-current-command slug)))))
+
+(add-hook 'bebop-session-end-functions #'bebop-backline--on-session-end)
+#+end_src
+
 *** Status
 
 =bebop-backline-status= stays the Lisp accessor =bebop-api= reads through:
@@ -5631,13 +5730,16 @@ tmux for the shells — so the buffer is a snapshot, not a registry."
                             hidden (if (= hidden 1) "" "s")
                             bebop-backline-fleet-ephemeral-floor))))
         (insert "\nVenue work shells\n\n")
-        (let ((shells (bebop-backline-status)))
+        (let ((shells (bebop-backline-status))
+              (orphans (bebop-backline-orphans)))
           (if (null shells)
               (insert "  (none)\n")
             (dolist (st shells)
-              (insert (format "%-24s %-7s %s\n"
+              (insert (format "%-24s %-7s %-9s %s\n"
                               (plist-get st :slug)
                               (if (plist-get st :busy) "busy" "idle")
+                              (if (member (plist-get st :slug) orphans)
+                                  "orphan" "")
                               (let ((ports (plist-get st :ports)))
                                 (if ports
                                     (mapconcat (lambda (p) (format ":%d" p))
@@ -8305,6 +8407,23 @@ never delete a box someone built on purpose.
 (defun bebop-prune-empty-sets ()
   "Remove every set with no members. Returns the removed names as JSON."
   (json-serialize (vconcat (bebop-set-prune-empty))))
+#+end_src
+
+The backline sweep is roundup's other backstop, and also needs no
+approval: it closes only idle shells no running session attends, and a
+shell is free to recreate. Busy orphans come back as =busy= for the
+report; stopping a server is not an unattended decision.
+
+#+begin_src emacs-lisp
+(declare-function bebop-backline-sweep "bebop-backline")
+
+(defun bebop-sweep-backlines ()
+  "Close idle orphan backlines. Return [{slug, outcome}] as JSON."
+  (json-serialize
+   (vconcat (when (fboundp 'bebop-backline-sweep)
+              (mapcar (lambda (r)
+                        (list :slug (car r) :outcome (symbol-name (cdr r))))
+                      (bebop-backline-sweep))))))
 #+end_src
 
 *** Footer

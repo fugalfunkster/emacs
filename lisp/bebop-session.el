@@ -968,6 +968,7 @@ whether this is a pause or a discard."
 The runtime goes (tmux window, composition buffer, Solo frame, chart
 buffer); the chart and venue stay on disk and the session reappears in
 On deck, resumable. To discard instead, use `bebop-exile-session'."
+  (run-hook-with-args 'bebop-session-end-functions name)
   (bebop--reap-runtime name t)
   (bebop-refresh)
   (message "Killed Bebop session: %s" name))
