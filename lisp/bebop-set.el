@@ -1658,8 +1658,9 @@ because the rows say the same thing. The derived sets keep theirs."
 Order: live ungrouped sessions (flat strip), sets, the derived sets
 \(`bebop-derived--insert-region'), Ungrouped.
 Attention renders in place: hoisted to the top of its section
-(`bebop-set--child<'), pierced through a folded one
-(`bebop-set--insert-pierced'), counted by kind on the heading."
+(`bebop-set--child<') and pierced through a folded one
+(`bebop-set--insert-pierced'). Each fold heading then gets its
+▾ or ▸ (`bebop-set--mark-folds')."
   (let* ((rows (bebop-set--rows))
          (groups (bebop-set--group rows))
          (width (bebop-set--name-width rows (bebop-set--names))))
@@ -1692,7 +1693,31 @@ Attention renders in place: hoisted to the top of its section
                                             'shadow)))
                  (dolist (r (sort (copy-sequence un) #'bebop-set--child<))
                    (bebop-set--insert-row r width "    ")))))
-          (bebop-set--insert-pierced section un width))))))
+          (bebop-set--insert-pierced section un width))))
+    (bebop-set--mark-folds)))
+
+(defun bebop-set--mark-folds ()
+  "Mark each foldable top-level heading: ▾ after its name when open, ▸ folded.
+Runs once the tree is built, because a section's folded state is only
+settled then: the default, your last toggle, or the remote client's
+folds. `magit-insert-heading' drops unknown properties, so the pass
+finds the heading's name rather than a marker left at insertion. The
+mark is plain text, so it travels in the remote snapshot."
+  (let ((inhibit-read-only t))
+    ;; Last first, so an insertion never moves a heading still to come.
+    (dolist (s (reverse (oref magit-root-section children)))
+      (when (and (memq (oref s type) '(bebop-set bebop-ungrouped bebop-derived))
+                 (oref s content)
+                 (< (oref s content) (oref s end)))
+        (let ((name (pcase (oref s type)
+                      ('bebop-ungrouped "Ungrouped")
+                      ('bebop-derived (string-remove-prefix "derived/" (oref s value)))
+                      (_ (oref s value)))))
+          (save-excursion
+            (goto-char (oref s start))
+            (when (search-forward name (line-end-position) t)
+              (insert (bebop-set--prop (if (oref s hidden) " ▸" " ▾")
+                                       'shadow)))))))))
 
 (defconst bebop-derived-set-names '("Authored" "Reviewing")
   "The derived sets, in render order.")

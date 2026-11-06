@@ -997,11 +997,11 @@ the host's tree and must look the same."
   (setq buffer-read-only t
         truncate-lines t)
   ;; Flush the gutter against the window edge: no left fringe. The
-  ;; fringe is where magit draws its fold-caret bitmaps, so switch the
-  ;; visibility indicator to the textual style (trailing … on collapsed
-  ;; headings) for GUI windows too.
+  ;; fringe is where magit draws its fold-caret bitmaps, and its textual
+  ;; style marks only folded headings, so bebop marks both states
+  ;; itself (▾ open, ▸ folded: `bebop-set--mark-folds').
   (setq-local left-fringe-width 0)
-  (setq-local magit-section-visibility-indicators '(("…" . t) ("…" . t)))
+  (setq-local magit-section-visibility-indicators nil)
   (setq-local line-spacing -6)
   (when (fboundp 'display-line-numbers-mode)
     (display-line-numbers-mode -1))
