@@ -6445,22 +6445,17 @@ A dropped task keeps its text, so nothing sent is ever lost to a
 transient alert (on 2026-11-05 a blocked session dropped a review
 rework that way).
 
-A handoff stays on its row as ↪ until you ack it with =f= ("followed
-up"). The ack is deliberately separate from the seen/unseen ack:
-visiting a row or acking an MR change must not clear a task you have
-not checked on. =f= on a row with dropped tasks offers to send them
-again first. ↪ renders dim while queued, in the handoff color once
-delivered, and in the waiting red when dropped; its tooltip lists each
-task with its age.
+↪ shows on the row only while a task is queued or dropped. A
+delivered task leaves the ledger the moment the jam lands: the agent is
+working, and the row's status dot already says so (2026-11-06, Matthew:
+the value is in queued and dropped, where a lost task needs a resend).
+↪ renders dim while queued and in the waiting red when dropped; its
+tooltip lists each task with its age. =f= on the row clears it, and
+offers first to send dropped tasks again. The ack is deliberately
+separate from the seen/unseen ack: visiting a row or acking an MR
+change must not clear a task you have not resent.
 
 #+begin_src emacs-lisp
-(defface bebop-handoff-face
-  '((t :foreground "#9955BB"))
-  "Face for ↪, a delivered handoff not yet acked with `f'.
-Purple: red belongs to tasks that need you now, and blue is reserved
-for the ticket-lane glyph."
-  :group 'bebop)
-
 (defvar bebop-handoff--delivering nil
   "Id of the queued handoff the running `bebop-jam' delivers, or nil.
 Bound around a delivery so the jam hook promotes that entry to sent
@@ -6484,9 +6479,11 @@ rather than recording a second one.")
   "Return the handoff plists parsed from VEC, skipping malformed entries."
   (delq nil
         (mapcar (lambda (tbl)
+                  ;; Ledgers saved before 2026-11-06 kept sent entries.
                   (when (and (hash-table-p tbl)
                              (stringp (gethash "id" tbl))
-                             (stringp (gethash "text" tbl)))
+                             (stringp (gethash "text" tbl))
+                             (not (equal (gethash "state" tbl) "sent")))
                     (list :id (gethash "id" tbl)
                           :text (gethash "text" tbl)
                           :at (gethash "at" tbl)
@@ -6502,27 +6499,33 @@ rather than recording a second one.")
   "Record a handoff of TEXT to session NAME in STATE. Return its id.
 STATE is \"queued\", \"sent\" or \"dropped\". With ID naming an
 entry in the ledger, move that entry to STATE. An ID that is gone (you
-acked it while it was still queued) records afresh, so a late delivery
-still shows."
+acked it while it was still queued) records afresh, so a late drop
+still shows. \"sent\" removes the entry instead: a delivered task
+needs nothing from you."
   (let* ((hs (bebop-set--handoffs name))
          (old (and id (seq-find (lambda (h) (equal (plist-get h :id) id)) hs))))
-    (if old
+    (cond
+     ((equal state "sent")
+      (setq hs (delq old hs)))
+     (old
         (setq hs (mapcar (lambda (h)
                            (if (eq h old)
                                (plist-put (copy-sequence h) :state state)
                              h))
-                         hs))
+                         hs)))
+     (t
       (setq id (or id (format "%s-%04x" (format-time-string "%s%3N")
                               (random 65536))))
       (setq hs (append hs (list (list :id id :text text
                                       :at (bebop--now-string)
-                                      :state state)))))
+                                      :state state))))))
     (bebop-set--update-session-meta name :handoffs hs)
     (bebop-set--handoff-redraw)
     id))
 
 (defun bebop-set--record-jam (name text)
-  "Hook target: a jam delivered TEXT to NAME, so record it as sent."
+  "Hook target: a jam delivered TEXT to NAME, so record it as sent.
+That clears a queued entry being delivered and records nothing else."
   (bebop-handoff-record name text "sent" bebop-handoff--delivering))
 
 (add-hook 'bebop-session-handoff-functions #'bebop-set--record-jam)
@@ -6588,16 +6591,14 @@ row; clear everything else. With RESEND nil, clear them all."
 
 (defun bebop-set--handoff-glyph (name)
   "Return the ↪ gutter glyph for NAME, or nil when the ledger is empty.
-The worst state colors it: dropped beats sent beats queued."
+Red when a task was dropped, dim while tasks are only queued."
   (when-let ((hs (bebop-set--handoffs name)))
     (let* ((states (bebop-set--handoff-states name))
-           (face (cond ((member "dropped" states) 'bebop-dot-waiting-face)
-                       ((member "sent" states) 'bebop-handoff-face)
-                       (t 'shadow))))
+           (face (if (member "dropped" states) 'bebop-dot-waiting-face 'shadow)))
       (propertize
        (bebop-set--prop "↪" face)
        'help-echo
-       (concat "Handoffs (f: followed up)\n"
+       (concat "Handoffs (f: clear, resend dropped)\n"
                (mapconcat
                 (lambda (h)
                   (format "%-7s %4s  %s"
@@ -6760,11 +6761,11 @@ headings — and the predicate outlived it.
 
 #+begin_src emacs-lisp
 (defconst bebop-set--attention-order
-  '(blocked waiting dropped pipeline comments merge handoff)
+  '(blocked waiting dropped pipeline comments merge)
   "Attention kinds, worst first — the HUD's severity scale.
 A dropped handoff ranks right after the agents asking for you: a task
-you think was sent never arrived. A delivered handoff ranks last: it
-asks only that you follow up (see Handoffs).")
+you think was sent never arrived. A queued one asks nothing yet, and a
+delivered one leaves the ledger (see Handoffs).")
 
 (defun bebop-set--attention-kinds (row)
   "Return ROW's unacked attention kinds, worst first, or nil.
@@ -6779,8 +6780,6 @@ or draft MR: a closed or merged MR's threads ask nothing of you."
          (handoffs (bebop-set--handoff-states name))
          kinds)
     ;; Kinds are pushed least severe first, so the list ends worst first.
-    (when (seq-some (lambda (s) (not (equal s "dropped"))) handoffs)
-      (push 'handoff kinds))
     (let ((e (bebop-mr--entry name)))
       (when (and e
                  (not (bebop-mr--stale-p e))
@@ -6835,15 +6834,15 @@ the older one for as long as the hour digits agree."
   "Return ROWS' attention counts by kind as a string, or nil when quiet.
 =● 2 ✗ 1 ◆ 3= — agents needing you (blocked and waiting share the
 glyph: one ask, a human at the keyboard), failed pipelines, unseen
-comments, MRs ready to merge (⤵), sessions holding a handoff you have
-not followed up (↪, dropped or delivered); zero-count kinds vanish. The one
+comments, MRs ready to merge (⤵), sessions holding a dropped handoff
+(↪); zero-count kinds vanish. The one
 spelling of attention-by-kind: set headings and the mode-line
 periphery both render this string, so they can never disagree.
 Unpropertized — each surface picks its own face."
   (let ((dots 0) (pipes 0) (mrs 0) (merges 0) (handoffs 0))
     (dolist (r rows)
       (let ((kinds (bebop-set--attention-kinds r)))
-        (when (or (memq 'dropped kinds) (memq 'handoff kinds))
+        (when (memq 'dropped kinds)
           (setq handoffs (1+ handoffs)))
         (when (or (memq 'blocked kinds) (memq 'waiting kinds))
           (setq dots (1+ dots)))
@@ -8217,7 +8216,7 @@ rewritten the event file since STARTED and the hook state is idle.
 Gives up with an alert after `bebop-review-resume-timeout'.
 
 The task is a handoff from the moment it is queued: the row shows a
-dim ↪ while it waits, a colored one once the jam lands, and a red one
+dim ↪ while it waits, which clears once the jam lands, and a red one
 if the wait times out or the jam fails — the text stays in the ledger
 for a resend (see Handoffs). ID resumes an existing ledger entry, as
 a resend does; without it, a new entry is queued."
