@@ -1621,15 +1621,57 @@ your move since the last beat."
   (format "%s--%s" (bebop-derived--repo item)
           (bebop--sanitize-name (plist-get item :branch))))
 
+(defcustom bebop-review-resume-timeout 90
+  "Seconds a review request waits for a resumed review session to start."
+  :type 'integer
+  :group 'bebop)
+
+(defun bebop-derived--jam-when-ready (session text started)
+  "Jam TEXT into SESSION once its resumed agent is up.
+STARTED is the `float-time' of the resume. Up means SessionStart has
+rewritten the event file since STARTED and the hook state is idle.
+Gives up with an alert after `bebop-review-resume-timeout'."
+  (let ((deadline (+ started bebop-review-resume-timeout))
+        (timer nil))
+    (setq timer
+          (run-at-time
+           1 1
+           (lambda ()
+             (let ((mtime (file-attribute-modification-time
+                           (file-attributes (bebop--events-file session)))))
+               (cond
+                ((and mtime (> (float-time mtime) started)
+                      (equal (plist-get (bebop--hook-state session) :state)
+                             "idle"))
+                 (cancel-timer timer)
+                 ;; The hook fires a beat before the prompt takes input.
+                 (run-at-time 2 nil
+                              (lambda ()
+                                (condition-case err
+                                    (bebop-jam session text)
+                                  (error (bebop-hud--notify
+                                          "%s: request not sent: %s"
+                                          session (error-message-string err)))))))
+                ((> (float-time) deadline)
+                 (cancel-timer timer)
+                 (bebop-hud--notify "%s did not start; request not sent: %s"
+                                    session text)))))))))
+
 (defun bebop-derived-review (item)
   "Send ITEM to the review session as a review request. Asks nothing.
-Citizen verb: the remote dashboard calls it on the host."
-  (unless (assoc bebop-review-session bebop--live-sessions)
-    (user-error "No live %s session — r resumes it" bebop-review-session))
-  (bebop-jam bebop-review-session
-             (format "review %s%s" (plist-get item :project)
-                     (substring (plist-get item :ref)
-                                (string-search "!" (plist-get item :ref)))))
+When the session is on deck, resume it and send the request once its
+agent is up. Citizen verb: the remote dashboard calls it on the host."
+  (let ((text (format "review %s%s" (plist-get item :project)
+                      (substring (plist-get item :ref)
+                                 (string-search "!" (plist-get item :ref))))))
+    (cond
+     ((assoc bebop-review-session bebop--live-sessions)
+      (bebop-jam bebop-review-session text))
+     ((member bebop-review-session (bebop--on-deck-names))
+      (let ((started (float-time)))
+        (bebop-resume-session bebop-review-session)
+        (bebop-derived--jam-when-ready bebop-review-session text started)))
+     (t (user-error "No %s session, live or on deck" bebop-review-session))))
   bebop-review-session)
 
 (defun bebop-derived-start (item)
