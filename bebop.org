@@ -6101,7 +6101,8 @@ in later phases; a set is at minimum a name.")
 PLIST keys: :set (string or nil), :last-activity (ISO timestamp
 string, stamped by the HUD's timekeeping), :acked-status, :acked-mr,
 and :acked-pipeline (the seen-unseen ack snapshot — glyph states as
-of the last visit).
+of the last visit), :handoffs (the handoff ledger), and :ticket (the
+Jira key and status that roundup or orient last wrote).
 Keyed by name, independent of liveness — applies equally to running
 sessions and on-deck artifacts.")
 
@@ -6142,6 +6143,12 @@ save once after — N acks should not mean N file writes.")
           (puthash "acked-pipeline" a entry))
         (when-let ((h (plist-get (cdr cell) :handoffs)))
           (puthash "handoffs" (bebop-set--handoffs-to-json h) entry))
+        (when-let ((tk (plist-get (cdr cell) :ticket)))
+          (let ((tbl (make-hash-table :test #'equal)))
+            (dolist (k '(:key :status :at))
+              (when-let ((v (plist-get tk k)))
+                (puthash (substring (symbol-name k) 1) v tbl)))
+            (puthash "ticket" tbl entry)))
         (when (> (hash-table-count entry) 0)
           (puthash (car cell) entry sessions))))
     (puthash "version" 2 doc)
@@ -6197,7 +6204,13 @@ read. A load that fails must cost nothing."
                                         (list :acked-pipeline a))
                                       (when-let ((h (gethash "handoffs" entry)))
                                         (list :handoffs
-                                              (bebop-set--handoffs-from-json h)))))
+                                              (bebop-set--handoffs-from-json h)))
+                                      (when-let ((tk (gethash "ticket" entry)))
+                                        (when (hash-table-p tk)
+                                          (list :ticket
+                                                (list :key (gethash "key" tk)
+                                                      :status (gethash "status" tk)
+                                                      :at (gethash "at" tk)))))))
                                parsed-meta))
                        sessions))
             (setq bebop--sets (nreverse parsed-sets)
@@ -6614,6 +6627,116 @@ Dropped tasks are offered for a resend first."
                  (y-or-n-p (format "Send %d dropped task%s to %s again? "
                                    dropped (if (= dropped 1) "" "s") name))))
       (message "Bebop: %s followed up" name))))
+#+end_src
+
+*** Ticket lanes
+
+Bebop has no Jira connection of its own, and pulse stays without one.
+The skills that already talk to Jira write what they learn here:
+roundup writes every ticket status from its JQL pass, orient writes its
+own session's status at start, and a session that moves its ticket
+writes the new status at once. Each session keeps one ticket in session
+meta (=:ticket=, persisted): key, status and the time of the write.
+
+The row shows the lane in its own gutter column, next to the MR glyph.
+In Progress is a blue ●, the review lanes a blue ◈: blue marks the work
+that is still open in Jira, which the lane guard protects from exile
+and archive. ToDo and Backlog show a dim ○, Closed and Done a dim ✓,
+any other status a dim ◌. A status older than
+=bebop-lane-stale-hours= renders dim, as stale MR glyphs do. The
+tooltip names the key, the status and its age.
+
+#+begin_src emacs-lisp
+(defface bebop-lane-face
+  '((t :foreground "#3377DD"))
+  "Face for a ticket lane with open work: In Progress or a review lane."
+  :group 'bebop)
+
+(defcustom bebop-lane-stale-hours 24
+  "Hours after which a stored ticket status renders dim."
+  :type 'integer
+  :group 'bebop)
+
+(defcustom bebop-lane-statuses
+  '(("In Progress" "●" open)
+    ("Code Review" "◈" open)
+    ("Desk Review" "◈" open)
+    ("In Review" "◈" open)
+    ("Test" "◈" open)
+    ("Ready to Deploy" "◈" open)
+    ("ToDo" "○" idle)
+    ("To Do" "○" idle)
+    ("Backlog" "○" idle)
+    ("Design/Spec" "○" idle)
+    ("Closed" "✓" closed)
+    ("Done" "✓" closed))
+  "Jira statuses as (STATUS GLYPH CLASS), matched without case.
+CLASS `open' renders blue and is what the lane guard protects; `idle'
+and `closed' render dim. An unlisted status shows a dim ◌."
+  :type '(repeat (list string string symbol))
+  :group 'bebop)
+
+(defun bebop-ticket--plist (name)
+  "Return NAME's stored ticket: a plist (:key :status :at), or nil."
+  (plist-get (bebop-set--session-meta name) :ticket))
+
+(defun bebop-ticket--lane (status)
+  "Return the `bebop-lane-statuses' entry for STATUS, or nil."
+  (and status
+       (seq-find (lambda (e) (string-equal-ignore-case (car e) status))
+                 bebop-lane-statuses)))
+
+(defun bebop-ticket-open-p (name)
+  "Return non-nil when NAME's stored ticket status is in an open lane."
+  (eq 'open (nth 2 (bebop-ticket--lane
+                    (plist-get (bebop-ticket--plist name) :status)))))
+
+(defun bebop-ticket--put (name key status)
+  "Store KEY and STATUS as NAME's ticket, stamped now. No redraw."
+  (bebop-set--update-session-meta
+   name :ticket (list :key key :status status :at (bebop--now-string))))
+
+(defun bebop-ticket-set (name key status)
+  "Store the Jira KEY and STATUS of session NAME. Citizen verb.
+Return NAME. Called by roundup, orient, and a session that has just
+moved its own ticket."
+  (bebop-ticket--put name key status)
+  (bebop-set--handoff-redraw)
+  name)
+
+(defun bebop-ticket-set-batch (rows)
+  "Store each (NAME KEY STATUS) in ROWS with one save. Citizen verb.
+Roundup writes a whole JQL pass this way. Return the count."
+  (let ((bebop-set--inhibit-save t))
+    (dolist (r rows)
+      (bebop-ticket--put (nth 0 r) (nth 1 r) (nth 2 r))))
+  (bebop-set--save)
+  (bebop-set--handoff-redraw)
+  (length rows))
+
+(defun bebop-ticket (name)
+  "Return NAME's stored ticket as a JSON object string, or null. Citizen verb."
+  (if-let ((tk (bebop-ticket--plist name)))
+      (json-serialize (list :key (plist-get tk :key)
+                            :status (plist-get tk :status)
+                            :at (or (plist-get tk :at) :null)))
+    "null"))
+
+(defun bebop-set--lane-glyph (name)
+  "Return the ticket-lane gutter glyph for NAME, or nil without a ticket."
+  (when-let* ((tk (bebop-ticket--plist name))
+              (status (plist-get tk :status)))
+    (let* ((lane (bebop-ticket--lane status))
+           (stale (bebop-external--stale-p tk bebop-lane-stale-hours))
+           (face (cond (stale 'shadow)
+                       ((eq (nth 2 lane) 'open) 'bebop-lane-face)
+                       (t 'shadow))))
+      (propertize
+       (bebop-set--prop (or (nth 1 lane) "◌") face)
+       'help-echo (format "%s · %s · %s ago%s"
+                          (plist-get tk :key) status
+                          (or (bebop-set--age-string (plist-get tk :at)) "?")
+                          (if stale " · stale" ""))))))
 #+end_src
 
 *** Attention
@@ -7604,24 +7727,24 @@ cell, so literal-space padding drifts; pixel column stops keep the
 gutter grid exact on every line."
   (propertize " " 'display `(space :align-to ,column)))
 
-(defconst bebop-set--name-col 12
-  "Column where the name field begins, after the six-glyph gutter.
-Each gutter glyph (dot 0, chart 2, venue 4, MR 6, pipeline 8, handoff
-10) gets a
-two-column slot because the glyphs run wider than one character cell
-— a one-column slot lets a wide glyph overrun its stop and shove the
+(defconst bebop-set--name-col 14
+  "Column where the name field begins, after the seven-glyph gutter.
+Each gutter glyph (dot 0, chart 2, venue 4, lane 6, MR 8, pipeline 10,
+handoff 12) gets a two-column slot because the glyphs run wider than
+one character cell — a one-column slot lets a wide glyph overrun its stop and shove the
 name right, breaking alignment between rows that have the glyph and
 rows that don't. All right-region anchors are measured from here.")
 
 (defun bebop-set--gutter (row)
   "Return the fixed-column gutter string for ROW, or blank stops if nil.
-Dot at column 0, chart glyph at 2, venue glyph at 4, MR glyph at 6,
-pipeline glyph at 8, handoff glyph (↪) at 10, text begins at 12. The
-handoff column is persisted ledger state, never stale: a task stays
-until you ack it. The MR and pipeline columns
+Dot at column 0, chart glyph at 2, venue glyph at 4, ticket lane at
+6, MR glyph at 8, pipeline glyph at 10, handoff glyph (↪) at 12, text
+begins at 14. The handoff column is persisted ledger state, never
+stale: a task stays until you ack it. The lane, MR and pipeline columns
 are the gutter's cached, stale-able members — everything left of them
 is live and derived; they dim when their snapshots age out (see
-`bebop-mr--gutter-glyph' and `bebop-pipeline--gutter-glyph')."
+`bebop-set--lane-glyph', `bebop-mr--gutter-glyph' and
+`bebop-pipeline--gutter-glyph')."
   (if (null row)
       (bebop-set--stop bebop-set--name-col)
     (let* ((name (plist-get row :name))
@@ -7647,14 +7770,16 @@ is live and derived; they dim when their snapshots age out (see
                     (bebop-set--prop "⊞" 'shadow)))
            (venue (when (plist-get row :venue)
                     (bebop-set--prop "⎇" 'shadow)))
+           (lane (bebop-set--lane-glyph name))
            (mr (bebop-mr--gutter-glyph name))
            (pipe (bebop-pipeline--gutter-glyph name))
            (handoff (bebop-set--handoff-glyph name)))
       (concat dot (bebop-set--stop 2)
               (or chart "") (bebop-set--stop 4)
               (or venue "") (bebop-set--stop 6)
-              (or mr "") (bebop-set--stop 8)
-              (or pipe "") (bebop-set--stop 10)
+              (or lane "") (bebop-set--stop 8)
+              (or mr "") (bebop-set--stop 10)
+              (or pipe "") (bebop-set--stop 12)
               (or handoff "") (bebop-set--stop bebop-set--name-col)))))
 
 (defun bebop-set--name-width (rows set-names)
@@ -7984,9 +8109,9 @@ your move since the last beat."
                       (bebop-set--prop "✗" 'bebop-dot-waiting-face))
                      ((member pipeline '("running" "pending" "created"))
                       (bebop-set--prop "⟳" 'shadow)))))
-    (concat (bebop-set--stop 6)
+    (concat (bebop-set--stop 8)
             (bebop-set--prop (car mr) (cdr mr))
-            (bebop-set--stop 8)
+            (bebop-set--stop 10)
             (or pipe "")
             (bebop-set--stop bebop-set--name-col))))
 
