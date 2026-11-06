@@ -573,7 +573,8 @@ derived-set row, RET acts on the MR instead (`bebop-remote--act-item')."
         (display-buffer buf '((display-buffer-use-some-window
                                display-buffer-pop-up-window)
                               (inhibit-same-window . t)))))
-    (bebop-remote-steer "D" name)
+    (when (bebop--emacs-focused-p)
+      (bebop-remote-steer "D" name))
     ;; The host acks the selected session as it renders.
     (bebop-remote-refresh)
     (message "Bebop: %s on %s — compose, then C-c C-c to send"
@@ -825,9 +826,16 @@ HOST is \"local\" or an ssh destination, as `bebop-term' takes it."
   (when (executable-find bebop-remote-term-program)
     (call-process bebop-remote-term-program nil 0 nil "-s" role host)))
 
+(defun bebop--emacs-focused-p ()
+  "Non-nil when an Emacs frame has keyboard focus.
+Terminals follow the selection only then. When you are typing in a
+Ghostty window, a selection made elsewhere (an agent, a timer, the
+other machine) must not switch or raise it under you (2026-11-06)."
+  (seq-some (lambda (f) (eq t (frame-focus-state f))) (frame-list)))
+
 (defun bebop-remote--steer-local ()
   "Steer this machine's own D tab to the active local session."
-  (when bebop--active-session
+  (when (and bebop--active-session (bebop--emacs-focused-p))
     (call-process "tmux" nil 0 nil "select-window" "-t"
                   (format "%s-D:=%s" bebop-remote-client-name
                           (bebop--tmux-window-name bebop--active-session)))

@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""bebop-composing PANE: exit 0 when the input box of PANE holds typed text.
+
+Tangled from bebop.org (Someone is typing) — do not edit directly.
+Exit 1 when the box is empty or holds only faint text (placeholder or
+suggestion), and on any error: a broken check must not block a jam.
+"""
+
+import re
+import subprocess
+import sys
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+FAINT = re.compile(r"\x1b\[2m.*?(?=\x1b\[(?:0|22)m|$)")
+RULE = re.compile(r"^\s*─{8,}\s*$")
+
+
+def main():
+    if len(sys.argv) != 2:
+        return 1
+    try:
+        out = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", sys.argv[1]],
+                             capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return 1
+    lines = out.split("\n")
+    rules = [i for i, line in enumerate(lines) if RULE.match(ANSI.sub("", line))]
+    if len(rules) < 2:
+        return 1
+    for line in lines[rules[-2] + 1:rules[-1]]:
+        if ANSI.sub("", FAINT.sub("", line)).replace("❯", "").strip():
+            return 0
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

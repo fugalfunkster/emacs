@@ -75,7 +75,8 @@ Fields: session, set, chart, venue, ticket, siblings
 
 (defun bebop-resume-session (name)
   "Resume on-deck session NAME without prompts. Returns JSON.
-The citizen form of `bebop-resume', for callers with no minibuffer."
+The citizen form of `bebop-resume', for callers with no minibuffer.
+It does not change the active session (`bebop--select-on-create')."
   (unless (and (stringp name) (not (string-empty-p name)))
     (error "bebop-resume-session: NAME must be a non-empty string"))
   (unless (member name (bebop--on-deck-names))
@@ -88,7 +89,8 @@ The citizen form of `bebop-resume', for callers with no minibuffer."
          (stored (bebop--session-info name))
          (launcher (if bebop-use-docker 'docker
                      (and stored (plist-get stored :launcher)))))
-    (bebop--create-session name venue chart launcher)
+    (let ((bebop--select-on-create nil))
+      (bebop--create-session name venue chart launcher))
     (json-serialize (list :resumed name
                           :chart (or chart :null)
                           :venue (or venue :null)))))

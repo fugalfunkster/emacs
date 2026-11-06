@@ -254,24 +254,71 @@ with no argument."
   (let ((info (bebop--session-info name)))
     (and info (plist-get info :chart))))
 
+(defun bebop--pane-composing-p (pane)
+  "Non-nil when the input box of tmux PANE holds text someone typed."
+  (eq 0 (call-process (expand-file-name "bin/bebop-composing" user-emacs-directory)
+                      nil nil nil pane)))
+
+(defcustom bebop-jam-typing-timeout 600
+  "Seconds a jam waits for you to finish typing before it is dropped."
+  :type 'integer
+  :group 'bebop)
+
+;; Defined with the handoff ledger (bebop-set.el); bound here.
+(defvar bebop-handoff--delivering)
+
+(defun bebop--jam-when-free (name text)
+  "Queue TEXT for session NAME until its input box is empty, then jam it."
+  (let* ((id (bebop-handoff-record name text "queued"
+                                   (bound-and-true-p bebop-handoff--delivering)))
+         (deadline (+ (float-time) bebop-jam-typing-timeout))
+         (timer nil))
+    (setq timer
+          (run-at-time
+           2 2
+           (lambda ()
+             (let ((pane (bebop--tmux-pane-id-for (bebop--tmux-window-name name))))
+               (cond
+                ((null pane)
+                 (cancel-timer timer)
+                 (bebop-handoff-record name text "dropped" id))
+                ((not (bebop--pane-composing-p pane))
+                 (cancel-timer timer)
+                 (condition-case err
+                     (let ((bebop-handoff--delivering id))
+                       (bebop-jam name text))
+                   (error (bebop-handoff-record name text "dropped" id)
+                          (bebop-hud--notify "%s: request not sent: %s"
+                                             name (error-message-string err)))))
+                ((> (float-time) deadline)
+                 (cancel-timer timer)
+                 (bebop-handoff-record name text "dropped" id)
+                 (bebop-hud--notify "%s: you were typing; request dropped" name)))))))
+    id))
+
 (defun bebop-jam (name text)
   "Send TEXT to session NAME's agent as a prompt.
 Citizen verb: callable over the emacs server by skills, sibling
 agents, and remote machines (e.g. the cross-machine handoff relay).
 Uses the same load-buffer → paste-buffer → C-m pattern as
 `bebop-send-buffer' so multi-line TEXT arrives as a single prompt.
+When someone is typing in NAME's input box, queue TEXT instead and
+deliver it once the box is empty (`bebop--jam-when-free').
 Signals if NAME has no live tmux window."
   (let* ((window (bebop--tmux-window-name name))
          (pane (bebop--tmux-pane-id-for window)))
     (unless pane
       (user-error "bebop-jam: no live session named %s" name))
-    (with-temp-buffer
-      (insert text)
-      (bebop--tmux-paste pane))
-    (call-process "tmux" nil nil nil "send-keys" "-t" pane "C-m")
-    (run-hook-with-args 'bebop-session-activity-functions name 'send)
-    (run-hook-with-args 'bebop-session-handoff-functions name text)
-    (format "jammed: %s" name)))
+    (if (bebop--pane-composing-p pane)
+        (progn (bebop--jam-when-free name text)
+               (format "queued: %s (someone is typing there)" name))
+      (with-temp-buffer
+        (insert text)
+        (bebop--tmux-paste pane))
+      (call-process "tmux" nil nil nil "send-keys" "-t" pane "C-m")
+      (run-hook-with-args 'bebop-session-activity-functions name 'send)
+      (run-hook-with-args 'bebop-session-handoff-functions name text)
+      (format "jammed: %s" name))))
 
 (defun bebop--session-venue (name)
   "Return the venue (worktree) path for session NAME, or nil."
@@ -766,6 +813,13 @@ onto org-mode without altering any global org settings.
       (local-set-key (kbd "M-a") #'bebop-passthrough))
     buf))
 
+(defvar bebop--select-on-create t
+  "Non-nil when a new session becomes the active one.
+`bebop-resume-session' binds it to nil. Its callers are background
+work (a jam waiting for a resumed agent, a remote machine), and
+switching the active session would swap the composition buffer you
+are typing in (2026-11-06).")
+
 (defun bebop--create-session (name venue-path chart-path &optional launcher)
   "Create Bebop session NAME with optional VENUE-PATH and CHART-PATH.
 LAUNCHER, if non-nil, overrides the default `claude' invocation.  Pass
@@ -808,8 +862,11 @@ creates the per-session composition buffer, and starts in pending mode."
                                       :venue venue-path
                                       :launcher launcher
                                       :last-active (bebop--now-string)))
-    ;; Select the new session in bebop
-    (bebop-select-session name)
+    ;; Select the new session in bebop, unless a background caller
+    ;; started it (see `bebop--select-on-create').
+    (if bebop--select-on-create
+        (bebop-select-session name)
+      (bebop--render))
     ;; Set up the composition buffer
     (bebop--get-or-create-composition-buffer name)
     ;; Open chart in background (no buffer switch)

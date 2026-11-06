@@ -3916,31 +3916,143 @@ Session accessor for chart path.
     (and info (plist-get info :chart))))
 #+end_src
 
+*** Someone is typing
+
+A jam pastes its text into the agent's input box and presses Enter. If
+you are halfway through a prompt in that box, the paste joins your text
+and Enter sends both. =bin/bebop-composing= tells the two cases apart.
+
+Claude Code draws the input box between two horizontal rules at the
+bottom of the pane. Text you type is drawn plain. The placeholder of an
+empty box ('Try "fix typecheck errors"') and the suggested next prompt
+are drawn faint (=ESC[2m=), and Enter does not send a suggestion
+(2026-11-06: two suggestions in roundup and reporter read as unsent
+replies). So the box holds your words when anything in it is not faint.
+A question menu sits in the same place, so a session that waits on a
+question also counts as busy, and a jam never answers a menu.
+
+The check is a script, not Elisp, so that a shell on another machine
+can run it too.
+
+#+begin_src python :tangle bin/bebop-composing :shebang "#!/usr/bin/env python3" :mkdirp yes
+"""bebop-composing PANE: exit 0 when the input box of PANE holds typed text.
+
+Tangled from bebop.org (Someone is typing) — do not edit directly.
+Exit 1 when the box is empty or holds only faint text (placeholder or
+suggestion), and on any error: a broken check must not block a jam.
+"""
+
+import re
+import subprocess
+import sys
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+FAINT = re.compile(r"\x1b\[2m.*?(?=\x1b\[(?:0|22)m|$)")
+RULE = re.compile(r"^\s*─{8,}\s*$")
+
+
+def main():
+    if len(sys.argv) != 2:
+        return 1
+    try:
+        out = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", sys.argv[1]],
+                             capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return 1
+    lines = out.split("\n")
+    rules = [i for i, line in enumerate(lines) if RULE.match(ANSI.sub("", line))]
+    if len(rules) < 2:
+        return 1
+    for line in lines[rules[-2] + 1:rules[-1]]:
+        if ANSI.sub("", FAINT.sub("", line)).replace("❯", "").strip():
+            return 0
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+#+end_src
+
+#+begin_src emacs-lisp
+(defun bebop--pane-composing-p (pane)
+  "Non-nil when the input box of tmux PANE holds text someone typed."
+  (eq 0 (call-process (expand-file-name "bin/bebop-composing" user-emacs-directory)
+                      nil nil nil pane)))
+#+end_src
+
 Jam, resurrected. The original jam was a human keybinding that routed org
 subtrees to agents; it retired when agents learned to fetch their own
 context. This jam is a citizen verb: skills, sibling agents, and remote
 machines cue an agent by name through the API. Same verb, different
 caller — the implementation delta is the distinction.
 
+A jam waits while you type. When the target's input box holds your
+words, the task is queued as a handoff (a dim ↪ on the row) and goes
+in once the box is empty. After =bebop-jam-typing-timeout= it is
+dropped instead (a red ↪; =f= sends it again), so a draft you left
+sitting cannot hold a task forever, or lose it.
+
 #+begin_src emacs-lisp
+(defcustom bebop-jam-typing-timeout 600
+  "Seconds a jam waits for you to finish typing before it is dropped."
+  :type 'integer
+  :group 'bebop)
+
+;; Defined with the handoff ledger (bebop-set.el); bound here.
+(defvar bebop-handoff--delivering)
+
+(defun bebop--jam-when-free (name text)
+  "Queue TEXT for session NAME until its input box is empty, then jam it."
+  (let* ((id (bebop-handoff-record name text "queued"
+                                   (bound-and-true-p bebop-handoff--delivering)))
+         (deadline (+ (float-time) bebop-jam-typing-timeout))
+         (timer nil))
+    (setq timer
+          (run-at-time
+           2 2
+           (lambda ()
+             (let ((pane (bebop--tmux-pane-id-for (bebop--tmux-window-name name))))
+               (cond
+                ((null pane)
+                 (cancel-timer timer)
+                 (bebop-handoff-record name text "dropped" id))
+                ((not (bebop--pane-composing-p pane))
+                 (cancel-timer timer)
+                 (condition-case err
+                     (let ((bebop-handoff--delivering id))
+                       (bebop-jam name text))
+                   (error (bebop-handoff-record name text "dropped" id)
+                          (bebop-hud--notify "%s: request not sent: %s"
+                                             name (error-message-string err)))))
+                ((> (float-time) deadline)
+                 (cancel-timer timer)
+                 (bebop-handoff-record name text "dropped" id)
+                 (bebop-hud--notify "%s: you were typing; request dropped" name)))))))
+    id))
+
 (defun bebop-jam (name text)
   "Send TEXT to session NAME's agent as a prompt.
 Citizen verb: callable over the emacs server by skills, sibling
 agents, and remote machines (e.g. the cross-machine handoff relay).
 Uses the same load-buffer → paste-buffer → C-m pattern as
 `bebop-send-buffer' so multi-line TEXT arrives as a single prompt.
+When someone is typing in NAME's input box, queue TEXT instead and
+deliver it once the box is empty (`bebop--jam-when-free').
 Signals if NAME has no live tmux window."
   (let* ((window (bebop--tmux-window-name name))
          (pane (bebop--tmux-pane-id-for window)))
     (unless pane
       (user-error "bebop-jam: no live session named %s" name))
-    (with-temp-buffer
-      (insert text)
-      (bebop--tmux-paste pane))
-    (call-process "tmux" nil nil nil "send-keys" "-t" pane "C-m")
-    (run-hook-with-args 'bebop-session-activity-functions name 'send)
-    (run-hook-with-args 'bebop-session-handoff-functions name text)
-    (format "jammed: %s" name)))
+    (if (bebop--pane-composing-p pane)
+        (progn (bebop--jam-when-free name text)
+               (format "queued: %s (someone is typing there)" name))
+      (with-temp-buffer
+        (insert text)
+        (bebop--tmux-paste pane))
+      (call-process "tmux" nil nil nil "send-keys" "-t" pane "C-m")
+      (run-hook-with-args 'bebop-session-activity-functions name 'send)
+      (run-hook-with-args 'bebop-session-handoff-functions name text)
+      (format "jammed: %s" name))))
 #+end_src
 
 Session accessor for venue (worktree) path.
@@ -4570,6 +4682,13 @@ Three-step interactive flow: venue → name → chart. Uses the same
 =bebop--spawn-session= but with explicit venue-path support.
 
 #+begin_src emacs-lisp
+(defvar bebop--select-on-create t
+  "Non-nil when a new session becomes the active one.
+`bebop-resume-session' binds it to nil. Its callers are background
+work (a jam waiting for a resumed agent, a remote machine), and
+switching the active session would swap the composition buffer you
+are typing in (2026-11-06).")
+
 (defun bebop--create-session (name venue-path chart-path &optional launcher)
   "Create Bebop session NAME with optional VENUE-PATH and CHART-PATH.
 LAUNCHER, if non-nil, overrides the default `claude' invocation.  Pass
@@ -4612,8 +4731,11 @@ creates the per-session composition buffer, and starts in pending mode."
                                       :venue venue-path
                                       :launcher launcher
                                       :last-active (bebop--now-string)))
-    ;; Select the new session in bebop
-    (bebop-select-session name)
+    ;; Select the new session in bebop, unless a background caller
+    ;; started it (see `bebop--select-on-create').
+    (if bebop--select-on-create
+        (bebop-select-session name)
+      (bebop--render))
     ;; Set up the composition buffer
     (bebop--get-or-create-composition-buffer name)
     ;; Open chart in background (no buffer switch)
@@ -8504,7 +8626,8 @@ row in the client's remote dashboard brings it up there.
 #+begin_src emacs-lisp
 (defun bebop-resume-session (name)
   "Resume on-deck session NAME without prompts. Returns JSON.
-The citizen form of `bebop-resume', for callers with no minibuffer."
+The citizen form of `bebop-resume', for callers with no minibuffer.
+It does not change the active session (`bebop--select-on-create')."
   (unless (and (stringp name) (not (string-empty-p name)))
     (error "bebop-resume-session: NAME must be a non-empty string"))
   (unless (member name (bebop--on-deck-names))
@@ -8517,7 +8640,8 @@ The citizen form of `bebop-resume', for callers with no minibuffer."
          (stored (bebop--session-info name))
          (launcher (if bebop-use-docker 'docker
                      (and stored (plist-get stored :launcher)))))
-    (bebop--create-session name venue chart launcher)
+    (let ((bebop--select-on-create nil))
+      (bebop--create-session name venue chart launcher))
     (json-serialize (list :resumed name
                           :chart (or chart :null)
                           :venue (or venue :null)))))
@@ -10238,7 +10362,8 @@ derived-set row, RET acts on the MR instead (`bebop-remote--act-item')."
         (display-buffer buf '((display-buffer-use-some-window
                                display-buffer-pop-up-window)
                               (inhibit-same-window . t)))))
-    (bebop-remote-steer "D" name)
+    (when (bebop--emacs-focused-p)
+      (bebop-remote-steer "D" name))
     ;; The host acks the selected session as it renders.
     (bebop-remote-refresh)
     (message "Bebop: %s on %s — compose, then C-c C-c to send"
@@ -10610,9 +10735,16 @@ HOST is \"local\" or an ssh destination, as `bebop-term' takes it."
   (when (executable-find bebop-remote-term-program)
     (call-process bebop-remote-term-program nil 0 nil "-s" role host)))
 
+(defun bebop--emacs-focused-p ()
+  "Non-nil when an Emacs frame has keyboard focus.
+Terminals follow the selection only then. When you are typing in a
+Ghostty window, a selection made elsewhere (an agent, a timer, the
+other machine) must not switch or raise it under you (2026-11-06)."
+  (seq-some (lambda (f) (eq t (frame-focus-state f))) (frame-list)))
+
 (defun bebop-remote--steer-local ()
   "Steer this machine's own D tab to the active local session."
-  (when bebop--active-session
+  (when (and bebop--active-session (bebop--emacs-focused-p))
     (call-process "tmux" nil 0 nil "select-window" "-t"
                   (format "%s-D:=%s" bebop-remote-client-name
                           (bebop--tmux-window-name bebop--active-session)))
