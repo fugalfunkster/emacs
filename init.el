@@ -145,6 +145,16 @@
   (define-key lsp-mode-map (kbd "M-.") #'mh/xref-toggle-definitions)
   (define-key lsp-mode-map (kbd "C-d") #'mh/xref-toggle-definitions))
 
+(defun install-pulse-locally ()
+  "Copy the tangled bebop pulse script to ~/.emacs.d-local/bin/.
+Cron cannot read files in Dropbox (macOS privacy rules refuse it with
+\"Operation not permitted\"), so cron runs this machine-local copy. A
+machine without ~/.emacs.d-local/bin/ runs no pulse and gets no copy."
+  (let ((pulse (expand-file-name "bin/bebop-pulse.py" user-emacs-directory))
+        (local (expand-file-name "~/.emacs.d-local/bin/")))
+    (when (and (file-exists-p pulse) (file-directory-p local))
+      (copy-file pulse local t))))
+
 (defun tangle-and-restart ()
   "Tangle all .org files in user-emacs-directory and restart Emacs.
 Deletes stale .elc files in lisp/ before tangling so the freshly
@@ -155,6 +165,7 @@ tangled .el files are always loaded on restart."
     (delete-file elc))
   (dolist (file (directory-files user-emacs-directory t "\\.org$"))
     (org-babel-tangle-file file))
+  (install-pulse-locally)
   (restart-emacs))
 
 (defun tangle-and-reload ()
@@ -170,6 +181,7 @@ Callable via emacsclient: emacsclient --eval \"(tangle-and-reload)\""
         (delete-file elc))))
   (dolist (file (directory-files user-emacs-directory t "\\.org$"))
     (org-babel-tangle-file file))
+  (install-pulse-locally)
   ;; Reload customizations/ modules
   (dolist (f '("local-state.el" "navigation.el" "ui.el" "editing.el"
                "misc.el" "elisp-editing.el" "clojure.el" "lsp-common.el"

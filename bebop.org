@@ -10694,16 +10694,17 @@ Pulse drops =GITLAB_TOKEN= from its environment and uses glab's own
 login: a stale token in the environment wins over the login and turns
 every call into a 401.
 
-Registered in cron every 10 minutes. Cron runs the tangled file
-itself, so a tangle is the whole deploy; the log stays machine-local
-\(the =~/.emacs.d-local/= convention), appended:
+Registered in cron every 10 minutes, from a machine-local copy: macOS
+does not let cron read files in Dropbox ("Operation not permitted"),
+so every tangle copies the script to =~/.emacs.d-local/bin/=
+(=install-pulse-locally= in emacs.org). The log is machine-local too,
+appended:
 
 #+begin_example
-*/10 * * * * /usr/bin/python3 $HOME/.emacs.d/bin/bebop-pulse.py >> $HOME/.emacs.d-local/pulse.log 2>&1
+*/10 * * * * /usr/bin/python3 $HOME/.emacs.d-local/bin/bebop-pulse.py >> $HOME/.emacs.d-local/pulse.log 2>&1
 #+end_example
 
-Until 2026-11-05 cron ran a hand-made copy in =~/.emacs.d-local/bin=,
-which a tangle never updated.
+Until 2026-11-05 the copy was made by hand and went stale.
 
 (Explicit =python3= rather than the shebang — one less way for cron's
 spartan environment to disappoint.)
