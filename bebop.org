@@ -8153,7 +8153,8 @@ Runs once the tree is built, because a section's folded state is only
 settled then: the default, your last toggle, or the remote client's
 folds. `magit-insert-heading' drops unknown properties, so the pass
 finds the heading's name rather than a marker left at insertion. The
-mark is plain text, so it travels in the remote snapshot."
+mark takes the heading's properties, so TAB with point on it still
+folds, and it is plain text, so it travels in the remote snapshot."
   (let ((inhibit-read-only t))
     ;; Last first, so an insertion never moves a heading still to come.
     (dolist (s (reverse (oref magit-root-section children)))
@@ -8167,8 +8168,15 @@ mark is plain text, so it travels in the remote snapshot."
           (save-excursion
             (goto-char (oref s start))
             (when (search-forward name (line-end-position) t)
-              (insert (bebop-set--prop (if (oref s hidden) " ▸" " ▾")
-                                       'shadow)))))))))
+              (let ((beg (point))
+                    ;; The heading's own properties (its section, its
+                    ;; session name, its arrow-key stop), so TAB and
+                    ;; RET work with point on the mark too.
+                    (props (text-properties-at (1- (point)))))
+                (insert (if (oref s hidden) " ▸" " ▾"))
+                (add-text-properties beg (point) props)
+                (add-text-properties beg (point)
+                                     '(face shadow font-lock-face shadow))))))))))
 #+end_src
 
 *** Derived sets
