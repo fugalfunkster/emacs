@@ -1584,53 +1584,6 @@ lone outlier past the cap simply overflows its own line."
       (bebop--insert-subagent-rows
        name (concat (bebop-set--stop bebop-set--name-col) indent "  ")))))
 
-(defun bebop-set--heading-counts (rows width)
-  "Return iconographic, column-aligned rollup counts for a set heading.
-Three fixed columns after the name field, the state icon repeated once
-per session — ●● for two active (dot-active face), ● waiting
-(dot-waiting face), ○○○ for three on deck; no numerals. A fourth
-column carries the attention kind glyphs with counts (=● 2 ✗ 1 ◆ 3=,
-bold, same spelling as the periphery) so even the fold line says what
-it's sitting on, not just how much. Columns sit at absolute stops so
-every set heading tables up regardless of name length; a crowded cell
-overflows its stop with a single space keeping it separated from the
-next. The first three counts are disjoint — a waiting session is not
-also counted as running; the attention column overlaps them by
-design."
-  (if (null rows)
-      (concat (bebop-set--stop (+ bebop-set--name-col width))
-              (bebop-set--prop "(empty)" 'shadow))
-    (let* ((waiting (seq-count
-                     (lambda (r)
-                       (and (plist-get r :live)
-                            (memq (plist-get (plist-get r :live) :status)
-                                  '(waiting blocked))))
-                     rows))
-           (active (- (seq-count (lambda (r) (plist-get r :live)) rows)
-                      waiting))
-           (deck (seq-count (lambda (r) (not (plist-get r :live))) rows))
-           (base (+ bebop-set--name-col width))
-           (col 0)
-           (parts nil))
-      (dolist (cell (list (list active ?● 'bebop-dot-active-face)
-                          (list waiting ?● 'bebop-dot-waiting-face)
-                          (list deck ?○ 'shadow)))
-        (push " " parts)
-        (push (bebop-set--stop (+ base (* col 6))) parts)
-        (when (> (car cell) 0)
-          (push (bebop-set--prop (make-string (car cell) (cadr cell))
-                                 (nth 2 cell))
-                parts))
-        (setq col (1+ col)))
-      (when-let ((glyphs (bebop-set--attention-glyphs rows)))
-        (push " " parts)
-        (push (bebop-set--stop (+ base (* col 6))) parts)
-        (push (bebop-set--prop glyphs
-                               (list 'bebop-hud-unseen-face
-                                     'bebop-dot-waiting-face))
-              parts))
-      (apply #'concat (nreverse parts)))))
-
 (defun bebop-set--counts (rows)
   "Return the textual rollup annotation for the Ungrouped heading."
   (if (null rows)
@@ -1670,9 +1623,10 @@ of merely flipping visibility overlays."
 
 (defun bebop-set--insert-set (group width &optional hide)
   "Insert the section for GROUP (SET-NAME . ROWS). HIDE collapses it.
-A folded set stays honest two ways: the heading's attention glyphs,
-and its unacked rows pierced through below it
-(`bebop-set--insert-pierced')."
+A folded set stays honest through its unacked rows, pierced through
+below it (`bebop-set--insert-pierced'). The heading carries no counts:
+the rollup and attention columns at its right retired on 2026-11-06,
+because the rows say the same thing. The derived sets keep theirs."
   (let* ((set (car group))
          (rows (cdr group))
          ;; The set's own session, by naming convention: a row named
@@ -1688,7 +1642,7 @@ and its unacked rows pierced through below it
             (magit-insert-heading
               (concat (bebop-set--gutter own)
                       (bebop-set--prop set '(:weight bold))
-                      (bebop-set--heading-counts rows width)))
+                      (if rows "" (bebop-set--prop " (empty)" 'shadow))))
             (when own
               (add-text-properties
                start (point)

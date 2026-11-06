@@ -30,3 +30,5 @@
 
 (setq url-configuration-directory (my-local-emacs-file "url/"))
 (setq transient-history-file (my-local-emacs-file "transient/history.el"))
+
+(setenv "GIT_OPTIONAL_LOCKS" "0")

@@ -156,6 +156,19 @@ Keep volatile state off Dropbox to avoid sync churn and conflicted copies.
 (setq transient-history-file (my-local-emacs-file "transient/history.el"))
 #+end_src
 
+=~/.emacs.d= is a git repository inside Dropbox, and git runs there
+only on the Pro. Emacs's version control still runs =git status= when
+it visits a file there, on every machine: a tangle visits =bebop.org=.
+=git status= rewrites =.git/index= by default, so a machine with an
+older copy of the repository wrote its old index, and Dropbox carried
+it back to the Pro (2026-11-05 and 2026-11-06: the Pro's index went
+stale after each reload on the iMac). With optional locks off, git
+reads without writing.
+
+#+begin_src emacs-lisp :tangle customizations/local-state.el
+(setenv "GIT_OPTIONAL_LOCKS" "0")
+#+end_src
+
 * Navigation
 
 #+begin_src emacs-lisp :tangle customizations/navigation.el
