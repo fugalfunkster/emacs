@@ -172,6 +172,12 @@ resolve its venue. Teardown does not fire it: teardown reaps every
 facet itself. The backline subscribes to close the ended session's
 idle work shell.")
 
+(defvar bebop-session-handoff-functions nil
+  "Abnormal hook run with (NAME TEXT) when `bebop-jam' delivers TEXT.
+Only jams fire it, never composition sends: a jam is work that a skill,
+a sibling agent or a remote machine handed to the session, and the
+handoff ledger (bebop-set.el) tracks it until you ack the row.")
+
 (defun bebop--tmux-window-name (pair-name)
   "Return the tmux window name for PAIR-NAME.
 If PAIR-NAME starts with /, the window name is everything after the /."

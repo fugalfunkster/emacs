@@ -72,6 +72,8 @@ save once after — N acks should not mean N file writes.")
           (puthash "acked-mr" a entry))
         (when-let ((a (plist-get (cdr cell) :acked-pipeline)))
           (puthash "acked-pipeline" a entry))
+        (when-let ((h (plist-get (cdr cell) :handoffs)))
+          (puthash "handoffs" (bebop-set--handoffs-to-json h) entry))
         (when (> (hash-table-count entry) 0)
           (puthash (car cell) entry sessions))))
     (puthash "version" 2 doc)
@@ -124,7 +126,10 @@ read. A load that fails must cost nothing."
                                       (when-let ((a (gethash "acked-mr" entry)))
                                         (list :acked-mr a))
                                       (when-let ((a (gethash "acked-pipeline" entry)))
-                                        (list :acked-pipeline a))))
+                                        (list :acked-pipeline a))
+                                      (when-let ((h (gethash "handoffs" entry)))
+                                        (list :handoffs
+                                              (bebop-set--handoffs-from-json h)))))
                                parsed-meta))
                        sessions))
             (setq bebop--sets (nreverse parsed-sets)
@@ -300,8 +305,186 @@ Saves once, not once per session."
   (bebop--render)
   (message "Bebop: all sessions marked seen"))
 
-(defconst bebop-set--attention-order '(blocked waiting pipeline comments merge)
-  "Attention kinds, worst first — the HUD's severity scale.")
+(defface bebop-handoff-face
+  '((t :foreground "#9955BB"))
+  "Face for ↪, a delivered handoff not yet acked with `f'.
+Purple: red belongs to tasks that need you now, and blue is reserved
+for the ticket-lane glyph."
+  :group 'bebop)
+
+(defvar bebop-handoff--delivering nil
+  "Id of the queued handoff the running `bebop-jam' delivers, or nil.
+Bound around a delivery so the jam hook promotes that entry to sent
+rather than recording a second one.")
+
+(defun bebop-set--handoffs (name)
+  "Return NAME's handoff ledger: a list of plists, oldest first."
+  (plist-get (bebop-set--session-meta name) :handoffs))
+
+(defun bebop-set--handoffs-to-json (handoffs)
+  "Return HANDOFFS as a vector of hash tables for `json-serialize'."
+  (vconcat
+   (mapcar (lambda (h)
+             (let ((tbl (make-hash-table :test #'equal)))
+               (dolist (k '(:id :text :at :state))
+                 (puthash (substring (symbol-name k) 1) (plist-get h k) tbl))
+               tbl))
+           handoffs)))
+
+(defun bebop-set--handoffs-from-json (vec)
+  "Return the handoff plists parsed from VEC, skipping malformed entries."
+  (delq nil
+        (mapcar (lambda (tbl)
+                  (when (and (hash-table-p tbl)
+                             (stringp (gethash "id" tbl))
+                             (stringp (gethash "text" tbl)))
+                    (list :id (gethash "id" tbl)
+                          :text (gethash "text" tbl)
+                          :at (gethash "at" tbl)
+                          :state (gethash "state" tbl))))
+                (append vec nil))))
+
+(defun bebop-set--handoff-redraw ()
+  "Redraw the dashboard when it exists; a ledger change is a glyph change."
+  (when (get-buffer bebop-buffer-name)
+    (bebop--render)))
+
+(defun bebop-handoff-record (name text state &optional id)
+  "Record a handoff of TEXT to session NAME in STATE. Return its id.
+STATE is \"queued\", \"sent\" or \"dropped\". With ID naming an
+entry in the ledger, move that entry to STATE. An ID that is gone (you
+acked it while it was still queued) records afresh, so a late delivery
+still shows."
+  (let* ((hs (bebop-set--handoffs name))
+         (old (and id (seq-find (lambda (h) (equal (plist-get h :id) id)) hs))))
+    (if old
+        (setq hs (mapcar (lambda (h)
+                           (if (eq h old)
+                               (plist-put (copy-sequence h) :state state)
+                             h))
+                         hs))
+      (setq id (or id (format "%s-%04x" (format-time-string "%s%3N")
+                              (random 65536))))
+      (setq hs (append hs (list (list :id id :text text
+                                      :at (bebop--now-string)
+                                      :state state)))))
+    (bebop-set--update-session-meta name :handoffs hs)
+    (bebop-set--handoff-redraw)
+    id))
+
+(defun bebop-set--record-jam (name text)
+  "Hook target: a jam delivered TEXT to NAME, so record it as sent."
+  (bebop-handoff-record name text "sent" bebop-handoff--delivering))
+
+(add-hook 'bebop-session-handoff-functions #'bebop-set--record-jam)
+
+(defun bebop-handoff-clear (name &optional ids)
+  "Remove NAME's handoffs with an id in IDS, or all of them. Citizen verb."
+  (bebop-set--update-session-meta
+   name :handoffs
+   (and ids
+        (seq-remove (lambda (h) (member (plist-get h :id) ids))
+                    (bebop-set--handoffs name))))
+  (bebop-set--handoff-redraw)
+  name)
+
+(defun bebop-handoff-resend (name)
+  "Send NAME's dropped handoffs again. Return how many were resent.
+A live session gets them now. An on-deck session is resumed, and the
+tasks wait for its agent as they did the first time. Citizen verb."
+  (let ((dropped (seq-filter (lambda (h) (equal (plist-get h :state) "dropped"))
+                             (bebop-set--handoffs name))))
+    (cond
+     ((null dropped) nil)
+     ((assoc name bebop--live-sessions)
+      (dolist (h dropped)
+        (let ((bebop-handoff--delivering (plist-get h :id)))
+          (condition-case err
+              (bebop-jam name (plist-get h :text))
+            (error (bebop-hud--notify "%s: resend failed: %s"
+                                      name (error-message-string err)))))))
+     ((member name (bebop--on-deck-names))
+      (let ((started (float-time)))
+        (bebop-resume-session name)
+        (dolist (h dropped)
+          (bebop-derived--jam-when-ready name (plist-get h :text) started
+                                         (plist-get h :id)))))
+     (t (user-error "No session %s, live or on deck" name)))
+    (length dropped)))
+
+(defun bebop-handoff-settle (name resend)
+  "Ack NAME's handoffs: you followed up. Citizen verb.
+With RESEND non-nil, send the dropped ones again and keep them on the
+row; clear everything else. With RESEND nil, clear them all."
+  (let ((keep (and resend
+                   (mapcar (lambda (h) (plist-get h :id))
+                           (seq-filter (lambda (h)
+                                         (equal (plist-get h :state) "dropped"))
+                                       (bebop-set--handoffs name))))))
+    (bebop-handoff-clear
+     name
+     (seq-remove (lambda (id) (member id keep))
+                 (mapcar (lambda (h) (plist-get h :id))
+                         (bebop-set--handoffs name))))
+    (when keep (bebop-handoff-resend name))
+    name))
+
+(defun bebop-handoff-list (name)
+  "Return NAME's handoff ledger as a JSON array string. Citizen verb."
+  (json-serialize (bebop-set--handoffs-to-json (bebop-set--handoffs name))))
+
+(defun bebop-set--handoff-states (name)
+  "Return the states of NAME's handoffs, as strings."
+  (mapcar (lambda (h) (plist-get h :state)) (bebop-set--handoffs name)))
+
+(defun bebop-set--handoff-glyph (name)
+  "Return the ↪ gutter glyph for NAME, or nil when the ledger is empty.
+The worst state colors it: dropped beats sent beats queued."
+  (when-let ((hs (bebop-set--handoffs name)))
+    (let* ((states (bebop-set--handoff-states name))
+           (face (cond ((member "dropped" states) 'bebop-dot-waiting-face)
+                       ((member "sent" states) 'bebop-handoff-face)
+                       (t 'shadow))))
+      (propertize
+       (bebop-set--prop "↪" face)
+       'help-echo
+       (concat "Handoffs (f: followed up)\n"
+               (mapconcat
+                (lambda (h)
+                  (format "%-7s %4s  %s"
+                          (plist-get h :state)
+                          (or (bebop-set--age-string (plist-get h :at)) "?")
+                          (truncate-string-to-width
+                           (car (split-string (plist-get h :text) "\n"))
+                           90 nil nil "…")))
+                hs "\n"))))))
+
+(defun bebop-handoff-ack (name)
+  "Ack the handoffs of session NAME, at point when called from a row.
+Dropped tasks are offered for a resend first."
+  (interactive
+   (list (or (get-text-property (point) 'bebop-on-deck-name)
+             (get-text-property (point) 'bebop-session-name)
+             (completing-read "Ack handoffs of: "
+                              (seq-filter #'bebop-set--handoffs
+                                          (mapcar #'car bebop--session-meta))
+                              nil t))))
+  (let* ((states (bebop-set--handoff-states name))
+         (dropped (seq-count (lambda (s) (equal s "dropped")) states)))
+    (if (null states)
+        (message "Bebop: %s has no handoffs" name)
+      (bebop-handoff-settle
+       name (and (> dropped 0)
+                 (y-or-n-p (format "Send %d dropped task%s to %s again? "
+                                   dropped (if (= dropped 1) "" "s") name))))
+      (message "Bebop: %s followed up" name))))
+
+(defconst bebop-set--attention-order
+  '(blocked waiting dropped pipeline comments merge handoff)
+  "Attention kinds, worst first — the HUD's severity scale.
+A dropped handoff ranks right after the agents asking for you: a task
+you think was sent never arrived. A delivered handoff ranks last: it
+asks only that you follow up (see Handoffs).")
 
 (defun bebop-set--attention-kinds (row)
   "Return ROW's unacked attention kinds, worst first, or nil.
@@ -313,7 +496,11 @@ or draft MR: a closed or merged MR's threads ask nothing of you."
   (let* ((name (plist-get row :name))
          (live (plist-get row :live))
          (status (and live (plist-get live :status)))
+         (handoffs (bebop-set--handoff-states name))
          kinds)
+    ;; Kinds are pushed least severe first, so the list ends worst first.
+    (when (seq-some (lambda (s) (not (equal s "dropped"))) handoffs)
+      (push 'handoff kinds))
     (let ((e (bebop-mr--entry name)))
       (when (and e
                  (not (bebop-mr--stale-p e))
@@ -330,6 +517,8 @@ or draft MR: a closed or merged MR's threads ask nothing of you."
                  (bebop-set--unseen-pipeline-p
                   name (bebop-pipeline--key p)))
         (push 'pipeline kinds)))
+    (when (member "dropped" handoffs)
+      (push 'dropped kinds))
     (when (and (memq status '(waiting blocked))
                (bebop-set--unseen-status-p name status))
       (push (if (eq status 'blocked) 'blocked 'waiting) kinds))
@@ -366,13 +555,16 @@ the older one for as long as the hour digits agree."
   "Return ROWS' attention counts by kind as a string, or nil when quiet.
 =● 2 ✗ 1 ◆ 3= — agents needing you (blocked and waiting share the
 glyph: one ask, a human at the keyboard), failed pipelines, unseen
-comments, MRs ready to merge (⤵); zero-count kinds vanish. The one
+comments, MRs ready to merge (⤵), sessions holding a handoff you have
+not followed up (↪, dropped or delivered); zero-count kinds vanish. The one
 spelling of attention-by-kind: set headings and the mode-line
 periphery both render this string, so they can never disagree.
 Unpropertized — each surface picks its own face."
-  (let ((dots 0) (pipes 0) (mrs 0) (merges 0))
+  (let ((dots 0) (pipes 0) (mrs 0) (merges 0) (handoffs 0))
     (dolist (r rows)
       (let ((kinds (bebop-set--attention-kinds r)))
+        (when (or (memq 'dropped kinds) (memq 'handoff kinds))
+          (setq handoffs (1+ handoffs)))
         (when (or (memq 'blocked kinds) (memq 'waiting kinds))
           (setq dots (1+ dots)))
         (when (memq 'pipeline kinds)
@@ -381,14 +573,15 @@ Unpropertized — each surface picks its own face."
           (setq mrs (1+ mrs)))
         (when (memq 'merge kinds)
           (setq merges (1+ merges)))))
-    (when (> (+ dots pipes mrs merges) 0)
+    (when (> (+ dots pipes mrs merges handoffs) 0)
       (mapconcat
        #'identity
        (delq nil
              (list (when (> dots 0) (format "● %d" dots))
                    (when (> pipes 0) (format "✗ %d" pipes))
                    (when (> mrs 0) (format "◆ %d" mrs))
-                   (when (> merges 0) (format "⤵ %d" merges))))
+                   (when (> merges 0) (format "⤵ %d" merges))
+                   (when (> handoffs 0) (format "↪ %d" handoffs))))
        "  "))))
 
 (defun bebop-hud--notify (fmt &rest args)
@@ -1191,9 +1384,10 @@ cell, so literal-space padding drifts; pixel column stops keep the
 gutter grid exact on every line."
   (propertize " " 'display `(space :align-to ,column)))
 
-(defconst bebop-set--name-col 10
-  "Column where the name field begins, after the five-glyph gutter.
-Each gutter glyph (dot 0, chart 2, venue 4, MR 6, pipeline 8) gets a
+(defconst bebop-set--name-col 12
+  "Column where the name field begins, after the six-glyph gutter.
+Each gutter glyph (dot 0, chart 2, venue 4, MR 6, pipeline 8, handoff
+10) gets a
 two-column slot because the glyphs run wider than one character cell
 — a one-column slot lets a wide glyph overrun its stop and shove the
 name right, breaking alignment between rows that have the glyph and
@@ -1202,7 +1396,9 @@ rows that don't. All right-region anchors are measured from here.")
 (defun bebop-set--gutter (row)
   "Return the fixed-column gutter string for ROW, or blank stops if nil.
 Dot at column 0, chart glyph at 2, venue glyph at 4, MR glyph at 6,
-pipeline glyph at 8, text begins at 9. The MR and pipeline columns
+pipeline glyph at 8, handoff glyph (↪) at 10, text begins at 12. The
+handoff column is persisted ledger state, never stale: a task stays
+until you ack it. The MR and pipeline columns
 are the gutter's cached, stale-able members — everything left of them
 is live and derived; they dim when their snapshots age out (see
 `bebop-mr--gutter-glyph' and `bebop-pipeline--gutter-glyph')."
@@ -1232,12 +1428,14 @@ is live and derived; they dim when their snapshots age out (see
            (venue (when (plist-get row :venue)
                     (bebop-set--prop "⎇" 'shadow)))
            (mr (bebop-mr--gutter-glyph name))
-           (pipe (bebop-pipeline--gutter-glyph name)))
+           (pipe (bebop-pipeline--gutter-glyph name))
+           (handoff (bebop-set--handoff-glyph name)))
       (concat dot (bebop-set--stop 2)
               (or chart "") (bebop-set--stop 4)
               (or venue "") (bebop-set--stop 6)
               (or mr "") (bebop-set--stop 8)
-              (or pipe "") (bebop-set--stop bebop-set--name-col)))))
+              (or pipe "") (bebop-set--stop 10)
+              (or handoff "") (bebop-set--stop bebop-set--name-col)))))
 
 (defun bebop-set--name-width (rows set-names)
   "Return the shared name-column width anchoring the right region.
@@ -1624,12 +1822,19 @@ your move since the last beat."
   :type 'integer
   :group 'bebop)
 
-(defun bebop-derived--jam-when-ready (session text started)
+(defun bebop-derived--jam-when-ready (session text started &optional id)
   "Jam TEXT into SESSION once its resumed agent is up.
 STARTED is the `float-time' of the resume. Up means SessionStart has
 rewritten the event file since STARTED and the hook state is idle.
-Gives up with an alert after `bebop-review-resume-timeout'."
+Gives up with an alert after `bebop-review-resume-timeout'.
+
+The task is a handoff from the moment it is queued: the row shows a
+dim ↪ while it waits, a colored one once the jam lands, and a red one
+if the wait times out or the jam fails — the text stays in the ledger
+for a resend (see Handoffs). ID resumes an existing ledger entry, as
+a resend does; without it, a new entry is queued."
   (let ((deadline (+ started bebop-review-resume-timeout))
+        (id (bebop-handoff-record session text "queued" id))
         (timer nil))
     (setq timer
           (run-at-time
@@ -1646,12 +1851,16 @@ Gives up with an alert after `bebop-review-resume-timeout'."
                  (run-at-time 2 nil
                               (lambda ()
                                 (condition-case err
-                                    (bebop-jam session text)
-                                  (error (bebop-hud--notify
-                                          "%s: request not sent: %s"
-                                          session (error-message-string err)))))))
+                                    (let ((bebop-handoff--delivering id))
+                                      (bebop-jam session text))
+                                  (error
+                                   (bebop-handoff-record session text "dropped" id)
+                                   (bebop-hud--notify
+                                    "%s: request not sent: %s"
+                                    session (error-message-string err)))))))
                 ((> (float-time) deadline)
                  (cancel-timer timer)
+                 (bebop-handoff-record session text "dropped" id)
                  (bebop-hud--notify "%s did not start; request not sent: %s"
                                     session text)))))))))
 
@@ -1724,7 +1933,7 @@ local branch to check out. Returns the session name. Citizen verb."
         "n: new  k: kill  r: resume  e: exile"
         "C/D: chart  V/W: venue"
         "N: new set  m: move to set  g: refresh  .: mark seen"
-        "o: open MR in browser (derived sets)"))
+        "f: followed up (ack ↪ handoffs)  o: open MR in browser (derived sets)"))
 
 (defun bebop-set-toggle ()
   "Toggle the section at point, then re-render the dashboard.
@@ -1742,6 +1951,7 @@ not merely flip magit's visibility overlays."
 (define-key bebop-dashboard-mode-map (kbd "N") #'bebop-new-set)
 (define-key bebop-dashboard-mode-map (kbd "m") #'bebop-assign-set)
 (define-key bebop-dashboard-mode-map (kbd ".") #'bebop-mark-all-seen)
+(define-key bebop-dashboard-mode-map (kbd "f") #'bebop-handoff-ack)
 (define-key bebop-dashboard-mode-map (kbd "o") #'bebop-derived-browse)
 
 (bebop-set--load)

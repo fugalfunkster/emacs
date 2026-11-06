@@ -270,6 +270,7 @@ Signals if NAME has no live tmux window."
       (bebop--tmux-paste pane))
     (call-process "tmux" nil nil nil "send-keys" "-t" pane "C-m")
     (run-hook-with-args 'bebop-session-activity-functions name 'send)
+    (run-hook-with-args 'bebop-session-handoff-functions name text)
     (format "jammed: %s" name)))
 
 (defun bebop--session-venue (name)

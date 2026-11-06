@@ -212,7 +212,7 @@ The remote counterpart of `bebop--active-session'.")
                         "n: new  k: kill  r: resume  e: exile"
                         "C/D: chart  V/W: venue  N: new set  m: move to set"
                         "w: pin W  L: workbench layout  a: attach (mosh)  P: forward port"
-                        "o: open MR in browser (derived sets)"))
+                        "f: followed up (ack ↪ handoffs)  o: open MR in browser (derived sets)"))
           (insert (propertize (concat line "\n")
                               'face '(:inherit shadow :height 0.75))))
         (goto-char (point-min))
@@ -334,6 +334,7 @@ headings and their MR rows (see `bebop--nav-stop-p')."
            ("a" . bebop-remote-attach)
            ("P" . bebop-remote-forward-port)
            ("." . bebop-remote-mark-all-seen)
+           ("f" . bebop-remote-ack-handoff)
            ("w" . bebop-remote-workbench)
            ("L" . bebop-remote-workbench-layout)
            ("e" . bebop-remote-exile)
@@ -718,6 +719,28 @@ stream sets them up again each time it connects.")
 
 (defvar bebop-remote--periphery nil
   "Cached mode-line segment for far attention, or nil when there is none.")
+
+(defun bebop-remote-ack-handoff ()
+  "Ack the far session's handoffs at point; offer a resend of dropped ones.
+The question runs here and the work runs on the host, which keeps the
+ledger (see Handoffs)."
+  (interactive)
+  (let* ((name (bebop-remote--name-at-point))
+         (hs (append (bebop-remote--eval-json
+                      (format "(bebop-handoff-list %S)" name))
+                     nil))
+         (dropped (seq-count (lambda (h) (equal (plist-get h :state) "dropped"))
+                             hs)))
+    (if (null hs)
+        (message "Bebop: %s has no handoffs" name)
+      (bebop-remote--eval
+       (format "(bebop-handoff-settle %S %S)" name
+               (and (> dropped 0)
+                    (y-or-n-p (format "Send %d dropped task%s to %s again? "
+                                      dropped (if (= dropped 1) "" "s") name))
+                    t)))
+      (bebop-remote-refresh)
+      (message "Bebop: %s followed up" name))))
 
 (defun bebop-remote-mark-all-seen ()
   "Mark every far session seen, on the host."
