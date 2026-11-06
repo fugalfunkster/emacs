@@ -182,7 +182,7 @@ def derived(me, sessions, branches, done):
                             and not notes[0].get("resolved")):
                         replied = True
         reviewing.append(item(
-            mr, review=state, replied=replied,
+            mr, review=state, replied=replied, head=mr["sha"],
             your_move=state != "approved" and (replied or not spoke)))
     el(f'(bebop-derived-set-put "Reviewing"'
        f' {el_quote(json.dumps(reviewing))})')

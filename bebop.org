@@ -10688,7 +10688,10 @@ one declares, from GitLab alone (=bebop-derived-set-put=):
   still says so.
 - *Reviewing* — open, non-draft MRs that name you as reviewer, by
   others. Your move unless you approved: either you have not spoken
-  yet, or someone answered in a thread you spoke in.
+  yet, or someone answered in a thread you spoke in. Each item also
+  carries the MR's =head= SHA. Pulse does not judge it: review-mr
+  compares it with the head its ledger reviewed, and a different SHA
+  means new commits since your review. Pulse reads no charts.
 
 Pulse drops =GITLAB_TOKEN= from its environment and uses glab's own
 login: a stale token in the environment wins over the login and turns
@@ -10893,7 +10896,7 @@ def derived(me, sessions, branches, done):
                             and not notes[0].get("resolved")):
                         replied = True
         reviewing.append(item(
-            mr, review=state, replied=replied,
+            mr, review=state, replied=replied, head=mr["sha"],
             your_move=state != "approved" and (replied or not spoke)))
     el(f'(bebop-derived-set-put "Reviewing"'
        f' {el_quote(json.dumps(reviewing))})')
