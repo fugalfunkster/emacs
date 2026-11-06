@@ -6650,10 +6650,23 @@ In Progress and the review lanes protect a session from exile and
 archive. A status older than =bebop-lane-stale-hours= renders dim, as
 stale MR glyphs do. The tooltip names the key, the status and its age.
 
+The pies come from Apple Symbols, which draws them 13px wide in the
+18px slot. The fallback font drew them at 10px, too small to read
+(2026-11-06). Apple Symbols also sits 1px taller than the dashboard
+font, so every gutter stop carries the same font (=bebop-set--stop=).
+Every row then grows by the same pixel, and rows with and without a
+lane stay evenly spaced. Scaling the glyph with =:height= was the
+other way to enlarge it, but at 1.2× it already adds 4px to the row.
+
 #+begin_src emacs-lisp
 (defface bebop-lane-face
   '((t :foreground "#3377DD"))
   "Face for a ticket lane on the Jira board, To Do through Done."
+  :group 'bebop)
+
+(defface bebop-lane-glyph-face
+  '((t :family "Apple Symbols"))
+  "Font for the lane pies and the gutter stops, which share its height."
   :group 'bebop)
 
 (defcustom bebop-lane-stale-hours 24
@@ -6737,7 +6750,7 @@ Roundup writes a whole JQL pass this way. Return the count."
                        ((nth 3 lane) 'bebop-lane-face)
                        (t 'shadow))))
       (propertize
-       (bebop-set--prop (or (nth 1 lane) "◌") face)
+       (bebop-set--prop (or (nth 1 lane) "◌") (list 'bebop-lane-glyph-face face))
        'help-echo (format "%s · %s · %s ago%s"
                           (plist-get tk :key) status
                           (or (bebop-set--age-string (plist-get tk :at)) "?")
@@ -7725,8 +7738,10 @@ magit's own `magit--propertize-face' does."
   "Return a stretch-space aligning subsequent text to COLUMN.
 The gutter glyphs (⊞ 13px, ⎇ 16px) are wider than the 9px character
 cell, so literal-space padding drifts; pixel column stops keep the
-gutter grid exact on every line."
-  (propertize " " 'display `(space :align-to ,column)))
+gutter grid exact on every line. The stop carries the lane pies' font
+so every gutter row is as tall as a row with a pie (see Ticket lanes)."
+  (propertize (bebop-set--prop " " 'bebop-lane-glyph-face)
+              'display `(space :align-to ,column)))
 
 (defconst bebop-set--name-col 14
   "Column where the name field begins, after the seven-glyph gutter.

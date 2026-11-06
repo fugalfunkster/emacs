@@ -496,6 +496,11 @@ Dropped tasks are offered for a resend first."
   "Face for a ticket lane on the Jira board, To Do through Done."
   :group 'bebop)
 
+(defface bebop-lane-glyph-face
+  '((t :family "Apple Symbols"))
+  "Font for the lane pies and the gutter stops, which share its height."
+  :group 'bebop)
+
 (defcustom bebop-lane-stale-hours 24
   "Hours after which a stored ticket status renders dim."
   :type 'integer
@@ -577,7 +582,7 @@ Roundup writes a whole JQL pass this way. Return the count."
                        ((nth 3 lane) 'bebop-lane-face)
                        (t 'shadow))))
       (propertize
-       (bebop-set--prop (or (nth 1 lane) "◌") face)
+       (bebop-set--prop (or (nth 1 lane) "◌") (list 'bebop-lane-glyph-face face))
        'help-echo (format "%s · %s · %s ago%s"
                           (plist-get tk :key) status
                           (or (bebop-set--age-string (plist-get tk :at)) "?")
@@ -1481,8 +1486,10 @@ magit's own `magit--propertize-face' does."
   "Return a stretch-space aligning subsequent text to COLUMN.
 The gutter glyphs (⊞ 13px, ⎇ 16px) are wider than the 9px character
 cell, so literal-space padding drifts; pixel column stops keep the
-gutter grid exact on every line."
-  (propertize " " 'display `(space :align-to ,column)))
+gutter grid exact on every line. The stop carries the lane pies' font
+so every gutter row is as tall as a row with a pie (see Ticket lanes)."
+  (propertize (bebop-set--prop " " 'bebop-lane-glyph-face)
+              'display `(space :align-to ,column)))
 
 (defconst bebop-set--name-col 14
   "Column where the name field begins, after the seven-glyph gutter.
