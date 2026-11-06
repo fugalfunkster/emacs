@@ -80,6 +80,62 @@ wrong-but-obvious host component beats a wrong-and-invisible one."
         short
       bebop-host-fallback)))
 
+(defvar bebop--loops nil
+  "Running loops: an alist of NAME → plist (:fn :interval :timer :last).")
+
+(defvar bebop--loop-watchdog nil
+  "Timer that re-arms any loop that has stopped.")
+
+(defun bebop--loop-arm (name)
+  "Schedule loop NAME's next run, replacing any pending one."
+  (when-let ((l (alist-get name bebop--loops)))
+    (when (timerp (plist-get l :timer))
+      (cancel-timer (plist-get l :timer)))
+    (setf (alist-get name bebop--loops)
+          (plist-put l :timer (run-at-time (plist-get l :interval) nil
+                                           #'bebop--loop-tick name)))))
+
+(defun bebop--loop-tick (name)
+  "Run loop NAME once, then arm the next run however this one ends.
+A loop stopped from inside its own function is not armed again."
+  (when-let ((l (alist-get name bebop--loops)))
+    (unwind-protect
+        (funcall (plist-get l :fn))
+      (when-let ((l (alist-get name bebop--loops)))
+        (setf (alist-get name bebop--loops) (plist-put l :last (float-time)))
+        (bebop--loop-arm name)))))
+
+(defun bebop--loop-watch ()
+  "Arm again every loop that has not finished a run in four intervals."
+  (dolist (cell bebop--loops)
+    (let ((l (cdr cell)))
+      (when (> (- (float-time) (or (plist-get l :last) 0))
+               (* 4 (plist-get l :interval)))
+        (message "Bebop: %s loop stalled; re-arming" (car cell))
+        (setf (alist-get (car cell) bebop--loops)
+              (plist-put l :last (float-time)))
+        (bebop--loop-arm (car cell))))))
+
+(defun bebop--loop-start (name interval fn)
+  "Run FN every INTERVAL seconds as loop NAME, restarting it if running."
+  (bebop--loop-stop name)
+  (setf (alist-get name bebop--loops)
+        (list :fn fn :interval interval :last (float-time)))
+  (bebop--loop-arm name)
+  (unless (timerp bebop--loop-watchdog)
+    (setq bebop--loop-watchdog (run-at-time 60 60 #'bebop--loop-watch))))
+
+(defun bebop--loop-stop (name)
+  "Stop loop NAME. Stopping a loop that does not run does nothing."
+  (when-let ((l (alist-get name bebop--loops)))
+    (when (timerp (plist-get l :timer))
+      (cancel-timer (plist-get l :timer)))
+    (setq bebop--loops (assq-delete-all name bebop--loops))))
+
+(defun bebop--loop-running-p (name)
+  "Non-nil when loop NAME runs."
+  (and (assq name bebop--loops) t))
+
 (defun bebop--write-json (file object)
   "Write OBJECT to FILE as UTF-8 JSON, without ever prompting."
   (let ((coding-system-for-write 'utf-8-unix))

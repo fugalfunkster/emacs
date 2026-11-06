@@ -1557,29 +1557,21 @@ lone outlier past the cap simply overflows its own line."
                 (live 'bebop-session-face)
                 (t 'shadow)))
          (ports (bebop-set--backline-ports (plist-get row :venue)))
-         ;; Age earns its ink only once the row has gone quiet: a
-         ;; five-minute-old session is the normal case, not a signal.
-         ;; The two staleness cues then agree — bright name and no age,
-         ;; or shadow name and a visible age, never a mix.
-         (age (and (bebop-set--quiet-p name)
-                   (bebop-set--age-string (bebop-set--last-activity name))))
          (start (point)))
     (magit-insert-section (bebop-session-row name)
       (insert (bebop-set--gutter row))
       (insert indent)
       (insert (bebop-set--prop name face))
       ;; Right region: backline ports anchored off the name column so
-      ;; they form a true column down the tree; the age column hangs on
-      ;; the window's right edge — the HUD's answer to "which of these
-      ;; did I touch today." (MR status lives in the left gutter.)
+      ;; they form a true column down the tree. The age column that hung
+      ;; on the right edge retired on 2026-11-06: the ticket lane says
+      ;; more about where the work stands, and a quiet row's shadow name
+      ;; still says it has gone quiet. (MR status lives in the gutter.)
       (when ports
         (insert (bebop-set--stop (+ bebop-set--name-col width)))
         (insert (bebop-set--prop
                  (mapconcat (lambda (p) (format ":%d" p)) ports " ")
                  'shadow)))
-      (when age
-        (insert (bebop-set--stop '(- right 5)))
-        (insert (bebop-set--prop (format "%4s" age) 'shadow)))
       (insert "\n")
       (add-text-properties
        start (point)
@@ -1837,8 +1829,7 @@ A failed pipeline turns an Authored MR's glyph red, as on session rows."
          ;; (a pulse render comes from emacsclient); a snapshot has
          ;; no window at all, so it assumes a roomy client.
          (win (get-buffer-window (current-buffer) t))
-         (room (max 20 (- (if win (window-width win) 140) title-col 7)))
-         (age (bebop-set--age-string (gethash "updated" item))))
+         (room (max 20 (- (if win (window-width win) 140) title-col 2))))
     (insert (bebop-derived--glyphs set item)
             "    "
             (bebop-set--prop (gethash "ref" item)
@@ -1854,9 +1845,6 @@ A failed pipeline turns an Authored MR's glyph red, as on session rows."
                         ""))
               room nil nil "…")
              'shadow))
-    (when age
-      (insert (bebop-set--stop '(- right 5))
-              (bebop-set--prop (format "%4s" age) 'shadow)))
     (insert "\n")
     (put-text-property start (point) 'bebop-mr-item
                        (bebop-derived--item-plist set item))))

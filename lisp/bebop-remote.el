@@ -275,16 +275,18 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
       (bebop-remote--stop-timer))))
 
 (defun bebop-remote--start-timer ()
-  (unless (timerp bebop-remote--timer)
-    (setq bebop-remote--timer
-          (run-at-time bebop-remote-poll-interval
-                       bebop-remote-poll-interval
-                       #'bebop-remote--poll))))
+  "Start the remote refresh: a loop that keeps running."
+  (unless (bebop--loop-running-p 'remote)
+    (bebop--loop-start 'remote bebop-remote-poll-interval #'bebop-remote--poll)))
 
 (defun bebop-remote--stop-timer ()
-  (when (timerp bebop-remote--timer)
-    (cancel-timer bebop-remote--timer))
-  (setq bebop-remote--timer nil))
+  (bebop--loop-stop 'remote))
+
+;; Until 2026-11-06 a plain repeating timer; a reload moves it onto the loop.
+(when (timerp bebop-remote--timer)
+  (cancel-timer bebop-remote--timer)
+  (setq bebop-remote--timer nil)
+  (bebop-remote--start-timer))
 
 
 (defun bebop-remote--nav-stop-p ()

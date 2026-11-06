@@ -1134,19 +1134,18 @@ Also restarts the poll timer if it stopped."
 (add-hook 'emacs-startup-hook #'bebop-start)
 
 (defun bebop--start-poll ()
-  "Start the status polling timer if not already running."
-  (unless (and bebop--poll-timer
-               (timerp bebop--poll-timer))
-    (setq bebop--poll-timer
-          (run-at-time bebop-poll-interval
-                       bebop-poll-interval
-                       #'bebop--poll-all))))
+  "Start the status poll, or restart it: a loop that keeps running
+\(see Loops that keep running)."
+  (bebop--loop-start 'poll bebop-poll-interval #'bebop--poll-all))
 
 (defun bebop--stop-poll ()
-  "Stop the status polling timer."
-  (when (timerp bebop--poll-timer)
-    (cancel-timer bebop--poll-timer)
-    (setq bebop--poll-timer nil)))
+  "Stop the status poll."
+  (bebop--loop-stop 'poll))
+
+(when (timerp bebop--poll-timer)
+  (cancel-timer bebop--poll-timer)
+  (setq bebop--poll-timer nil)
+  (bebop--start-poll))
 
 (defun bebop-debug-pane ()
   "Show captured pane content and inferred status for all pairs in *bebop-debug*."

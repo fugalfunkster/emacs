@@ -1368,6 +1368,79 @@ wrong-but-obvious host component beats a wrong-and-invisible one."
       bebop-host-fallback)))
 #+end_src
 
+*** Loops that keep running
+
+A repeating Emacs timer can stop for good. If its function is
+interrupted mid-run, the timer stays marked triggered and never fires
+again. On 2026-11-05 a "Select coding system" prompt did that to the
+dashboard poll and the mailbox poll at once. For fourteen hours every
+status dot on the Pro stayed frozen, and nothing said so.
+
+=bebop--loop-start= runs a function every INTERVAL seconds as a named
+loop with two guards. Each run arms the next one in =unwind-protect=,
+so a run that ends in a quit or an error still schedules its successor.
+A watchdog runs every minute. When a loop has not finished a run in
+four intervals, it arms the loop again. Starting a loop that already
+runs restarts it, so =bebop-refresh= revives a stuck poll too.
+
+#+begin_src emacs-lisp
+(defvar bebop--loops nil
+  "Running loops: an alist of NAME → plist (:fn :interval :timer :last).")
+
+(defvar bebop--loop-watchdog nil
+  "Timer that re-arms any loop that has stopped.")
+
+(defun bebop--loop-arm (name)
+  "Schedule loop NAME's next run, replacing any pending one."
+  (when-let ((l (alist-get name bebop--loops)))
+    (when (timerp (plist-get l :timer))
+      (cancel-timer (plist-get l :timer)))
+    (setf (alist-get name bebop--loops)
+          (plist-put l :timer (run-at-time (plist-get l :interval) nil
+                                           #'bebop--loop-tick name)))))
+
+(defun bebop--loop-tick (name)
+  "Run loop NAME once, then arm the next run however this one ends.
+A loop stopped from inside its own function is not armed again."
+  (when-let ((l (alist-get name bebop--loops)))
+    (unwind-protect
+        (funcall (plist-get l :fn))
+      (when-let ((l (alist-get name bebop--loops)))
+        (setf (alist-get name bebop--loops) (plist-put l :last (float-time)))
+        (bebop--loop-arm name)))))
+
+(defun bebop--loop-watch ()
+  "Arm again every loop that has not finished a run in four intervals."
+  (dolist (cell bebop--loops)
+    (let ((l (cdr cell)))
+      (when (> (- (float-time) (or (plist-get l :last) 0))
+               (* 4 (plist-get l :interval)))
+        (message "Bebop: %s loop stalled; re-arming" (car cell))
+        (setf (alist-get (car cell) bebop--loops)
+              (plist-put l :last (float-time)))
+        (bebop--loop-arm (car cell))))))
+
+(defun bebop--loop-start (name interval fn)
+  "Run FN every INTERVAL seconds as loop NAME, restarting it if running."
+  (bebop--loop-stop name)
+  (setf (alist-get name bebop--loops)
+        (list :fn fn :interval interval :last (float-time)))
+  (bebop--loop-arm name)
+  (unless (timerp bebop--loop-watchdog)
+    (setq bebop--loop-watchdog (run-at-time 60 60 #'bebop--loop-watch))))
+
+(defun bebop--loop-stop (name)
+  "Stop loop NAME. Stopping a loop that does not run does nothing."
+  (when-let ((l (alist-get name bebop--loops)))
+    (when (timerp (plist-get l :timer))
+      (cancel-timer (plist-get l :timer)))
+    (setq bebop--loops (assq-delete-all name bebop--loops))))
+
+(defun bebop--loop-running-p (name)
+  "Non-nil when loop NAME runs."
+  (and (assq name bebop--loops) t))
+#+end_src
+
 *** JSON files
 
 Every JSON file bebop writes goes through =bebop--write-json=.
@@ -3382,19 +3455,23 @@ Timer management: start and stop the periodic poll cycle.
 
 #+begin_src emacs-lisp
 (defun bebop--start-poll ()
-  "Start the status polling timer if not already running."
-  (unless (and bebop--poll-timer
-               (timerp bebop--poll-timer))
-    (setq bebop--poll-timer
-          (run-at-time bebop-poll-interval
-                       bebop-poll-interval
-                       #'bebop--poll-all))))
+  "Start the status poll, or restart it: a loop that keeps running
+\(see Loops that keep running)."
+  (bebop--loop-start 'poll bebop-poll-interval #'bebop--poll-all))
 
 (defun bebop--stop-poll ()
-  "Stop the status polling timer."
-  (when (timerp bebop--poll-timer)
-    (cancel-timer bebop--poll-timer)
-    (setq bebop--poll-timer nil)))
+  "Stop the status poll."
+  (bebop--loop-stop 'poll))
+#+end_src
+
+Until 2026-11-06 the poll was a plain repeating timer in
+=bebop--poll-timer=. A reload moves a running poll onto the loop.
+
+#+begin_src emacs-lisp
+(when (timerp bebop--poll-timer)
+  (cancel-timer bebop--poll-timer)
+  (setq bebop--poll-timer nil)
+  (bebop--start-poll))
 #+end_src
 
 *** Debug
@@ -7809,29 +7886,21 @@ lone outlier past the cap simply overflows its own line."
                 (live 'bebop-session-face)
                 (t 'shadow)))
          (ports (bebop-set--backline-ports (plist-get row :venue)))
-         ;; Age earns its ink only once the row has gone quiet: a
-         ;; five-minute-old session is the normal case, not a signal.
-         ;; The two staleness cues then agree — bright name and no age,
-         ;; or shadow name and a visible age, never a mix.
-         (age (and (bebop-set--quiet-p name)
-                   (bebop-set--age-string (bebop-set--last-activity name))))
          (start (point)))
     (magit-insert-section (bebop-session-row name)
       (insert (bebop-set--gutter row))
       (insert indent)
       (insert (bebop-set--prop name face))
       ;; Right region: backline ports anchored off the name column so
-      ;; they form a true column down the tree; the age column hangs on
-      ;; the window's right edge — the HUD's answer to "which of these
-      ;; did I touch today." (MR status lives in the left gutter.)
+      ;; they form a true column down the tree. The age column that hung
+      ;; on the right edge retired on 2026-11-06: the ticket lane says
+      ;; more about where the work stands, and a quiet row's shadow name
+      ;; still says it has gone quiet. (MR status lives in the gutter.)
       (when ports
         (insert (bebop-set--stop (+ bebop-set--name-col width)))
         (insert (bebop-set--prop
                  (mapconcat (lambda (p) (format ":%d" p)) ports " ")
                  'shadow)))
-      (when age
-        (insert (bebop-set--stop '(- right 5)))
-        (insert (bebop-set--prop (format "%4s" age) 'shadow)))
       (insert "\n")
       (add-text-properties
        start (point)
@@ -8135,8 +8204,7 @@ A failed pipeline turns an Authored MR's glyph red, as on session rows."
          ;; (a pulse render comes from emacsclient); a snapshot has
          ;; no window at all, so it assumes a roomy client.
          (win (get-buffer-window (current-buffer) t))
-         (room (max 20 (- (if win (window-width win) 140) title-col 7)))
-         (age (bebop-set--age-string (gethash "updated" item))))
+         (room (max 20 (- (if win (window-width win) 140) title-col 2))))
     (insert (bebop-derived--glyphs set item)
             "    "
             (bebop-set--prop (gethash "ref" item)
@@ -8152,9 +8220,6 @@ A failed pipeline turns an Authored MR's glyph red, as on session rows."
                         ""))
               room nil nil "…")
              'shadow))
-    (when age
-      (insert (bebop-set--stop '(- right 5))
-              (bebop-set--prop (format "%4s" age) 'shadow)))
     (insert "\n")
     (put-text-property start (point) 'bebop-mr-item
                        (bebop-derived--item-plist set item))))
@@ -9905,16 +9970,18 @@ SYNC waits for the reply; otherwise the fetch runs in the background."
       (bebop-remote--stop-timer))))
 
 (defun bebop-remote--start-timer ()
-  (unless (timerp bebop-remote--timer)
-    (setq bebop-remote--timer
-          (run-at-time bebop-remote-poll-interval
-                       bebop-remote-poll-interval
-                       #'bebop-remote--poll))))
+  "Start the remote refresh: a loop that keeps running."
+  (unless (bebop--loop-running-p 'remote)
+    (bebop--loop-start 'remote bebop-remote-poll-interval #'bebop-remote--poll)))
 
 (defun bebop-remote--stop-timer ()
-  (when (timerp bebop-remote--timer)
-    (cancel-timer bebop-remote--timer))
-  (setq bebop-remote--timer nil))
+  (bebop--loop-stop 'remote))
+
+;; Until 2026-11-06 a plain repeating timer; a reload moves it onto the loop.
+(when (timerp bebop-remote--timer)
+  (cancel-timer bebop-remote--timer)
+  (setq bebop-remote--timer nil)
+  (bebop-remote--start-timer))
 
 
 (defun bebop-remote--nav-stop-p ()
