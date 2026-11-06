@@ -52,7 +52,14 @@ this machine's own ledger; a human executes it at a roundup checkpoint.
 `workbench' only arranges this machine's windows for a named session
 (bebop-remote.el, Workbench layout).")
 
-(defvar bebop-call--timer nil)
+(defvar bebop-call--timer nil
+  "The one-shot timer for the next poll; each poll arms the next.")
+
+(defvar bebop-call--watchdog nil
+  "Timer that re-arms the poll chain if it stops.")
+
+(defvar bebop-call--last-poll nil
+  "`float-time' when the last poll finished.")
 
 (defvar bebop-call--seen nil
   "Call ids already answered; seeded from the response file on start.")
@@ -116,7 +123,30 @@ malformed read is retried on the next poll rather than erroring."
   (when (and bebop-call-dir (file-directory-p bebop-call-dir))
     (mapc #'bebop-call--dispatch
           (append (bebop-call--read-json (bebop-call--call-file)) nil))
-    (bebop-call--maybe-presence)))
+    (bebop-call--maybe-presence))
+  (setq bebop-call--last-poll (float-time)))
+
+(defun bebop-call--arm ()
+  "Schedule the next poll, replacing any pending one."
+  (when (timerp bebop-call--timer)
+    (cancel-timer bebop-call--timer))
+  (setq bebop-call--timer
+        (run-at-time bebop-call-poll-interval nil #'bebop-call--tick)))
+
+(defun bebop-call--tick ()
+  "Poll once, then arm the next poll however this one ends."
+  (unwind-protect
+      (bebop-call--poll)
+    (when bebop-call-mode
+      (bebop-call--arm))))
+
+(defun bebop-call--watch ()
+  "Re-arm the poll chain when no poll has finished in four intervals."
+  (when (and bebop-call-mode
+             (> (- (float-time) (or bebop-call--last-poll 0))
+                (* 4 bebop-call-poll-interval)))
+    (message "bebop-call: poll stalled; re-arming")
+    (bebop-call--arm)))
 
 (defvar bebop-call--presence-at nil
   "Time of the last presence write, or nil before the first.")
@@ -224,14 +254,21 @@ checkpoint; executes nothing."
         (make-directory bebop-call-dir t)
         (bebop-call--seed-seen)
         (bebop-call--write-presence)
-        (setq bebop-call--timer
-              (run-at-time bebop-call-poll-interval
-                           bebop-call-poll-interval
-                           #'bebop-call--poll))
+        (setq bebop-call--last-poll (float-time))
+        (bebop-call--arm)
+        (when (timerp bebop-call--watchdog)
+          (cancel-timer bebop-call--watchdog))
+        (setq bebop-call--watchdog (run-at-time 60 60 #'bebop-call--watch))
         (message "bebop-call: answering as %s" bebop-call-host))
-    (when (timerp bebop-call--timer)
-      (cancel-timer bebop-call--timer))
-    (setq bebop-call--timer nil)))
+    (dolist (timer (list bebop-call--timer bebop-call--watchdog))
+      (when (timerp timer)
+        (cancel-timer timer)))
+    (setq bebop-call--timer nil
+          bebop-call--watchdog nil)))
+
+(when bebop-call-mode
+  (bebop-call-mode -1)
+  (bebop-call-mode 1))
 
 (provide 'bebop-call)
 
