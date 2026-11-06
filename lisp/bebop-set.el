@@ -493,7 +493,7 @@ Dropped tasks are offered for a resend first."
 
 (defface bebop-lane-face
   '((t :foreground "#3377DD"))
-  "Face for a ticket lane with open work: In Progress or a review lane."
+  "Face for a ticket lane on the Jira board, To Do through Done."
   :group 'bebop)
 
 (defcustom bebop-lane-stale-hours 24
@@ -502,22 +502,23 @@ Dropped tasks are offered for a resend first."
   :group 'bebop)
 
 (defcustom bebop-lane-statuses
-  '(("In Progress" "●" open)
-    ("Code Review" "◈" open)
-    ("Desk Review" "◈" open)
-    ("In Review" "◈" open)
-    ("Test" "◈" open)
-    ("Ready to Deploy" "◈" open)
-    ("ToDo" "○" idle)
-    ("To Do" "○" idle)
-    ("Backlog" "○" idle)
-    ("Design/Spec" "○" idle)
-    ("Closed" "✓" closed)
-    ("Done" "✓" closed))
-  "Jira statuses as (STATUS GLYPH CLASS), matched without case.
-CLASS `open' renders blue and is what the lane guard protects; `idle'
-and `closed' render dim. An unlisted status shows a dim ◌."
-  :type '(repeat (list string string symbol))
+  '(("ToDo" "○" idle board)
+    ("To Do" "○" idle board)
+    ("In Progress" "◔" open board)
+    ("Code Review" "◑" open board)
+    ("In Review" "◑" open board)
+    ("Desk Review" "◕" open board)
+    ("Test" "◕" open board)
+    ("Ready to Deploy" "◕" open board)
+    ("Closed" "◉" closed board)
+    ("Done" "◉" closed board)
+    ("Backlog" "○" idle nil)
+    ("Design/Spec" "○" idle nil))
+  "Jira statuses as (STATUS GLYPH CLASS BOARD), matched without case.
+CLASS `open' is what the lane guard protects from exile and archive.
+BOARD non-nil renders the glyph blue: the status is on the Jira board.
+The rest render dim, and an unlisted status shows a dim ◌."
+  :type '(repeat (list string string symbol boolean))
   :group 'bebop)
 
 (defun bebop-ticket--plist (name)
@@ -573,7 +574,7 @@ Roundup writes a whole JQL pass this way. Return the count."
     (let* ((lane (bebop-ticket--lane status))
            (stale (bebop-external--stale-p tk bebop-lane-stale-hours))
            (face (cond (stale 'shadow)
-                       ((eq (nth 2 lane) 'open) 'bebop-lane-face)
+                       ((nth 3 lane) 'bebop-lane-face)
                        (t 'shadow))))
       (propertize
        (bebop-set--prop (or (nth 1 lane) "◌") face)
@@ -1381,11 +1382,12 @@ Status alone: a re-run that lands on the same status is not a change."
 
 (defun bebop-mr--gutter-glyph (session)
   "Return the single-char MR gutter glyph for SESSION, or nil if uncached.
-◆ = threads where a teammate spoke last — colored even when acked,
-because they still want answers; a ◆ whose threads all wait on the
-other side renders dim. ⤵ = approved and mergeable, colored until
-you merge. ✓ merged, ✎ draft, ◇ open render dim — they ask nothing
-of you. A glyph whose state changed since your
+Every MR state is ✎; the color says the state, so the column keeps
+one width (2026-11-06, Matthew). Red = threads where a teammate spoke
+last — red even when acked, because they still want answers. Green =
+approved and mergeable, until you merge. Dim = draft, open, merged, or
+threads that all wait on the other side — they ask nothing of you;
+the tooltip names the state. A glyph whose state changed since your
 last visit renders bold in full color until acked (the seen-unseen
 mechanic; merged flashes green once, then dims). Stale entries render
 dim regardless — never emphasize old news. The exact unresolved count
@@ -1399,19 +1401,15 @@ stays one char wide."
            (unseen (and (not stale)
                         (bebop-set--unseen-mr-p session (bebop-mr--key e))))
            (spec (cond
-                  ;; ◆ only for open/draft: comments on a closed or
+                  ;; Red only for open/draft: comments on a closed or
                   ;; merged MR ask nothing of you.
                   ((and (> on-me 0)
                         (member state '("open" "draft")))
-                   (cons "◆" 'bebop-dot-waiting-face))
+                   (cons "✎" 'bebop-dot-waiting-face))
                   ((and (plist-get e :mergeable) (equal state "open"))
-                   (cons "⤵" 'bebop-dot-active-face))
-                  ((and (> unresolved 0)
-                        (member state '("open" "draft")))
-                   (cons "◆" nil))
-                  ((equal state "merged") (cons "✓" (and unseen 'bebop-dot-active-face)))
-                  ((equal state "draft")  (cons "✎" nil))
-                  ((equal state "open")   (cons "◇" nil))
+                   (cons "✎" 'bebop-dot-active-face))
+                  ((equal state "merged") (cons "✎" (and unseen 'bebop-dot-active-face)))
+                  ((member state '("open" "draft")) (cons "✎" nil))
                   (t nil)))
            (fc (cond
                 (stale 'shadow)
@@ -1436,9 +1434,10 @@ stays one char wide."
 (defun bebop-pipeline--gutter-glyph (session)
   "Return the single-char pipeline gutter glyph for SESSION, or nil.
 ✗ failed — red even when acked, because the build is still broken;
-⟳ running-ish states; ✓ passed renders dim — a green build asks
+◦ running-ish states, dim; • passed renders dim — a green build asks
 nothing of you (it flashes green once while unseen, like a merged
-MR). Other statuses (canceled, skipped, manual) cache but render
+MR). Small glyphs, so the column keeps one width; passed no longer
+shares ✓ with a merged MR. Other statuses (canceled, skipped, manual) cache but render
 nothing — deliberate: they ask nothing and earn no ink. Unseen
 changes render bold in full color until acked; stale entries render
 dim regardless, and staleness here doubles as pulse's own health
@@ -1453,10 +1452,10 @@ meter. The raw status lives in the tooltip."
                   ((equal status "failed")
                    (cons "✗" 'bebop-dot-waiting-face))
                   ((equal status "success")
-                   (cons "✓" (and unseen 'bebop-dot-active-face)))
+                   (cons "•" (and unseen 'bebop-dot-active-face)))
                   ((member status '("running" "pending" "created"
                                     "preparing" "waiting_for_resource"))
-                   (cons "⟳" nil))
+                   (cons "◦" nil))
                   (t nil)))
            (fc (cond
                 (stale 'shadow)
@@ -1804,26 +1803,20 @@ your move since the last beat."
   "Return the gutter string for ITEM of SET: MR glyph at 6, pipeline at 8."
   (let* ((move (bebop-derived--your-move-p item))
          (mr (if (equal set "Reviewing")
-                 (cond ((equal (gethash "review" item) "approved")
-                        (cons "✓" 'shadow))
-                       ((eq t (gethash "replied" item))
-                        (cons "◆" 'bebop-dot-waiting-face))
-                       (move (cons "◇" 'bebop-dot-waiting-face))
-                       (t (cons "◆" 'shadow)))
-               (cond ((> (or (gethash "on_me" item) 0) 0)
-                      (cons "◆" 'bebop-dot-waiting-face))
-                     ((eq t (gethash "mergeable" item))
-                      (cons "⤵" 'bebop-dot-active-face))
-                     ((> (or (gethash "unresolved" item) 0) 0)
-                      (cons "◆" 'shadow))
-                     ((equal (gethash "state" item) "draft")
-                      (cons "✎" 'shadow))
-                     (t (cons "◇" 'shadow)))))
+                 (cons "✎" (if (and move (not (equal (gethash "review" item)
+                                                       "approved")))
+                               'bebop-dot-waiting-face
+                             'shadow))
+               (cons "✎" (cond ((> (or (gethash "on_me" item) 0) 0)
+                                'bebop-dot-waiting-face)
+                               ((eq t (gethash "mergeable" item))
+                                'bebop-dot-active-face)
+                               (t 'shadow)))))
          (pipeline (gethash "pipeline" item))
          (pipe (cond ((equal pipeline "failed")
                       (bebop-set--prop "✗" 'bebop-dot-waiting-face))
                      ((member pipeline '("running" "pending" "created"))
-                      (bebop-set--prop "⟳" 'shadow)))))
+                      (bebop-set--prop "◦" 'shadow)))))
     (concat (bebop-set--stop 8)
             (bebop-set--prop (car mr) (cdr mr))
             (bebop-set--stop 10)
