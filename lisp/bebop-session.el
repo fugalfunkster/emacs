@@ -695,9 +695,14 @@ With neither (point off any row), falls through to the interactive prompt."
                         (base-h (let ((dh (face-attribute 'default :height nil t)))
                                   (if (integerp dh) dh 160)))
                         (abs-h (round (* bebop-header-height base-h)))
-                        (label (if bebop--composition-session
-                                   (format "Session: %s" bebop--composition-session)
-                                 "Bebop")))
+                        (label (cond
+                                (bebop--composition-session
+                                 (format "Session: %s" bebop--composition-session))
+                                ;; A far session's buffer (bebop-remote.el)
+                                ((bound-and-true-p bebop-remote--compose-session)
+                                 (format "Remote Session: %s"
+                                         bebop-remote--compose-session))
+                                (t "Bebop"))))
                    (propertize (concat " " label)
                                'face `(:height ,abs-h :weight bold
                                        :foreground ,bebop-session-header-color

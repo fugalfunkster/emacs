@@ -500,8 +500,11 @@ host then pauses it without prompts (`bebop-stop-session')."
       (bebop--apply-buffer-settings)
       (setq bebop-remote--compose-session name)
       (bebop-remote-compose-mode 1)
-      (bebop--set-header-overlay (format "Remote → %s" name)
-                                 bebop-session-header-color 2.0))
+      ;; The header line names the session; a buffer made before it did
+      ;; still carries the old second header, "Remote → NAME".
+      (when (overlayp bebop--header-overlay)
+        (delete-overlay bebop--header-overlay)
+        (setq bebop--header-overlay nil)))
     buf))
 
 (defun bebop-remote--act-item (item)
