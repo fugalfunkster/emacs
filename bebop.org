@@ -8685,7 +8685,9 @@ folded body is cut out of the text. Rows pierced through a fold sit
 outside the body and survive the cut. The heading lines carry
 =bebop-fold= (VALUE . HIDDEN) so the client knows what TAB toggles.
 Only plain, readable properties survive the trip; magit's section
-objects would print as unreadable =#<...>=.
+objects would print as unreadable =#<...>=. Tooltips travel too
+(2026-11-06), but only string ones: a =help-echo= function would not
+print.
 
 The reply is a printed plist (=:body= STRING =:rows= LIST), printed
 again as a string so emacsclient returns it intact; non-ASCII travels
@@ -8693,9 +8695,10 @@ escaped.
 
 #+begin_src emacs-lisp
 (defconst bebop--snapshot-props
-  '(face font-lock-face display bebop-session-name bebop-on-deck-name bebop-fold
-         bebop-mr-item bebop-mr-heading)
-  "Text properties a dashboard snapshot keeps.")
+  '(face font-lock-face display help-echo bebop-session-name bebop-on-deck-name
+         bebop-fold bebop-mr-item bebop-mr-heading)
+  "Text properties a dashboard snapshot keeps. A `help-echo' travels
+only when it is a string; a function would not print readably.")
 
 (defun bebop--snapshot-clean (string)
   "Copy STRING keeping only `bebop--snapshot-props'."
@@ -8707,7 +8710,8 @@ escaped.
       (let ((next (next-property-change pos string len))
             (props (text-properties-at pos string)))
         (cl-loop for (k v) on props by #'cddr
-                 when (memq k bebop--snapshot-props)
+                 when (and (memq k bebop--snapshot-props)
+                           (or (not (eq k 'help-echo)) (stringp v)))
                  do (put-text-property pos next k v out))
         (setq pos next)))
     out))

@@ -205,9 +205,10 @@ As locally, a running agent's working directory does not move."
   (json-serialize (list :session name :venue (or (bebop--session-venue name) :null))))
 
 (defconst bebop--snapshot-props
-  '(face font-lock-face display bebop-session-name bebop-on-deck-name bebop-fold
-         bebop-mr-item bebop-mr-heading)
-  "Text properties a dashboard snapshot keeps.")
+  '(face font-lock-face display help-echo bebop-session-name bebop-on-deck-name
+         bebop-fold bebop-mr-item bebop-mr-heading)
+  "Text properties a dashboard snapshot keeps. A `help-echo' travels
+only when it is a string; a function would not print readably.")
 
 (defun bebop--snapshot-clean (string)
   "Copy STRING keeping only `bebop--snapshot-props'."
@@ -219,7 +220,8 @@ As locally, a running agent's working directory does not move."
       (let ((next (next-property-change pos string len))
             (props (text-properties-at pos string)))
         (cl-loop for (k v) on props by #'cddr
-                 when (memq k bebop--snapshot-props)
+                 when (and (memq k bebop--snapshot-props)
+                           (or (not (eq k 'help-echo)) (stringp v)))
                  do (put-text-property pos next k v out))
         (setq pos next)))
     out))
