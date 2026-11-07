@@ -5,14 +5,18 @@ Tangled from bebop.org (HUD design, phase 4) — do not edit directly.
 Walks the live venues' branches, asks GitLab for MR review state and
 head-pipeline status, writes the sidecar through the citizen verbs.
 Then the derived sets: your open MRs that no session holds, and the
-MRs you review. No Jira, no chart writes, no opinions.
+MRs you review. Then one Jira query for the sessions' ticket statuses.
+No chart writes, no opinions.
 """
 
+import base64
 import json
 import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from urllib.parse import quote
 
 # Emacs started from Finder (and cron, before) may lack these on PATH
@@ -23,6 +27,10 @@ os.environ["PATH"] = ("/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:"
 os.environ.pop("GITLAB_TOKEN", None)
 
 BOTS = {"GitLabDuo"}
+JIRA_SITE = "https://rentable.atlassian.net"
+JIRA_EMAIL = "matthew@joinroost.com"
+# The API token lives in the keychain (dotfiles SECRETS.md §1).
+JIRA_TOKEN_STORE = "atlassian-api-token"
 TICKET = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 
 
@@ -189,6 +197,82 @@ def derived(me, sessions, branches, done):
     return len(authored), len(reviewing)
 
 
+def jira_token():
+    try:
+        return sh(["security", "find-generic-password", "-a",
+                   os.environ.get("USER", ""), "-s", JIRA_TOKEN_STORE, "-w"])
+    except Exception as e:
+        raise RuntimeError(f"keychain {JIRA_TOKEN_STORE}: {e}")
+
+
+def jira_search(jql, token):
+    """Return {KEY: status name} for every issue JQL matches."""
+    auth = base64.b64encode(f"{JIRA_EMAIL}:{token}".encode()).decode()
+    found = {}
+    page = None
+    while True:
+        body = {"jql": jql, "fields": ["status"], "maxResults": 100}
+        if page:
+            body["nextPageToken"] = page
+        req = urllib.request.Request(
+            f"{JIRA_SITE}/rest/api/3/search/jql",
+            data=json.dumps(body).encode(), method="POST",
+            headers={"Authorization": f"Basic {auth}",
+                     "Content-Type": "application/json",
+                     "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.load(r)
+        for issue in data.get("issues", []):
+            found[issue["key"]] = issue["fields"]["status"]["name"]
+        page = data.get("nextPageToken")
+        if not page:
+            return found
+
+
+def ticket_key(session):
+    """The Jira key session holds: the stored one, else one in its name."""
+    if session.get("ticket"):
+        return session["ticket"]
+    m = TICKET.search(session["name"].upper())
+    return m.group(0) if m else None
+
+
+def jira(sessions):
+    """Write every session's ticket status: one JQL for all their keys.
+    A key Jira does not know fails the whole query, so the keys Jira
+    names as unknown are dropped and the query runs once more."""
+    held = {}
+    for s in sessions:
+        key = ticket_key(s)
+        if key:
+            held.setdefault(key, []).append(s["name"])
+    if not held:
+        return 0
+    token = jira_token()
+    keys = sorted(held)
+    for attempt in (1, 2):
+        try:
+            found = jira_search(f"key in ({','.join(keys)})", token)
+            break
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")
+            unknown = set(re.findall(r"'([A-Z][A-Z0-9]+-\d+)'", detail))
+            if e.code != 400 or attempt == 2 or not unknown & set(keys):
+                raise RuntimeError(f"HTTP {e.code}: {detail[:160]}")
+            keys = [k for k in keys if k not in unknown]
+            if not keys:
+                return 0
+    rows = [(name, key, status)
+            for key, status in found.items()
+            for name in held.get(key, [])]
+    if rows:
+        el("(bebop-ticket-set-batch '("
+           + " ".join(f"({el_quote(n)} {el_quote(k)} {el_quote(st)})"
+                      for n, k, st in rows)
+           + "))")
+    return len(rows)
+
+
 def report(source, errors):
     """Print SOURCE's result line, which bebop reads for pulse health:
     PULSE <source> ok, or PULSE <source> fail <the last error>."""
@@ -210,6 +294,14 @@ def main():
         return  # Emacs isn't up; pulse skips a beat, silently
     if target:
         sessions = [s for s in sessions if s.get("name") == target]
+    else:
+        # Jira first and on its own: a GitLab failure must not stop it.
+        try:
+            print(f"pulse: jira: {jira(sessions)} lane(s) written")
+            report("jira", [])
+        except Exception as e:
+            print(f"pulse: jira: {e}", file=sys.stderr)
+            report("jira", [str(e)])
     errors = []
     try:
         me = api("user")["username"]

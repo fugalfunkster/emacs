@@ -66,7 +66,11 @@ Fields: session, set, chart, venue, ticket, siblings
                                 :null)
                       :set (or (plist-get r :set) :null)
                       :chart (or (plist-get r :chart) :null)
-                      :venue (or (plist-get r :venue) :null))))
+                      :venue (or (plist-get r :venue) :null)
+                      :ticket (or (plist-get (bebop-ticket--plist
+                                              (plist-get r :name))
+                                             :key)
+                                  :null))))
             (bebop-set--rows)))))
 
 (defun bebop-list-sets ()
