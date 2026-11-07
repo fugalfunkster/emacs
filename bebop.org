@@ -7648,6 +7648,22 @@ Roundup writes a whole JQL pass this way. Return the count."
                             :at (or (plist-get tk :at) :null)))
     "null"))
 
+(defun bebop-tickets ()
+  "Return every session's stored ticket as a JSON array. Citizen verb.
+Each element is {name, key, status, at}; sessions without a ticket are
+left out. Pulse refreshes these each run, so roundup and orient read
+them here and ask Jira only for a missing or stale one."
+  (json-serialize
+   (vconcat
+    (delq nil
+          (mapcar (lambda (r)
+                    (when-let ((tk (bebop-ticket--plist (plist-get r :name))))
+                      (list :name (plist-get r :name)
+                            :key (or (plist-get tk :key) :null)
+                            :status (or (plist-get tk :status) :null)
+                            :at (or (plist-get tk :at) :null))))
+                  (bebop-set--rows))))))
+
 (defconst bebop-set--lane-legend
   "○ To Do  ◔ In Progress  ◑ Code Review  ◕ Desk Review, Test, Ready  ◉ Done
 Blue: on the Jira board. Dim: backlog, an unknown status, or stale."
