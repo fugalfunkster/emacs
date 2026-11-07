@@ -15,7 +15,7 @@ import subprocess
 import sys
 from urllib.parse import quote
 
-# cron's PATH has neither glab nor emacsclient
+# Emacs started from Finder (and cron, before) may lack these on PATH
 os.environ["PATH"] = ("/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:"
                       + os.environ.get("PATH", ""))
 # glab prefers GITLAB_TOKEN over its own login; a stale one in the
@@ -189,12 +189,26 @@ def derived(me, sessions, branches, done):
     return len(authored), len(reviewing)
 
 
+def report(source, errors):
+    """Print SOURCE's result line, which bebop reads for pulse health:
+    PULSE <source> ok, or PULSE <source> fail <the last error>."""
+    if errors:
+        print(f"PULSE {source} fail {errors[-1]}")
+    else:
+        print(f"PULSE {source} ok")
+
+
 def main():
     try:
         sessions = json.loads(el_string("(bebop-list-sessions)"))
     except Exception:
         return  # Emacs isn't up; pulse skips a beat, silently
-    me = api("user")["username"]
+    errors = []
+    try:
+        me = api("user")["username"]
+    except Exception as e:
+        report("gitlab", [f"user: {e}"])
+        sys.exit(1)
     beats = 0
     done = {}
     branches = {}
@@ -207,7 +221,7 @@ def main():
                          "rev-parse", "--abbrev-ref", "HEAD"])
         except Exception as e:
             print(f"pulse: {name}: {e}", file=sys.stderr)
-            continue
+            continue  # a venue problem, not a GitLab one
         branches[branch] = name
         if not s.get("live"):
             continue
@@ -228,17 +242,20 @@ def main():
             beats += 1
         except Exception as e:
             print(f"pulse: {name}: {e}", file=sys.stderr)
+            errors.append(f"{name}: {e}")
     try:
         counts = derived(me, sessions, branches, done)
         print(f"pulse: derived sets: {counts[0]} authored,"
               f" {counts[1]} reviewing")
     except Exception as e:
         print(f"pulse: derived sets: {e}", file=sys.stderr)
+        errors.append(f"derived sets: {e}")
     try:
         el("(bebop--render)")
     except Exception:
         pass
     print(f"pulse: {beats} session(s) refreshed")
+    report("gitlab", errors)
 
 
 if __name__ == "__main__":

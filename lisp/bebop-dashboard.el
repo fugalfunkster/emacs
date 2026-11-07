@@ -1235,6 +1235,8 @@ Cheap when all the watches run: the sweep calls it every time."
                                (setq bebop--push-render-timer nil)
                                (bebop--render)))))
 
+(require 'parse-time)
+
 (defconst bebop--interrupt-marker "[Request interrupted by user"
   "Text that starts the transcript message Claude writes on an Esc interrupt.")
 
@@ -1393,17 +1395,20 @@ Also restarts the poll timer if it stopped."
 (add-hook 'emacs-startup-hook #'bebop-start)
 
 (defun bebop--start-poll ()
-  "Start the event watches, the sweep and the interrupt check, or restart them."
+  "Start the event watches, the sweep, the interrupt check and pulse.
+The first three restart; a running pulse loop keeps its schedule."
   (bebop--events-watch-ensure)
   (bebop--loop-start 'poll bebop-sweep-interval #'bebop--poll-all)
   (bebop--loop-start 'interrupt bebop-interrupt-check-interval
-                     #'bebop--interrupt-check))
+                     #'bebop--interrupt-check)
+  (bebop--pulse-start))
 
 (defun bebop--stop-poll ()
-  "Stop the event watches, the sweep and the interrupt check."
+  "Stop the event watches, the sweep, the interrupt check and pulse."
   (bebop--events-watch-stop)
   (bebop--loop-stop 'poll)
-  (bebop--loop-stop 'interrupt))
+  (bebop--loop-stop 'interrupt)
+  (bebop--pulse-stop))
 
 (when (timerp bebop--poll-timer)
   (cancel-timer bebop--poll-timer)
@@ -1413,6 +1418,128 @@ Also restarts the poll timer if it stopped."
 (when (and (bebop--loop-running-p 'poll)
            (not (bebop--loop-running-p 'interrupt)))
   (bebop--start-poll))
+
+(defcustom bebop-pulse-interval 600
+  "Seconds between pulse runs."
+  :type 'integer
+  :group 'bebop)
+
+(defcustom bebop-pulse-timeout 300
+  "Seconds after which a pulse run counts as hung and is killed."
+  :type 'integer
+  :group 'bebop)
+
+(defcustom bebop-pulse-log (expand-file-name "~/.emacs.d-local/pulse.log")
+  "File that pulse output is appended to."
+  :type 'file
+  :group 'bebop)
+
+(defvar bebop--pulse nil
+  "Pulse run state: a plist :proc :rerun :started :ended :exit and
+:sources, an alist of SOURCE → plist :ok :at :error.")
+
+(defun bebop--pulse-script ()
+  "The pulse script."
+  (expand-file-name "bin/bebop-pulse.py" user-emacs-directory))
+
+(defun bebop-pulse-run ()
+  "Start a pulse run in the background, unless one runs already.
+A request during a run asks for one more run after it."
+  (interactive)
+  (let ((proc (plist-get bebop--pulse :proc)))
+    (when (and (process-live-p proc)
+               (> (- (float-time) (plist-get bebop--pulse :started))
+                  bebop-pulse-timeout))
+      (process-put proc :timed-out t)
+      (delete-process proc))
+    (cond
+     ((process-live-p proc)
+      (setq bebop--pulse (plist-put bebop--pulse :rerun t)))
+     ((null bebop--live-sessions))
+     (t
+      (setq bebop--pulse
+            (plist-put
+             (plist-put
+              (plist-put bebop--pulse :rerun nil)
+              :started (float-time))
+             :proc (make-process
+                    :name "bebop-pulse"
+                    :buffer (generate-new-buffer " *bebop-pulse*")
+                    :command (list (or (executable-find "python3")
+                                       "/usr/bin/python3")
+                                   (bebop--pulse-script))
+                    :connection-type 'pipe
+                    :noquery t
+                    :sentinel #'bebop--pulse-sentinel)))))))
+
+(defun bebop--pulse-results (output)
+  "Parse the PULSE result lines in OUTPUT: an alist SOURCE → plist."
+  (let ((results nil)
+        (start 0))
+    (while (string-match "^PULSE \\(\\S-+\\) \\(ok\\|fail\\)\\(?: \\(.*\\)\\)?$"
+                         output start)
+      (setf (alist-get (match-string 1 output) results nil nil #'equal)
+            (list :ok (equal (match-string 2 output) "ok")
+                  :at (float-time)
+                  :error (match-string 3 output)))
+      (setq start (match-end 0)))
+    results))
+
+(defun bebop--pulse-sentinel (proc _event)
+  "Record how pulse run PROC ended, log its output, and run again if asked."
+  (unless (process-live-p proc)
+    (let* ((buf (process-buffer proc))
+           (output (if (buffer-live-p buf)
+                       (with-current-buffer buf (buffer-string))
+                     ""))
+           (exit (process-exit-status proc))
+           (results (bebop--pulse-results output))
+           (sources (plist-get bebop--pulse :sources)))
+      (dolist (r results)
+        (setf (alist-get (car r) sources nil nil #'equal) (cdr r)))
+      ;; A run that died without a word: blame GitLab, the only source
+      ;; that has always been there, with the last line it printed.
+      (when (and (null results) (not (zerop exit)))
+        (setf (alist-get "gitlab" sources nil nil #'equal)
+              (list :ok nil :at (float-time)
+                    :error (if (process-get proc :timed-out)
+                               (format "timed out after %d s"
+                                       bebop-pulse-timeout)
+                             (or (car (last (split-string output "
+" t)))
+                                 (format "exit %d" exit))))))
+      (setq bebop--pulse
+            (plist-put
+             (plist-put
+              (plist-put bebop--pulse :sources sources)
+              :exit exit)
+             :ended (float-time)))
+      (ignore-errors
+        (make-directory (file-name-directory bebop-pulse-log) t)
+        (let ((coding-system-for-write 'utf-8-unix))
+          (write-region (format "%s pulse exit %d\n%s"
+                                (format-time-string "%F %T") exit output)
+                        nil bebop-pulse-log t 'silent)))
+      (when (buffer-live-p buf)
+        (kill-buffer buf))
+      (when (plist-get bebop--pulse :rerun)
+        (run-at-time 0 nil #'bebop-pulse-run)))))
+
+(defun bebop--pulse-start ()
+  "Start the pulse loop unless it runs; run once soon if pulse is stale."
+  (unless (bebop--loop-running-p 'pulse)
+    (bebop--loop-start 'pulse bebop-pulse-interval #'bebop-pulse-run)
+    (when (> (- (float-time) (or (plist-get bebop--pulse :ended) 0))
+             bebop-pulse-interval)
+      ;; Give discovery a moment to find the live sessions.
+      (run-at-time 5 nil #'bebop-pulse-run))))
+
+(defun bebop--pulse-stop ()
+  "Stop the pulse loop. A run in progress finishes."
+  (bebop--loop-stop 'pulse))
+
+(when (bebop--loop-running-p 'poll)
+  (bebop--pulse-start))
 
 (defun bebop-debug-pane ()
   "Show captured pane content and inferred status for all pairs in *bebop-debug*."

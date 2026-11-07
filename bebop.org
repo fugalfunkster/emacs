@@ -3595,6 +3595,8 @@ folds the session to =idle=. The timestamp check keeps a marker read
 late from undoing a prompt sent after it.
 
 #+begin_src emacs-lisp
+(require 'parse-time)
+
 (defconst bebop--interrupt-marker "[Request interrupted by user"
   "Text that starts the transcript message Claude writes on an Esc interrupt.")
 
@@ -3779,17 +3781,20 @@ running).
 
 #+begin_src emacs-lisp
 (defun bebop--start-poll ()
-  "Start the event watches, the sweep and the interrupt check, or restart them."
+  "Start the event watches, the sweep, the interrupt check and pulse.
+The first three restart; a running pulse loop keeps its schedule."
   (bebop--events-watch-ensure)
   (bebop--loop-start 'poll bebop-sweep-interval #'bebop--poll-all)
   (bebop--loop-start 'interrupt bebop-interrupt-check-interval
-                     #'bebop--interrupt-check))
+                     #'bebop--interrupt-check)
+  (bebop--pulse-start))
 
 (defun bebop--stop-poll ()
-  "Stop the event watches, the sweep and the interrupt check."
+  "Stop the event watches, the sweep, the interrupt check and pulse."
   (bebop--events-watch-stop)
   (bebop--loop-stop 'poll)
-  (bebop--loop-stop 'interrupt))
+  (bebop--loop-stop 'interrupt)
+  (bebop--pulse-stop))
 #+end_src
 
 Until 2026-11-06 the poll was a plain repeating timer in
@@ -3810,6 +3815,149 @@ event watches and the interrupt check.
 (when (and (bebop--loop-running-p 'poll)
            (not (bebop--loop-running-p 'interrupt)))
   (bebop--start-poll))
+#+end_src
+
+*** Pulse loop
+
+Pulse (=bin/bebop-pulse.py=, see Pulse) fetches GitLab state. Emacs runs
+it as a background process on a loop and never waits for it: pulse
+calls back into Emacs through =emacsclient=, so a synchronous run would
+deadlock. Only one run goes at a time. A request during a run asks for
+one more run after it. A run that takes longer than
+=bebop-pulse-timeout= is killed, and the next request starts afresh.
+A host without live sessions runs no pulse: the sessions, their venues
+and the sidecar belong to the host that runs them.
+
+Each run records its start, its end, its exit code, and one result per
+source from the =PULSE <source> ok|fail <error>= lines. The output goes
+to =bebop-pulse-log=.
+
+#+begin_src emacs-lisp
+(defcustom bebop-pulse-interval 600
+  "Seconds between pulse runs."
+  :type 'integer
+  :group 'bebop)
+
+(defcustom bebop-pulse-timeout 300
+  "Seconds after which a pulse run counts as hung and is killed."
+  :type 'integer
+  :group 'bebop)
+
+(defcustom bebop-pulse-log (expand-file-name "~/.emacs.d-local/pulse.log")
+  "File that pulse output is appended to."
+  :type 'file
+  :group 'bebop)
+
+(defvar bebop--pulse nil
+  "Pulse run state: a plist :proc :rerun :started :ended :exit and
+:sources, an alist of SOURCE → plist :ok :at :error.")
+
+(defun bebop--pulse-script ()
+  "The pulse script."
+  (expand-file-name "bin/bebop-pulse.py" user-emacs-directory))
+
+(defun bebop-pulse-run ()
+  "Start a pulse run in the background, unless one runs already.
+A request during a run asks for one more run after it."
+  (interactive)
+  (let ((proc (plist-get bebop--pulse :proc)))
+    (when (and (process-live-p proc)
+               (> (- (float-time) (plist-get bebop--pulse :started))
+                  bebop-pulse-timeout))
+      (process-put proc :timed-out t)
+      (delete-process proc))
+    (cond
+     ((process-live-p proc)
+      (setq bebop--pulse (plist-put bebop--pulse :rerun t)))
+     ((null bebop--live-sessions))
+     (t
+      (setq bebop--pulse
+            (plist-put
+             (plist-put
+              (plist-put bebop--pulse :rerun nil)
+              :started (float-time))
+             :proc (make-process
+                    :name "bebop-pulse"
+                    :buffer (generate-new-buffer " *bebop-pulse*")
+                    :command (list (or (executable-find "python3")
+                                       "/usr/bin/python3")
+                                   (bebop--pulse-script))
+                    :connection-type 'pipe
+                    :noquery t
+                    :sentinel #'bebop--pulse-sentinel)))))))
+
+(defun bebop--pulse-results (output)
+  "Parse the PULSE result lines in OUTPUT: an alist SOURCE → plist."
+  (let ((results nil)
+        (start 0))
+    (while (string-match "^PULSE \\(\\S-+\\) \\(ok\\|fail\\)\\(?: \\(.*\\)\\)?$"
+                         output start)
+      (setf (alist-get (match-string 1 output) results nil nil #'equal)
+            (list :ok (equal (match-string 2 output) "ok")
+                  :at (float-time)
+                  :error (match-string 3 output)))
+      (setq start (match-end 0)))
+    results))
+
+(defun bebop--pulse-sentinel (proc _event)
+  "Record how pulse run PROC ended, log its output, and run again if asked."
+  (unless (process-live-p proc)
+    (let* ((buf (process-buffer proc))
+           (output (if (buffer-live-p buf)
+                       (with-current-buffer buf (buffer-string))
+                     ""))
+           (exit (process-exit-status proc))
+           (results (bebop--pulse-results output))
+           (sources (plist-get bebop--pulse :sources)))
+      (dolist (r results)
+        (setf (alist-get (car r) sources nil nil #'equal) (cdr r)))
+      ;; A run that died without a word: blame GitLab, the only source
+      ;; that has always been there, with the last line it printed.
+      (when (and (null results) (not (zerop exit)))
+        (setf (alist-get "gitlab" sources nil nil #'equal)
+              (list :ok nil :at (float-time)
+                    :error (if (process-get proc :timed-out)
+                               (format "timed out after %d s"
+                                       bebop-pulse-timeout)
+                             (or (car (last (split-string output "
+" t)))
+                                 (format "exit %d" exit))))))
+      (setq bebop--pulse
+            (plist-put
+             (plist-put
+              (plist-put bebop--pulse :sources sources)
+              :exit exit)
+             :ended (float-time)))
+      (ignore-errors
+        (make-directory (file-name-directory bebop-pulse-log) t)
+        (let ((coding-system-for-write 'utf-8-unix))
+          (write-region (format "%s pulse exit %d\n%s"
+                                (format-time-string "%F %T") exit output)
+                        nil bebop-pulse-log t 'silent)))
+      (when (buffer-live-p buf)
+        (kill-buffer buf))
+      (when (plist-get bebop--pulse :rerun)
+        (run-at-time 0 nil #'bebop-pulse-run)))))
+
+(defun bebop--pulse-start ()
+  "Start the pulse loop unless it runs; run once soon if pulse is stale."
+  (unless (bebop--loop-running-p 'pulse)
+    (bebop--loop-start 'pulse bebop-pulse-interval #'bebop-pulse-run)
+    (when (> (- (float-time) (or (plist-get bebop--pulse :ended) 0))
+             bebop-pulse-interval)
+      ;; Give discovery a moment to find the live sessions.
+      (run-at-time 5 nil #'bebop-pulse-run))))
+
+(defun bebop--pulse-stop ()
+  "Stop the pulse loop. A run in progress finishes."
+  (bebop--loop-stop 'pulse))
+#+end_src
+
+A reload starts the pulse loop on a host whose poll already runs.
+
+#+begin_src emacs-lisp
+(when (bebop--loop-running-p 'poll)
+  (bebop--pulse-start))
 #+end_src
 
 *** Debug
@@ -11875,20 +12023,17 @@ Pulse drops =GITLAB_TOKEN= from its environment and uses glab's own
 login: a stale token in the environment wins over the login and turns
 every call into a 401.
 
-Registered in cron every 10 minutes, from a machine-local copy: macOS
-does not let cron read files in Dropbox ("Operation not permitted"),
-so every tangle copies the script to =~/.emacs.d-local/bin/=
-(=install-pulse-locally= in emacs.org). The log is machine-local too,
-appended:
+Emacs runs pulse as a background process every =bebop-pulse-interval=
+seconds (see Pulse loop in the dashboard module). Pulse calls back into
+Emacs through =emacsclient=, so Emacs never waits on it. Each run ends
+with one line per source, =PULSE gitlab ok= or =PULSE gitlab fail
+<error>=, which the loop reads for pulse health. The rest of the output
+is appended to =~/.emacs.d-local/pulse.log=.
 
-#+begin_example
-*/10 * * * * /usr/bin/python3 $HOME/.emacs.d-local/bin/bebop-pulse.py >> $HOME/.emacs.d-local/pulse.log 2>&1
-#+end_example
-
-Until 2026-11-05 the copy was made by hand and went stale.
-
-(Explicit =python3= rather than the shebang — one less way for cron's
-spartan environment to disappoint.)
+Until 2026-11-06 cron ran pulse every 10 minutes, from a machine-local
+copy (=~/.emacs.d-local/bin/=), because macOS does not let cron read
+files in Dropbox. Emacs reads Dropbox, so the copy and the cron line
+are gone.
 
 #+begin_src python :tangle bin/bebop-pulse.py :shebang "#!/usr/bin/env python3" :mkdirp yes
 """Pulse — bebop's slim external-status fetcher.
@@ -11907,7 +12052,7 @@ import subprocess
 import sys
 from urllib.parse import quote
 
-# cron's PATH has neither glab nor emacsclient
+# Emacs started from Finder (and cron, before) may lack these on PATH
 os.environ["PATH"] = ("/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:"
                       + os.environ.get("PATH", ""))
 # glab prefers GITLAB_TOKEN over its own login; a stale one in the
@@ -12081,12 +12226,26 @@ def derived(me, sessions, branches, done):
     return len(authored), len(reviewing)
 
 
+def report(source, errors):
+    """Print SOURCE's result line, which bebop reads for pulse health:
+    PULSE <source> ok, or PULSE <source> fail <the last error>."""
+    if errors:
+        print(f"PULSE {source} fail {errors[-1]}")
+    else:
+        print(f"PULSE {source} ok")
+
+
 def main():
     try:
         sessions = json.loads(el_string("(bebop-list-sessions)"))
     except Exception:
         return  # Emacs isn't up; pulse skips a beat, silently
-    me = api("user")["username"]
+    errors = []
+    try:
+        me = api("user")["username"]
+    except Exception as e:
+        report("gitlab", [f"user: {e}"])
+        sys.exit(1)
     beats = 0
     done = {}
     branches = {}
@@ -12099,7 +12258,7 @@ def main():
                          "rev-parse", "--abbrev-ref", "HEAD"])
         except Exception as e:
             print(f"pulse: {name}: {e}", file=sys.stderr)
-            continue
+            continue  # a venue problem, not a GitLab one
         branches[branch] = name
         if not s.get("live"):
             continue
@@ -12120,17 +12279,20 @@ def main():
             beats += 1
         except Exception as e:
             print(f"pulse: {name}: {e}", file=sys.stderr)
+            errors.append(f"{name}: {e}")
     try:
         counts = derived(me, sessions, branches, done)
         print(f"pulse: derived sets: {counts[0]} authored,"
               f" {counts[1]} reviewing")
     except Exception as e:
         print(f"pulse: derived sets: {e}", file=sys.stderr)
+        errors.append(f"derived sets: {e}")
     try:
         el("(bebop--render)")
     except Exception:
         pass
     print(f"pulse: {beats} session(s) refreshed")
+    report("gitlab", errors)
 
 
 if __name__ == "__main__":
