@@ -74,6 +74,9 @@ def record(p):
                    if isinstance(t, dict) and t.get("type") == "subagent"]
     if event == "StopFailure":
         put("err", clip(p.get("error") or p.get("error_type") or p.get("message")))
+    if event in ("SessionStart", "UserPromptSubmit"):
+        # Emacs watches the transcript for Esc, which no hook reports.
+        put("tp", p.get("transcript_path"))
     return r
 
 

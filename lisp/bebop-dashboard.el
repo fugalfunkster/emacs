@@ -21,8 +21,8 @@ is gone, a session without events, and a lost file watch."
 
 (defcustom bebop-interrupt-check-interval 5
   "Seconds between pane checks of working sessions whose events went quiet.
-No hook fires on an Esc interrupt, so a session stays `working' until
-its pane shows the interrupt."
+No hook fires on an Esc interrupt. The transcript watch catches it; this
+check covers only sessions whose transcript is not watched."
   :type 'integer
   :group 'bebop)
 
@@ -442,6 +442,7 @@ A new child goes at the end, so children keep their start order."
          (setq state nil kind nil msg nil children nil pending nil))))
     (list :state state :kind kind :msg msg :children children :pending pending
           :at (/ (or (plist-get ev :t) 0) 1000.0)
+          :transcript (or (plist-get ev :tp) (plist-get st :transcript))
           :offset (plist-get st :offset))))
 
 (defun bebop--hook-state (name)
@@ -1106,6 +1107,7 @@ Return non-nil when the row must be drawn again."
                       (setq changed t)))))
             (let* ((detail (bebop--status-detail name pane-id))
                    (old-status (plist-get info :status)))
+              (bebop--transcript-track name (gethash name bebop--hook-states))
               (when (bebop--apply-detail name info detail)
                 (setq changed t))
               (if (eq (plist-get detail :status) 'gone)
@@ -1131,6 +1133,7 @@ Return non-nil when the row must be drawn again."
       ;; Handle orphans after iteration completes to avoid mutating the list mid-loop
       (dolist (name orphans)
         (bebop--handle-orphan name))
+      (bebop--transcripts-prune)
       ;; Render on change, and on an idle cadence so the age column
       ;; stays honest — a HUD showing stale timestamps is worse than
       ;; no timestamps.
@@ -1179,7 +1182,8 @@ Cheap when all the watches run: the sweep calls it every time."
     (file-notify-rm-watch bebop--events-dir-watch)
     (setq bebop--events-dir-watch nil))
   (maphash (lambda (_ desc) (file-notify-rm-watch desc)) bebop--events-watches)
-  (clrhash bebop--events-watches))
+  (clrhash bebop--events-watches)
+  (bebop--transcripts-stop))
 
 (defun bebop--events-notify (event)
   "Handle file-notify EVENT from the events folder or an event file."
@@ -1212,6 +1216,7 @@ Cheap when all the watches run: the sweep calls it every time."
       (when-let ((id (bebop--tmux-pane-id-for (bebop--tmux-window-name name))))
         (plist-put info :pane-id id)))
     (let ((st (bebop--hook-state name)))
+      (bebop--transcript-track name st)
       (when (and st
                  (if (plist-get st :state)
                      (bebop--apply-detail name info (bebop--hook-detail st))
@@ -1230,6 +1235,124 @@ Cheap when all the watches run: the sweep calls it every time."
                                (setq bebop--push-render-timer nil)
                                (bebop--render)))))
 
+(defconst bebop--interrupt-marker "[Request interrupted by user"
+  "Text that starts the transcript message Claude writes on an Esc interrupt.")
+
+(defvar bebop--transcripts (make-hash-table :test #'equal)
+  "Session name → plist :file :offset :watch for its watched transcript.")
+
+(defun bebop--transcript-watched-p (name)
+  "Non-nil when session NAME's transcript has a live watch."
+  (when-let ((watch (plist-get (gethash name bebop--transcripts) :watch)))
+    (file-notify-valid-p watch)))
+
+(defun bebop--transcript-unwatch (name)
+  "Stop watching session NAME's transcript."
+  (when-let ((watch (plist-get (gethash name bebop--transcripts) :watch)))
+    (file-notify-rm-watch watch))
+  (remhash name bebop--transcripts))
+
+(defun bebop--transcript-track (name st)
+  "Watch the transcript that hook state ST names for session NAME.
+A watch on another file goes, and a watch that stopped comes back. A new
+watch starts at the end of the file: only new interrupts matter."
+  (let ((file (plist-get st :transcript))
+        (tr (gethash name bebop--transcripts)))
+    (cond
+     ((or (null file) (not (fboundp 'file-notify-add-watch))
+          (not (file-exists-p file)))
+      (when tr (bebop--transcript-unwatch name)))
+     ((and tr (equal (plist-get tr :file) file)
+           (bebop--transcript-watched-p name)))
+     (t
+      (when tr (bebop--transcript-unwatch name))
+      (condition-case err
+          (puthash name
+                   (list :file file
+                         :offset (file-attribute-size (file-attributes file))
+                         :watch (file-notify-add-watch
+                                 file '(change) #'bebop--transcript-notify))
+                   bebop--transcripts)
+        (error (message "Bebop: cannot watch %s: %s"
+                        file (error-message-string err))))))))
+
+(defun bebop--transcripts-stop ()
+  "Stop watching every transcript."
+  (dolist (name (hash-table-keys bebop--transcripts))
+    (bebop--transcript-unwatch name)))
+
+(defun bebop--transcripts-prune ()
+  "Stop watching the transcripts of sessions that are no longer live."
+  (dolist (name (hash-table-keys bebop--transcripts))
+    (unless (assoc name bebop--live-sessions)
+      (bebop--transcript-unwatch name))))
+
+(defun bebop--transcript-interrupt-time (file from to)
+  "Time of the last interrupt marker in FILE's bytes FROM to TO, or nil.
+Only whole lines count; the caller passes TO at a line end."
+  (with-temp-buffer
+    (insert-file-contents-literally file nil from to)
+    (let ((last nil))
+      (goto-char (point-min))
+      (while (search-forward bebop--interrupt-marker nil t)
+        (when-let* ((line (decode-coding-string
+                           (buffer-substring-no-properties
+                            (line-beginning-position) (line-end-position))
+                           'utf-8))
+                    (rec (ignore-errors
+                           (json-parse-string line :object-type 'plist
+                                              :array-type 'list
+                                              :null-object nil
+                                              :false-object nil)))
+                    ((equal (plist-get rec :type) "user"))
+                    (content (plist-get (plist-get rec :message) :content))
+                    ((cl-some (lambda (c)
+                                (and (equal (plist-get c :type) "text")
+                                     (string-prefix-p bebop--interrupt-marker
+                                                      (or (plist-get c :text) ""))))
+                              (if (listp content) content nil)))
+                    (stamp (plist-get rec :timestamp)))
+          (setq last (float-time (parse-iso8601-time-string stamp t))))
+        (forward-line 1))
+      last)))
+
+(defun bebop--transcript-notify (event)
+  "Fold an Esc interrupt from the transcript that file-notify EVENT names."
+  (condition-case-unless-debug err
+      (let ((file (nth 2 event))
+            (name nil))
+        (maphash (lambda (n tr) (when (equal (plist-get tr :file) file)
+                                  (setq name n)))
+                 bebop--transcripts)
+        (when (and name (eq (nth 1 event) 'changed))
+          (let* ((tr (gethash name bebop--transcripts))
+                 (from (plist-get tr :offset))
+                 (size (file-attribute-size (file-attributes file))))
+            (cond
+             ((null size))
+             ((< size from) (plist-put tr :offset size))
+             ((> size from)
+              ;; Stop at the last newline: a line still being written waits.
+              (let ((to (with-temp-buffer
+                          (insert-file-contents-literally file nil from size)
+                          (goto-char (point-max))
+                          (and (search-backward "\n" nil t)
+                               (+ from (point))))))
+                (when to
+                  (plist-put tr :offset to)
+                  (when-let* ((at (bebop--transcript-interrupt-time file from to))
+                              (st (gethash name bebop--hook-states))
+                              ((member (plist-get st :state) '("working" "blocked")))
+                              ((> at (or (plist-get st :at) 0)))
+                              (info (cdr (assoc name bebop--live-sessions))))
+                    (setq st (plist-put st :state "idle"))
+                    (setq st (plist-put st :kind nil))
+                    (setq st (plist-put st :msg nil))
+                    (puthash name st bebop--hook-states)
+                    (when (bebop--apply-detail name info (bebop--hook-detail st))
+                      (bebop--push-render))))))))))
+    (error (message "Bebop: transcript watch: %s" (error-message-string err)))))
+
 (defun bebop--interrupt-check ()
   "Fold an Esc interrupt into each quiet working session that shows one."
   (let ((changed nil)
@@ -1240,6 +1363,7 @@ Cheap when all the watches run: the sweep calls it every time."
              (pane-id (plist-get info :pane-id))
              (st (gethash name bebop--hook-states)))
         (when (and pane-id
+                   (not (bebop--transcript-watched-p name))
                    (equal (plist-get st :state) "working")
                    (< (or (plist-get st :at) 0) quiet-since)
                    (bebop--pane-interrupted-p pane-id))
