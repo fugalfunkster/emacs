@@ -266,6 +266,7 @@ value → `hide' or `show'. See the section prose for the reply shape."
           (print-level nil))
       (prin1-to-string
        (list :body body
+             :pulse (bebop--pulse-health)
              :rows (mapcar
                     (lambda (r)
                       (let ((live (plist-get r :live)))

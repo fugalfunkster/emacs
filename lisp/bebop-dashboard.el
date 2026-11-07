@@ -918,6 +918,7 @@ reachable only by C-n."
              ("p"      . bebop--prev-session)
              ("g"      . bebop-refresh)
              ("D"      . bebop-debug-pane)
+             ("G"      . bebop-pulse-run)
              ("h"      . bebop-dashboard-next-tab)))
   (define-key bebop-dashboard-mode-map (kbd (car b)) (cdr b)))
 
@@ -976,34 +977,41 @@ host tabs: this machine's *bebop* and the host's *bebop-remote*.")
 A tab label is clickable; =h= cycles the tabs from the keyboard."
   (let ((tabs (and bebop-dashboard-tabs-function
                    (funcall bebop-dashboard-tabs-function))))
-    (if (null (cdr tabs))
-        (bebop--header-propertize (concat " " bebop-header-text))
-      (concat
-       (bebop--header-propertize (concat " " bebop-header-text ":"))
-       (mapconcat
-        (lambda (tab)
-          (let ((buf (cdr tab))
-                (map (make-sparse-keymap)))
-            (define-key map [header-line mouse-1]
-                        (lambda (ev)
-                          (interactive "e")
-                          (with-selected-window (posn-window (event-start ev))
-                            (bebop-dashboard-switch-tab buf))))
-            (propertize
-             (bebop--header-propertize
-              (concat " " (car tab))
-              (unless (eq buf (current-buffer))
-                (face-attribute 'shadow :foreground nil t)))
-             ;; Hover as the eshell tabs do: the text lightens, no
-             ;; background or box (`tab-line-highlight' in emacs.org).
-             'mouse-face (list :foreground
-                               (face-attribute (if (facep 'tab-line-highlight)
-                                                   'tab-line-highlight
-                                                 'default)
-                                               :foreground nil t))
-             'help-echo (format "Show %s" (car tab))
-             'local-map map)))
-        tabs "")))))
+    (concat
+     (bebop--dashboard-title tabs)
+     (when (fboundp 'bebop--pulse-health)
+       (bebop--pulse-segment (bebop--pulse-health) #'bebop-pulse-run)))))
+
+(defun bebop--dashboard-title (tabs)
+  "The header title: \"Bebop\", then TABS inline when there are two or more."
+  (if (null (cdr tabs))
+      (bebop--header-propertize (concat " " bebop-header-text))
+    (concat
+     (bebop--header-propertize (concat " " bebop-header-text ":"))
+     (mapconcat
+      (lambda (tab)
+        (let ((buf (cdr tab))
+              (map (make-sparse-keymap)))
+          (define-key map [header-line mouse-1]
+                      (lambda (ev)
+                        (interactive "e")
+                        (with-selected-window (posn-window (event-start ev))
+                          (bebop-dashboard-switch-tab buf))))
+          (propertize
+           (bebop--header-propertize
+            (concat " " (car tab))
+            (unless (eq buf (current-buffer))
+              (face-attribute 'shadow :foreground nil t)))
+           ;; Hover as the eshell tabs do: the text lightens, no
+           ;; background or box (`tab-line-highlight' in emacs.org).
+           'mouse-face (list :foreground
+                             (face-attribute (if (facep 'tab-line-highlight)
+                                                 'tab-line-highlight
+                                               'default)
+                                             :foreground nil t))
+           'help-echo (format "Show %s" (car tab))
+           'local-map map)))
+      tabs ""))))
 
 (defun bebop--dashboard-look ()
   "Give the current buffer the dashboard's look.
@@ -1436,7 +1444,8 @@ The first three restart; a running pulse loop keeps its schedule."
 
 (defvar bebop--pulse nil
   "Pulse run state: a plist :proc :rerun :started :ended :exit and
-:sources, an alist of SOURCE → plist :ok :at :error.")
+:sources, an alist of SOURCE → plist :ok :at :ok-at :error (:at is the
+last result, :ok-at the last success).")
 
 (defun bebop--pulse-script ()
   "The pulse script."
@@ -1470,7 +1479,8 @@ A request during a run asks for one more run after it."
                                    (bebop--pulse-script))
                     :connection-type 'pipe
                     :noquery t
-                    :sentinel #'bebop--pulse-sentinel)))))))
+                    :sentinel #'bebop--pulse-sentinel)))
+      (force-mode-line-update t)))))
 
 (defun bebop--pulse-results (output)
   "Parse the PULSE result lines in OUTPUT: an alist SOURCE → plist."
@@ -1495,13 +1505,21 @@ A request during a run asks for one more run after it."
            (exit (process-exit-status proc))
            (results (bebop--pulse-results output))
            (sources (plist-get bebop--pulse :sources)))
+      ;; A failure keeps the time of the source's last success.
       (dolist (r results)
-        (setf (alist-get (car r) sources nil nil #'equal) (cdr r)))
+        (let ((prev (alist-get (car r) sources nil nil #'equal)))
+          (setf (alist-get (car r) sources nil nil #'equal)
+                (plist-put (cdr r) :ok-at
+                           (if (plist-get (cdr r) :ok)
+                               (plist-get (cdr r) :at)
+                             (plist-get prev :ok-at))))))
       ;; A run that died without a word: blame GitLab, the only source
       ;; that has always been there, with the last line it printed.
       (when (and (null results) (not (zerop exit)))
         (setf (alist-get "gitlab" sources nil nil #'equal)
               (list :ok nil :at (float-time)
+                    :ok-at (plist-get (alist-get "gitlab" sources nil nil #'equal)
+                                      :ok-at)
                     :error (if (process-get proc :timed-out)
                                (format "timed out after %d s"
                                        bebop-pulse-timeout)
@@ -1522,6 +1540,7 @@ A request during a run asks for one more run after it."
                         nil bebop-pulse-log t 'silent)))
       (when (buffer-live-p buf)
         (kill-buffer buf))
+      (force-mode-line-update t)
       (when (plist-get bebop--pulse :rerun)
         (run-at-time 0 nil #'bebop-pulse-run)))))
 
@@ -1537,6 +1556,67 @@ A request during a run asks for one more run after it."
 (defun bebop--pulse-stop ()
   "Stop the pulse loop. A run in progress finishes."
   (bebop--loop-stop 'pulse))
+
+(defconst bebop--pulse-labels '(("gitlab" . "GitLab") ("jira" . "Jira"))
+  "Display names of pulse sources, in display order.")
+
+(defun bebop--pulse-health ()
+  "This host's pulse health: a plist :running :interval :sources.
+Plain data, so that a remote client can read it from the snapshot."
+  (list :running (and (process-live-p (plist-get bebop--pulse :proc)) t)
+        :interval bebop-pulse-interval
+        :sources (mapcar (lambda (s)
+                           (cons (car s)
+                                 (list :ok (plist-get (cdr s) :ok)
+                                       :ok-at (or (plist-get (cdr s) :ok-at)
+                                                  (and (plist-get (cdr s) :ok)
+                                                       (plist-get (cdr s) :at)))
+                                       :error (plist-get (cdr s) :error))))
+                         (plist-get bebop--pulse :sources))))
+
+(defun bebop--age-text (seconds)
+  "SECONDS as a short age: <1m, 4m, 3h, 2d."
+  (cond ((< seconds 60) "<1m")
+        ((< seconds 3600) (format "%dm" (/ seconds 60)))
+        ((< seconds 86400) (format "%dh" (/ seconds 3600)))
+        (t (format "%dd" (/ seconds 86400)))))
+
+(defun bebop--pulse-segment (health run)
+  "The header text for pulse HEALTH; a click calls RUN.
+Empty when HEALTH has no sources and no run going."
+  (let ((sources (plist-get health :sources))
+        (stale (* 2 (or (plist-get health :interval) bebop-pulse-interval)))
+        (map (make-sparse-keymap)))
+    (define-key map [header-line mouse-1]
+                (lambda (_ev) (interactive "e") (funcall run)))
+    (if (and (null sources) (not (plist-get health :running)))
+        ""
+      (concat
+       "  "
+       (when (plist-get health :running)
+         (propertize "↻ " 'face 'shadow))
+       (mapconcat
+        (lambda (label)
+          (when-let ((src (alist-get (car label) sources nil nil #'equal)))
+            (let* ((ok-at (plist-get src :ok-at))
+                   (age (and ok-at (round (- (float-time) ok-at))))
+                   (bad (or (not (plist-get src :ok))
+                            (null age) (> age stale))))
+              (propertize
+               (format "%s %s" (cdr label) (if age (bebop--age-text age) "—"))
+               'face (if bad '(:inherit error :weight normal) 'shadow)
+               'mouse-face 'highlight
+               'local-map map
+               'help-echo
+               (concat
+                (format "Pulse %s: " (cdr label))
+                (cond ((plist-get src :error)
+                       (format "last run failed: %s" (plist-get src :error)))
+                      ((null age) "no success yet")
+                      ((> age stale) "no success in two intervals")
+                      (t "fresh"))
+                "\nClick, or G, to run pulse now")))))
+        bebop--pulse-labels " ")))))
 
 (when (bebop--loop-running-p 'poll)
   (bebop--pulse-start))

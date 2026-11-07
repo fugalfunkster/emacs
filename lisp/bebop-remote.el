@@ -142,12 +142,22 @@ The remote counterpart of `bebop--active-session'.")
   (format "(bebop-dashboard-snapshot %S '%S)"
           bebop-remote--active bebop-remote--folds))
 
+(defvar bebop-remote--pulse nil
+  "The host's pulse health from the last snapshot (`bebop--pulse-health').")
+
 (defun bebop-remote--take-snapshot (printed)
   "Install the host's reply, PRINTED as emacsclient returned it."
   (let ((p (car (read-from-string (car (read-from-string printed))))))
     (setq bebop-remote--body (plist-get p :body)
           bebop-remote--sessions (plist-get p :rows)
+          bebop-remote--pulse (plist-get p :pulse)
           bebop-remote--error nil)))
+
+(defun bebop-remote-pulse-run ()
+  "Start a pulse run on the host, then refresh to show it going."
+  (interactive)
+  (bebop-remote--eval "(progn (bebop-pulse-run) t)")
+  (bebop-remote-refresh))
 
 (defun bebop-remote--fetch-failed (msg)
   (setq bebop-remote--error msg)
@@ -335,6 +345,7 @@ headings and their MR rows (see `bebop--nav-stop-p')."
            ("<tab>" . bebop-remote-toggle)
            ("a" . bebop-remote-attach)
            ("P" . bebop-remote-forward-port)
+           ("G" . bebop-remote-pulse-run)
            ("." . bebop-remote-mark-all-seen)
            ("f" . bebop-remote-ack-handoff)
            ("w" . bebop-remote-workbench)
@@ -365,6 +376,7 @@ headings and their MR rows (see `bebop--nav-stop-p')."
             ;; The same header as *bebop*, tabs inline: the tab names
             ;; the machine, and switching tabs must not shift the tree.
             (bebop--dashboard-header)
+            (bebop--pulse-segment bebop-remote--pulse #'bebop-remote-pulse-run)
             (unless (process-live-p bebop-remote--stream)
               (propertize "  stream down" 'face 'shadow))
             (when bebop-remote--forwards
