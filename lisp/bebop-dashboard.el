@@ -11,8 +11,18 @@
 (require 'bebop-core)
 (require 'magit-section)
 
-(defcustom bebop-poll-interval 4
-  "Seconds between tmux pane status polls."
+(defcustom bebop-sweep-interval 30
+  "Seconds between sweeps of every session's tmux pane.
+Hook events reach the dashboard as they are written (see Pushed
+events), so the sweep only covers what hooks cannot say: a window that
+is gone, a session without events, and a lost file watch."
+  :type 'integer
+  :group 'bebop)
+
+(defcustom bebop-interrupt-check-interval 5
+  "Seconds between pane checks of working sessions whose events went quiet.
+No hook fires on an Esc interrupt, so a session stays `working' until
+its pane shows the interrupt."
   :type 'integer
   :group 'bebop)
 
@@ -514,13 +524,17 @@ for a session without hook events."
                  (bebop--pane-interrupted-p pane-id))
         (setq st (plist-put st :state "idle"))
         (puthash name st bebop--hook-states))
-      (let ((eff (bebop--hook-effective st)))
-        (list :status (pcase (plist-get eff :state)
-                        ("working" 'active)
-                        ((or "blocked" "error") 'blocked)
-                        (_ 'waiting))
-              :reason 'hook
-              :hook eff)))))
+      (bebop--hook-detail st))))
+
+(defun bebop--hook-detail (st)
+  "Return the status detail that hook state ST alone gives."
+  (let ((eff (bebop--hook-effective st)))
+    (list :status (pcase (plist-get eff :state)
+                    ("working" 'active)
+                    ((or "blocked" "error") 'blocked)
+                    (_ 'waiting))
+          :reason 'hook
+          :hook eff)))
 
 (defun bebop--spawn-session (name)
   "Create a new agent pair named NAME.
@@ -1028,8 +1042,43 @@ fold state preserved across poll re-renders via the visibility cache.
   (bebop-alert)
   (message "Bebop: %s is waiting for your input" name))
 
+(defun bebop--apply-detail (name info detail)
+  "Record DETAIL as the status of session NAME, whose registry plist is INFO.
+Return non-nil when the row must be drawn again."
+  (let ((changed nil)
+        (new-status (plist-get detail :status))
+        (old-status (plist-get info :status)))
+    ;; Sub-agents come and go inside one status: redraw for them too.
+    (unless (equal (bebop--subagent-signature detail)
+                   (bebop--subagent-signature
+                    (alist-get name bebop--last-status-details
+                               nil nil #'equal)))
+      (setq changed t))
+    (setf (alist-get name bebop--last-status-details nil nil #'equal)
+          detail)
+    (unless (eq new-status 'gone)
+      (unless (eq new-status old-status)
+        (plist-put info :status new-status)
+        (setq changed t)
+        (when (memq new-status '(waiting blocked))
+          (bebop--notify-waiting name))
+        ;; Activity means the agent crossed between working and
+        ;; waiting. A nil old-status is discovery (first poll
+        ;; after restart), and degraded/unknown edges are infra
+        ;; noise — neither says the agent did anything.
+        (when (and (memq old-status '(active waiting blocked))
+                   (memq new-status '(active waiting blocked)))
+          (run-hook-with-args 'bebop-session-activity-functions
+                              name 'transition)))
+      (when (and (eq new-status 'unknown)
+                 (not (eq old-status 'unknown)))
+        (message "Bebop: %s status uncertain (%s)"
+                 name (plist-get detail :reason))))
+    changed))
+
 (defun bebop--poll-all ()
-  "Poll all known pairs and update their status. Re-render if anything changed."
+  "Sweep all known pairs and update their status. Re-render if anything changed."
+  (bebop--events-watch-ensure)
   (when bebop--live-sessions
     (let ((changed nil)
           (orphans nil))
@@ -1056,18 +1105,10 @@ fold state preserved across poll re-renders via the visibility cache.
                       (push name orphans)
                       (setq changed t)))))
             (let* ((detail (bebop--status-detail name pane-id))
-                   (new-status (plist-get detail :status))
-                   (reason (plist-get detail :reason))
                    (old-status (plist-get info :status)))
-              ;; Sub-agents come and go inside one status: redraw for them too.
-              (unless (equal (bebop--subagent-signature detail)
-                             (bebop--subagent-signature
-                              (alist-get name bebop--last-status-details
-                                         nil nil #'equal)))
+              (when (bebop--apply-detail name info detail)
                 (setq changed t))
-              (setf (alist-get name bebop--last-status-details nil nil #'equal)
-                    detail)
-              (if (eq new-status 'gone)
+              (if (eq (plist-get detail :status) 'gone)
                   (let ((new-id (bebop--tmux-pane-id-for (bebop--tmux-window-name name)))
                         (failures (1+ (or (plist-get info :capture-failures) 0))))
                     ;; capture-pane can fail transiently; only orphan after threshold.
@@ -1086,23 +1127,7 @@ fold state preserved across poll re-renders via the visibility cache.
                         (push name orphans)
                         (setq changed t))))
                 (plist-put info :pane-misses 0)
-                (plist-put info :capture-failures 0)
-                (unless (eq new-status old-status)
-                  (plist-put info :status new-status)
-                  (setq changed t)
-                  (when (memq new-status '(waiting blocked))
-                    (bebop--notify-waiting name))
-                  ;; Activity means the agent crossed between working and
-                  ;; waiting. A nil old-status is discovery (first poll
-                  ;; after restart), and degraded/unknown edges are infra
-                  ;; noise — neither says the agent did anything.
-                  (when (and (memq old-status '(active waiting blocked))
-                             (memq new-status '(active waiting blocked)))
-                    (run-hook-with-args 'bebop-session-activity-functions
-                                        name 'transition)))
-                (when (and (eq new-status 'unknown)
-                           (not (eq old-status 'unknown)))
-                  (message "Bebop: %s status uncertain (%s)" name reason)))))))
+                (plist-put info :capture-failures 0))))))
       ;; Handle orphans after iteration completes to avoid mutating the list mid-loop
       (dolist (name orphans)
         (bebop--handle-orphan name))
@@ -1114,6 +1139,116 @@ fold state preserved across poll re-renders via the visibility cache.
                     bebop-idle-render-interval))
         (setq bebop--last-idle-render (float-time))
         (bebop--render)))))
+
+(defvar bebop--events-dir-watch nil
+  "The file-notify descriptor watching `bebop-events-dir'.")
+
+(defvar bebop--events-watches (make-hash-table :test #'equal)
+  "Event file → its file-notify descriptor.")
+
+(defvar bebop--push-render-timer nil
+  "Pending render after pushed events: one draw for a burst.")
+
+(defun bebop--events-watch-file (file)
+  "Watch event FILE unless a live watch already covers it."
+  (let ((desc (gethash file bebop--events-watches)))
+    (unless (and desc (file-notify-valid-p desc))
+      (condition-case err
+          (puthash file (file-notify-add-watch file '(change)
+                                               #'bebop--events-notify)
+                   bebop--events-watches)
+        (error (message "Bebop: cannot watch %s: %s"
+                        file (error-message-string err)))))))
+
+(defun bebop--events-watch-ensure ()
+  "Watch the events folder and every event file in it.
+Cheap when all the watches run: the sweep calls it every time."
+  (when (fboundp 'file-notify-add-watch)
+    (make-directory bebop-events-dir t)
+    (unless (and bebop--events-dir-watch
+                 (file-notify-valid-p bebop--events-dir-watch))
+      (setq bebop--events-dir-watch
+            (file-notify-add-watch bebop-events-dir '(change)
+                                   #'bebop--events-notify)))
+    (dolist (file (directory-files bebop-events-dir t "\\.jsonl\\'"))
+      (bebop--events-watch-file file))))
+
+(defun bebop--events-watch-stop ()
+  "Remove every event watch."
+  (when bebop--events-dir-watch
+    (file-notify-rm-watch bebop--events-dir-watch)
+    (setq bebop--events-dir-watch nil))
+  (maphash (lambda (_ desc) (file-notify-rm-watch desc)) bebop--events-watches)
+  (clrhash bebop--events-watches))
+
+(defun bebop--events-notify (event)
+  "Handle file-notify EVENT from the events folder or an event file."
+  (condition-case-unless-debug err
+      (let ((action (nth 1 event))
+            (file (nth 2 event)))
+        (when (and (stringp file) (string-suffix-p ".jsonl" file))
+          (pcase action
+            ('created (bebop--events-watch-file file)
+                      (bebop--hook-push file))
+            ('changed (bebop--hook-push file))
+            ((or 'deleted 'renamed)
+             (when-let ((desc (gethash file bebop--events-watches)))
+               (file-notify-rm-watch desc)
+               (remhash file bebop--events-watches))))))
+    (error (message "Bebop: event watch: %s" (error-message-string err)))))
+
+(defun bebop--session-for-events-file (file)
+  "Return the live session (NAME . INFO) whose event file is FILE."
+  (seq-find (lambda (pair)
+              (string= (bebop--events-file (car pair)) file))
+            bebop--live-sessions))
+
+(defun bebop--hook-push (file)
+  "Fold the new events in FILE into its session's status."
+  (when-let* ((pair (bebop--session-for-events-file file))
+              (name (car pair))
+              (info (cdr pair)))
+    (unless (plist-get info :pane-id)
+      (when-let ((id (bebop--tmux-pane-id-for (bebop--tmux-window-name name))))
+        (plist-put info :pane-id id)))
+    (let ((st (bebop--hook-state name)))
+      (when (and st
+                 (if (plist-get st :state)
+                     (bebop--apply-detail name info (bebop--hook-detail st))
+                   (and (plist-get info :pane-id)
+                        (bebop--apply-detail
+                         name info
+                         (bebop--status-detail name (plist-get info :pane-id))))))
+        (bebop--push-render)))))
+
+(defun bebop--push-render ()
+  "Draw the dashboard once, 0.2 s after the last pushed change."
+  (when (timerp bebop--push-render-timer)
+    (cancel-timer bebop--push-render-timer))
+  (setq bebop--push-render-timer
+        (run-at-time 0.2 nil (lambda ()
+                               (setq bebop--push-render-timer nil)
+                               (bebop--render)))))
+
+(defun bebop--interrupt-check ()
+  "Fold an Esc interrupt into each quiet working session that shows one."
+  (let ((changed nil)
+        (quiet-since (- (float-time) bebop-interrupt-check-interval)))
+    (dolist (pair bebop--live-sessions)
+      (let* ((name (car pair))
+             (info (cdr pair))
+             (pane-id (plist-get info :pane-id))
+             (st (gethash name bebop--hook-states)))
+        (when (and pane-id
+                   (equal (plist-get st :state) "working")
+                   (< (or (plist-get st :at) 0) quiet-since)
+                   (bebop--pane-interrupted-p pane-id))
+          (setq st (plist-put st :state "idle"))
+          (puthash name st bebop--hook-states)
+          (when (bebop--apply-detail name info (bebop--hook-detail st))
+            (setq changed t)))))
+    (when changed
+      (bebop--render))))
 
 (defun bebop-refresh ()
   "Manually trigger a full resync: rediscover pairs, poll status, re-render.
@@ -1134,17 +1269,25 @@ Also restarts the poll timer if it stopped."
 (add-hook 'emacs-startup-hook #'bebop-start)
 
 (defun bebop--start-poll ()
-  "Start the status poll, or restart it: a loop that keeps running
-\(see Loops that keep running)."
-  (bebop--loop-start 'poll bebop-poll-interval #'bebop--poll-all))
+  "Start the event watches, the sweep and the interrupt check, or restart them."
+  (bebop--events-watch-ensure)
+  (bebop--loop-start 'poll bebop-sweep-interval #'bebop--poll-all)
+  (bebop--loop-start 'interrupt bebop-interrupt-check-interval
+                     #'bebop--interrupt-check))
 
 (defun bebop--stop-poll ()
-  "Stop the status poll."
-  (bebop--loop-stop 'poll))
+  "Stop the event watches, the sweep and the interrupt check."
+  (bebop--events-watch-stop)
+  (bebop--loop-stop 'poll)
+  (bebop--loop-stop 'interrupt))
 
 (when (timerp bebop--poll-timer)
   (cancel-timer bebop--poll-timer)
   (setq bebop--poll-timer nil)
+  (bebop--start-poll))
+
+(when (and (bebop--loop-running-p 'poll)
+           (not (bebop--loop-running-p 'interrupt)))
   (bebop--start-poll))
 
 (defun bebop-debug-pane ()
