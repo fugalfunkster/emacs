@@ -199,10 +199,17 @@ def report(source, errors):
 
 
 def main():
+    # --session NAME: that session's MR and pipeline only, no derived
+    # sets. Emacs runs it after the session pushes (Targeted runs).
+    target = None
+    if "--session" in sys.argv[1:-1]:
+        target = sys.argv[sys.argv.index("--session") + 1]
     try:
         sessions = json.loads(el_string("(bebop-list-sessions)"))
     except Exception:
         return  # Emacs isn't up; pulse skips a beat, silently
+    if target:
+        sessions = [s for s in sessions if s.get("name") == target]
     errors = []
     try:
         me = api("user")["username"]
@@ -243,6 +250,14 @@ def main():
         except Exception as e:
             print(f"pulse: {name}: {e}", file=sys.stderr)
             errors.append(f"{name}: {e}")
+    if target:
+        try:
+            el("(bebop--render)")
+        except Exception:
+            pass
+        print(f"pulse: {target}: {beats} MR refreshed")
+        report("gitlab", errors)
+        return
     try:
         counts = derived(me, sessions, branches, done)
         print(f"pulse: derived sets: {counts[0]} authored,"

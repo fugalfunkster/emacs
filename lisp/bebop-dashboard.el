@@ -314,13 +314,22 @@ this footer stays."
   :type 'regexp
   :group 'bebop)
 
+(defcustom bebop-push-command-regexp
+  "\\_<git\\_>[^|;&\n]*\\_<push\\_>\\|\\_<glab[ \t]+mr\\_>"
+  "A Bash command that changes GitLab state: a push, or an MR command.
+The fold records its time as :pushed-at, and pulse refreshes that
+session's MR (see Targeted runs)."
+  :type 'regexp
+  :group 'bebop)
+
 (defvar bebop--hook-states (make-hash-table :test #'equal)
   "Session name → folded hook state.
 A plist: :state (\"working\" \"blocked\" \"done\" \"idle\" \"error\", or
 nil once the session ended), :kind, :msg, :at (time of the last event),
 :children (alist of AGENT-ID → plist :state :kind :msg :title :type),
-:pending (descriptions of Agent calls not yet matched to a start) and
-:offset (bytes of the event file already read).")
+:pending (descriptions of Agent calls not yet matched to a start),
+:transcript (the transcript path), :pushed-at (time of the last push
+or MR command) and :offset (bytes of the event file already read).")
 
 (defun bebop--events-file (name)
   "Return the event file for session NAME, named as bin/bebop-hook names it."
@@ -365,7 +374,8 @@ A new child goes at the end, so children keep their start order."
         (kind (plist-get st :kind))
         (msg (plist-get st :msg))
         (children (copy-tree (plist-get st :children)))
-        (pending (plist-get st :pending)))
+        (pending (plist-get st :pending))
+        (pushed-at (plist-get st :pushed-at)))
     (if aid
         (pcase e
           ("SubagentStart"
@@ -395,6 +405,11 @@ A new child goes at the end, so children keep their start order."
          (setq state "working" kind nil msg nil))
         ((or "PreToolUse" "PostToolUse" "PostToolUseFailure")
          (setq state "working" kind nil msg nil)
+         (when (and (equal e "PostToolUse")
+                    (equal (plist-get ev :tool) "Bash")
+                    (string-match-p bebop-push-command-regexp
+                                    (or (plist-get ev :cmd) "")))
+           (setq pushed-at (/ (or (plist-get ev :t) 0) 1000.0)))
          (when (and (equal e "PreToolUse")
                     (equal (plist-get ev :tool) "Agent")
                     (plist-get ev :desc))
@@ -443,6 +458,7 @@ A new child goes at the end, so children keep their start order."
     (list :state state :kind kind :msg msg :children children :pending pending
           :at (/ (or (plist-get ev :t) 0) 1000.0)
           :transcript (or (plist-get ev :tp) (plist-get st :transcript))
+          :pushed-at pushed-at
           :offset (plist-get st :offset))))
 
 (defun bebop--hook-state (name)
@@ -1228,6 +1244,7 @@ Cheap when all the watches run: the sweep calls it every time."
         (plist-put info :pane-id id)))
     (let ((st (bebop--hook-state name)))
       (bebop--transcript-track name st)
+      (bebop--pulse-target-maybe name st)
       (when (and st
                  (if (plist-get st :state)
                      (bebop--apply-detail name info (bebop--hook-detail st))
@@ -1560,6 +1577,85 @@ A request during a run asks for one more run after it."
 (defun bebop--pulse-stop ()
   "Stop the pulse loop. A run in progress finishes."
   (bebop--loop-stop 'pulse))
+
+(defcustom bebop-pulse-target-gap 30
+  "Fewest seconds between two targeted pulse runs for one session."
+  :type 'integer
+  :group 'bebop)
+
+(defvar bebop--pulse-targets (make-hash-table :test #'equal)
+  "Session name → plist :seen (the :pushed-at last acted on), :stop-seen
+\(the :pushed-at whose turn end was acted on), :fired, :proc, :timer.")
+
+(defun bebop--pulse-target-maybe (name st)
+  "Run a targeted pulse for session NAME when hook state ST asks for one."
+  (when-let ((pushed (plist-get st :pushed-at)))
+    (let* ((tg (or (gethash name bebop--pulse-targets)
+                   ;; First sight: a push older than a minute was seen.
+                   (let ((old (if (< (- (float-time) pushed) 60) 0 pushed)))
+                     (list :seen old :stop-seen old :fired 0))))
+           (new-push (> pushed (plist-get tg :seen)))
+           (turn-end (and (equal (plist-get st :state) "done")
+                          (> pushed (plist-get tg :stop-seen)))))
+      (setq tg (plist-put tg :seen pushed))
+      (when turn-end
+        (setq tg (plist-put tg :stop-seen pushed)))
+      (puthash name tg bebop--pulse-targets)
+      (when (or new-push turn-end)
+        (bebop--pulse-target-schedule name)))))
+
+(defun bebop--pulse-target-schedule (name)
+  "Run a targeted pulse for NAME now, or when its gap ends."
+  (let* ((tg (gethash name bebop--pulse-targets))
+         (wait (- (+ (plist-get tg :fired) bebop-pulse-target-gap)
+                  (float-time))))
+    (cond
+     ((timerp (plist-get tg :timer)))   ; one is already waiting
+     ((or (> wait 0) (process-live-p (plist-get tg :proc)))
+      (puthash name
+               (plist-put tg :timer
+                          (run-at-time (max wait 1) nil
+                                       (lambda ()
+                                         (plist-put (gethash name bebop--pulse-targets)
+                                                    :timer nil)
+                                         (bebop--pulse-target-schedule name))))
+               bebop--pulse-targets))
+     (t (bebop--pulse-target-run name)))))
+
+(defun bebop--pulse-target-run (name)
+  "Start a pulse run for session NAME alone."
+  (when (equal (bebop--host-name) bebop-resident-host)
+    (let ((tg (gethash name bebop--pulse-targets)))
+      (puthash name
+               (plist-put
+                (plist-put tg :fired (float-time))
+                :proc (make-process
+                       :name (format "bebop-pulse-%s" name)
+                       :buffer (generate-new-buffer " *bebop-pulse-target*")
+                       :command (list (or (executable-find "python3")
+                                          "/usr/bin/python3")
+                                      (bebop--pulse-script) "--session" name)
+                       :connection-type 'pipe
+                       :noquery t
+                       :sentinel #'bebop--pulse-target-sentinel))
+               bebop--pulse-targets))))
+
+(defun bebop--pulse-target-sentinel (proc _event)
+  "Log a finished targeted run."
+  (unless (process-live-p proc)
+    (let ((buf (process-buffer proc)))
+      (ignore-errors
+        (let ((coding-system-for-write 'utf-8-unix))
+          (write-region (format "%s pulse %s exit %d\n%s"
+                                (format-time-string "%F %T")
+                                (car (last (process-command proc)))
+                                (process-exit-status proc)
+                                (if (buffer-live-p buf)
+                                    (with-current-buffer buf (buffer-string))
+                                  ""))
+                        nil bebop-pulse-log t 'silent)))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
 
 (defconst bebop--pulse-labels '(("gitlab" . "GitLab") ("jira" . "Jira"))
   "Display names of pulse sources, in display order.")
