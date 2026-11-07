@@ -1581,42 +1581,51 @@ Plain data, so that a remote client can read it from the snapshot."
         ((< seconds 86400) (format "%dh" (/ seconds 3600)))
         (t (format "%dd" (/ seconds 86400)))))
 
+(require 'color)
+
+(defun bebop--faded (face)
+  "FACE's foreground blended halfway into the default background."
+  (apply #'color-rgb-to-hex
+         (append (color-blend (color-name-to-rgb (face-attribute face :foreground nil t))
+                              (color-name-to-rgb (face-attribute 'default :background nil t))
+                              0.5)
+                 '(2))))
+
 (defun bebop--pulse-segment (health run)
-  "The header text for pulse HEALTH; a click calls RUN.
-Empty when HEALTH has no sources and no run going."
+  "The header's pulse dot for HEALTH; a click calls RUN.
+Empty when HEALTH has no sources."
   (let ((sources (plist-get health :sources))
         (stale (* 2 (or (plist-get health :interval) bebop-pulse-interval)))
-        (map (make-sparse-keymap)))
+        (map (make-sparse-keymap))
+        (bad nil)
+        (lines nil))
     (define-key map [header-line mouse-1]
                 (lambda (_ev) (interactive "e") (funcall run)))
-    (if (and (null sources) (not (plist-get health :running)))
+    (dolist (label bebop--pulse-labels)
+      (when-let ((src (alist-get (car label) sources nil nil #'equal)))
+        (let* ((ok-at (plist-get src :ok-at))
+               (age (and ok-at (round (- (float-time) ok-at)))))
+          (when (or (not (plist-get src :ok)) (null age) (> age stale))
+            (setq bad t))
+          (push (format "%s: %s%s" (cdr label)
+                        (if age (concat (bebop--age-text age) " ago") "never")
+                        (if (plist-get src :error)
+                            (concat ", failed: " (plist-get src :error))
+                          ""))
+                lines))))
+    (if (null lines)
         ""
       (concat
        "  "
-       (when (plist-get health :running)
-         (propertize "↻ " 'face 'shadow))
-       (mapconcat
-        (lambda (label)
-          (when-let ((src (alist-get (car label) sources nil nil #'equal)))
-            (let* ((ok-at (plist-get src :ok-at))
-                   (age (and ok-at (round (- (float-time) ok-at))))
-                   (bad (or (not (plist-get src :ok))
-                            (null age) (> age stale))))
-              (propertize
-               (format "%s %s" (cdr label) (if age (bebop--age-text age) "—"))
-               'face (if bad '(:inherit error :weight normal) 'shadow)
-               'mouse-face 'highlight
-               'local-map map
-               'help-echo
-               (concat
-                (format "Pulse %s: " (cdr label))
-                (cond ((plist-get src :error)
-                       (format "last run failed: %s" (plist-get src :error)))
-                      ((null age) "no success yet")
-                      ((> age stale) "no success in two intervals")
-                      (t "fresh"))
-                "\nClick, or G, to run pulse now")))))
-        bebop--pulse-labels " ")))))
+       (propertize "●"
+                   'face (list :foreground (bebop--faded (if bad 'error 'success)))
+                   'mouse-face 'highlight
+                   'local-map map
+                   'help-echo
+                   (concat "Pulse"
+                           (when (plist-get health :running) " (running)")
+                           "\n" (string-join (nreverse lines) "\n")
+                           "\nClick, or G, to run pulse now"))))))
 
 (when (bebop--loop-running-p 'poll)
   (bebop--pulse-start))

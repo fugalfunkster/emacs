@@ -376,7 +376,6 @@ headings and their MR rows (see `bebop--nav-stop-p')."
             ;; The same header as *bebop*, tabs inline: the tab names
             ;; the machine, and switching tabs must not shift the tree.
             (bebop--dashboard-header)
-            (bebop--pulse-segment bebop-remote--pulse #'bebop-remote-pulse-run)
             (unless (process-live-p bebop-remote--stream)
               (propertize "  stream down" 'face 'shadow))
             (when bebop-remote--forwards
@@ -386,7 +385,8 @@ headings and their MR rows (see `bebop--nav-stop-p')."
                                     (format "%s%d" (if (equal (car f) "-R") "↑" "")
                                             (cdr f)))
                                   (reverse bebop-remote--forwards) " "))
-               'face 'shadow))))))
+               'face 'shadow))
+            (bebop--pulse-segment bebop-remote--pulse #'bebop-remote-pulse-run)))))
   (add-hook 'kill-buffer-hook #'bebop-remote--stop-timer nil t)
   (add-hook 'kill-buffer-hook #'bebop-remote--stop-stream nil t)
   ;; A host tab coming up (or any other display) shows fresh state.
