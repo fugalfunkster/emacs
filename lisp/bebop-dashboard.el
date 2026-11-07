@@ -979,7 +979,10 @@ A tab label is clickable; =h= cycles the tabs from the keyboard."
                    (funcall bebop-dashboard-tabs-function))))
     (concat
      (bebop--dashboard-title tabs)
-     (when (fboundp 'bebop--pulse-health)
+     ;; This host's dot only on its own dashboard: the remote header
+     ;; draws the host's dot instead.
+     (when (and (derived-mode-p 'bebop-dashboard-mode)
+                (fboundp 'bebop--pulse-health))
        (bebop--pulse-segment (bebop--pulse-health) #'bebop-pulse-run)))))
 
 (defun bebop--dashboard-title (tabs)
@@ -1464,6 +1467,7 @@ A request during a run asks for one more run after it."
     (cond
      ((process-live-p proc)
       (setq bebop--pulse (plist-put bebop--pulse :rerun t)))
+     ((not (equal (bebop--host-name) bebop-resident-host)))
      ((null bebop--live-sessions))
      (t
       (setq bebop--pulse

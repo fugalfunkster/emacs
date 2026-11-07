@@ -3274,7 +3274,10 @@ A tab label is clickable; =h= cycles the tabs from the keyboard."
                    (funcall bebop-dashboard-tabs-function))))
     (concat
      (bebop--dashboard-title tabs)
-     (when (fboundp 'bebop--pulse-health)
+     ;; This host's dot only on its own dashboard: the remote header
+     ;; draws the host's dot instead.
+     (when (and (derived-mode-p 'bebop-dashboard-mode)
+                (fboundp 'bebop--pulse-health))
        (bebop--pulse-segment (bebop--pulse-health) #'bebop-pulse-run)))))
 
 (defun bebop--dashboard-title (tabs)
@@ -3833,8 +3836,10 @@ calls back into Emacs through =emacsclient=, so a synchronous run would
 deadlock. Only one run goes at a time. A request during a run asks for
 one more run after it. A run that takes longer than
 =bebop-pulse-timeout= is killed, and the next request starts afresh.
-A host without live sessions runs no pulse: the sessions, their venues
-and the sidecar belong to the host that runs them.
+Only the resident host (=bebop-resident-host=) runs pulse: the
+sessions, their venues and the sidecar belong to it. Every machine has
+a live utility session, so "has live sessions" is not the test; the iMac
+ran its own pulse that way on 2026-11-06 and showed a second dot.
 
 Each run records its start, its end, its exit code, and one result per
 source from the =PULSE <source> ok|fail <error>= lines. The output goes
@@ -3878,6 +3883,7 @@ A request during a run asks for one more run after it."
     (cond
      ((process-live-p proc)
       (setq bebop--pulse (plist-put bebop--pulse :rerun t)))
+     ((not (equal (bebop--host-name) bebop-resident-host)))
      ((null bebop--live-sessions))
      (t
       (setq bebop--pulse
