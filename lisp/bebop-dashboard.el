@@ -1586,9 +1586,9 @@ Plain data, so that a remote client can read it from the snapshot."
 (defun bebop--faded (face)
   "FACE's foreground blended halfway into the default background."
   (apply #'color-rgb-to-hex
-         (append (color-blend (color-name-to-rgb (face-attribute face :foreground nil t))
-                              (color-name-to-rgb (face-attribute 'default :background nil t))
-                              0.5)
+         (append (cl-mapcar (lambda (fg bg) (/ (+ fg bg) 2))
+                            (color-name-to-rgb (face-attribute face :foreground nil t))
+                            (color-name-to-rgb (face-attribute 'default :background nil t)))
                  '(2))))
 
 (defun bebop--pulse-segment (health run)
