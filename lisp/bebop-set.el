@@ -477,10 +477,8 @@ Dropped tasks are offered for a resend first."
   (interactive
    (list (or (get-text-property (point) 'bebop-on-deck-name)
              (get-text-property (point) 'bebop-session-name)
-             (completing-read "Ack handoffs of: "
-                              (seq-filter #'bebop-set--handoffs
-                                          (mapcar #'car bebop--session-meta))
-                              nil t))))
+             (bebop--read-session "Ack handoffs of: " (seq-filter #'bebop-set--handoffs
+                                          (mapcar #'car bebop--session-meta))))))
   (let* ((states (bebop-set--handoff-states name))
          (dropped (seq-count (lambda (s) (equal s "dropped")) states)))
     (if (null states)
@@ -1037,9 +1035,7 @@ them."
 Undeclared SET names are declared on the fly."
   (interactive
    (let* ((session (or (bebop--entry-name-at-point)
-                       (completing-read "Session: "
-                                        (mapcar #'car bebop--live-sessions)
-                                        nil t)))
+                       (bebop--read-session "Session: " (mapcar #'car bebop--live-sessions))))
           (set (completing-read
                 (format "Move %s to set (empty to ungroup): " session)
                 (bebop-set--names))))
@@ -2053,7 +2049,7 @@ local branch to check out. Returns the session name. Citizen verb."
 Empty NICKNAME clears it: the title reverts to NAME."
   (interactive
    (let* ((name (or (bebop--entry-name-at-point)
-                    (completing-read "Session: " (bebop--session-names) nil t)))
+                    (bebop--read-session "Session: " (bebop--session-names))))
           (row (bebop-set--row name nil)))
      (unless (plist-get row :chart)
        (user-error "%s has no chart; the nickname lives in the chart" name))

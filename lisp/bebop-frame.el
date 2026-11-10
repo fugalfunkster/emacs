@@ -171,11 +171,8 @@ Layout:
   Left  — eshell at the venue directory (or ~/Code if no venue)
   Right — magit-status for the venue's repository"
   (interactive
-   (list (completing-read "Solo session: "
-                          (or (mapcar #'car bebop--sessions)
-                              (user-error "No Bebop sessions exist"))
-                          nil t nil nil
-                          bebop--active-session)))
+   (list (bebop--read-session "Solo session: " (or (mapcar #'car bebop--sessions)
+                              (user-error "No Bebop sessions exist")) bebop--active-session)))
   (let ((existing (cl-find-if
                     (lambda (f)
                       (equal (frame-parameter f 'bebop-solo-session) name))
@@ -247,7 +244,7 @@ Returns focus to the Conductor frame if one exists."
                 (let* ((names (mapcar (lambda (f)
                                         (frame-parameter f 'bebop-solo-session))
                                       solos))
-                       (choice (completing-read "End solo: " names nil t)))
+                       (choice (bebop--read-session "End solo: " names)))
                   (cl-find-if (lambda (f)
                                 (equal (frame-parameter f 'bebop-solo-session) choice))
                               solos))))))

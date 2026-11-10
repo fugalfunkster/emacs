@@ -329,6 +329,28 @@ Signals if NAME has no live tmux window."
   "Return list of known session names."
   (mapcar #'car bebop--sessions))
 
+(defun bebop--nickname-of (name)
+  "Return session NAME's nickname from its chart, or nil."
+  (bebop--session-nickname
+   name (or (bebop--session-chart name)
+            (let ((p (expand-file-name (concat name ".org")
+                                       (expand-file-name bebop-charts-dir))))
+              (and (file-exists-p p) p)))))
+
+(defun bebop--session-label (name)
+  "NAME, followed by its nickname in parens when it has one."
+  (if-let ((nick (bebop--nickname-of name)))
+      (format "%s (%s)" name nick)
+    name))
+
+(defun bebop--read-session (prompt names &optional default)
+  "Read one of session NAMES with PROMPT; nicknames show and match.
+DEFAULT is a bare name. Returns a bare name."
+  (let* ((table (mapcar (lambda (n) (cons (bebop--session-label n) n)) names))
+         (choice (completing-read prompt table nil t nil nil
+                                  (car (rassoc default table)))))
+    (or (cdr (assoc choice table)) choice)))
+
 (defun bebop--assert-name-available (name)
   "Signal a user-error if NAME is empty or already used by a running session."
   (when (string-empty-p (string-trim name))
@@ -737,7 +759,7 @@ deck and cannot be resumed.
 
 This command asks; `bebop-teardown-session' does the work."
   (interactive
-   (list (completing-read "Exile session: " (bebop--teardown-names) nil t)))
+   (list (bebop--read-session "Exile session: " (bebop--teardown-names))))
   (unless (yes-or-no-p (format "Exile \"%s\"? (%s) "
                                name (bebop--teardown-desc name)))
     (user-error "Exile cancelled"))
@@ -775,6 +797,34 @@ With neither (point off any row), falls through to the interactive prompt."
   (when-let ((name (or bebop--composition-session bebop--active-session)))
     (run-hook-with-args 'bebop-session-activity-functions name 'send)))
 
+(defun bebop-composition--header ()
+  "Header-line text for the current composition buffer.
+A named function, not an inline :eval body: each buffer copies its
+header form when the mode turns on, so an inline body never picked up a
+hot-reload in buffers already open. The session name carries its
+nickname, as in the session pickers."
+  (let* ((resolved (and (fboundp 'bebop--resolve-font) (bebop--resolve-font)))
+         (base-h (let ((dh (face-attribute 'default :height nil t)))
+                   (if (integerp dh) dh 160)))
+         (abs-h (round (* bebop-header-height base-h)))
+         (label (cond
+                 (bebop--composition-session
+                  (format "Session: %s"
+                          (bebop--session-label bebop--composition-session)))
+                 ;; A far session's buffer (bebop-remote.el)
+                 ((bound-and-true-p bebop-remote--compose-session)
+                  (format "Remote Session: %s"
+                          bebop-remote--compose-session))
+                 (t "Bebop"))))
+    (propertize (concat " " label)
+                'face `(:height ,abs-h :weight bold
+                        :foreground ,bebop-session-header-color
+                        ,@(when resolved (list :family resolved))))))
+
+(defconst bebop-composition--header-format
+  '((:eval (bebop-composition--header)))
+  "Header-line format every composition buffer shares.")
+
 (defun bebop-composition--enable ()
   "Activate composition-buffer settings in the current buffer."
   (setq-local org-hide-emphasis-markers t)
@@ -789,24 +839,7 @@ With neither (point off any row), falls through to the interactive prompt."
                       completion-at-point-functions))
   ;; Hide standard mode-line; use header-line instead (mirrors dashboard)
   (setq-local mode-line-format nil)
-  (setq-local header-line-format
-              '((:eval
-                 (let* ((resolved (and (fboundp 'bebop--resolve-font) (bebop--resolve-font)))
-                        (base-h (let ((dh (face-attribute 'default :height nil t)))
-                                  (if (integerp dh) dh 160)))
-                        (abs-h (round (* bebop-header-height base-h)))
-                        (label (cond
-                                (bebop--composition-session
-                                 (format "Session: %s" bebop--composition-session))
-                                ;; A far session's buffer (bebop-remote.el)
-                                ((bound-and-true-p bebop-remote--compose-session)
-                                 (format "Remote Session: %s"
-                                         bebop-remote--compose-session))
-                                (t "Bebop"))))
-                   (propertize (concat " " label)
-                               'face `(:height ,abs-h :weight bold
-                                       :foreground ,bebop-session-header-color
-                                       ,@(when resolved (list :family resolved))))))))
+  (setq-local header-line-format bebop-composition--header-format)
   (face-remap-add-relative 'header-line
                            :background (face-attribute 'default :background nil t)
                            :box nil
@@ -851,6 +884,13 @@ onto org-mode without altering any global org settings.
   (if bebop-composition-mode
       (bebop-composition--enable)
     (bebop-composition--disable)))
+
+;; Re-point buffers already open at the shared header form. Top level,
+;; so a hot-reload reaches buffers created by older code.
+(dolist (buf (buffer-list))
+  (with-current-buffer buf
+    (when bebop-composition-mode
+      (setq-local header-line-format bebop-composition--header-format))))
 
 (defun bebop--get-or-create-composition-buffer (name)
   "Return the composition buffer for session NAME, creating it if absent."
@@ -1101,8 +1141,7 @@ what it held, which is why the fleet outlives every teardown.
 Non-interactively this never prompts; interactively it reads a name and
 confirms first."
   (interactive
-   (list (let ((name (completing-read "Tear down session: "
-                                      (bebop--teardown-names) nil t)))
+   (list (let ((name (bebop--read-session "Tear down session: " (bebop--teardown-names))))
            (if (yes-or-no-p (format "Tear down \"%s\"? (%s) "
                                     name (bebop--teardown-desc name)))
                name
@@ -1185,7 +1224,7 @@ on-deck dashboard line."
          (_ (unless names
               (user-error "No sessions on deck (no charts or venues on disk)")))
          (chosen (or name
-                     (completing-read "On deck: " names nil t)))
+                     (bebop--read-session "On deck: " names)))
          (chart-path (let ((f (expand-file-name
                                (concat chosen ".org")
                                (expand-file-name bebop-charts-dir))))
@@ -1207,8 +1246,7 @@ on-deck dashboard line."
   "Associate an org doc as the chart for session NAME.
 Errors if session already has a chart — use `bebop-dissociate-chart' first."
   (interactive
-   (list (completing-read "Session: "
-                          (bebop--session-names) nil t)))
+   (list (bebop--read-session "Session: " (bebop--session-names))))
   (when (bebop--session-chart name)
     (user-error "Session \"%s\" already has a chart — use bebop-dissociate-chart first" name))
   (let* ((choice (completing-read "Chart: " '("new" "old" "org") nil t))
@@ -1225,10 +1263,8 @@ Errors if session already has a chart — use `bebop-dissociate-chart' first."
 (defun bebop-dissociate-chart (name)
   "Remove the chart association from session NAME."
   (interactive
-   (list (completing-read "Session: "
-                          (seq-filter #'bebop--session-chart
-                                      (bebop--session-names))
-                          nil t)))
+   (list (bebop--read-session "Session: " (seq-filter #'bebop--session-chart
+                                      (bebop--session-names)))))
   (let ((chart (bebop--session-chart name)))
     (when-let ((buf (and chart (find-buffer-visiting chart))))
       (kill-buffer buf))
@@ -1241,8 +1277,7 @@ Errors if session already has a chart — use `bebop-dissociate-chart' first."
 Errors if session already has a venue — use `bebop-dissociate-venue' first.
 Note: does not move the running Claude process's working directory."
   (interactive
-   (list (completing-read "Session: "
-                          (bebop--session-names) nil t)))
+   (list (bebop--read-session "Session: " (bebop--session-names))))
   (when (bebop--session-venue name)
     (user-error "Session \"%s\" already has a venue — use bebop-dissociate-venue first" name))
   (let* ((choice (completing-read "Venue: " '("new" "old" "repo") nil t))
@@ -1259,10 +1294,8 @@ Note: does not move the running Claude process's working directory."
 (defun bebop-dissociate-venue (name)
   "Remove the venue association from session NAME."
   (interactive
-   (list (completing-read "Session: "
-                          (seq-filter #'bebop--session-venue
-                                      (bebop--session-names))
-                          nil t)))
+   (list (bebop--read-session "Session: " (seq-filter #'bebop--session-venue
+                                      (bebop--session-names)))))
   (bebop--upsert-session name (list :venue nil))
   (bebop--render)
   (message "Dissociated venue from session: %s" name))
