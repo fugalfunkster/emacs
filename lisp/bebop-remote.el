@@ -220,7 +220,7 @@ The remote counterpart of `bebop--active-session'.")
         (insert "\n")
         (dolist (line '("RET: select  TAB: fold  h: host  g: refresh  .: mark seen"
                         "n: new  k: kill  r: resume  e: exile"
-                        "C/D: chart  V/W: venue  N: new set  m: move to set"
+                        "C/D: chart  V/W: venue  t: nickname  N: new set  m: move to set"
                         "w: pin W  L: workbench layout  a: attach (mosh)  P: forward port"
                         "f: followed up (ack ↪ handoffs)  o: open MR in browser (derived sets)"))
           (insert (propertize (concat line "\n")
@@ -357,6 +357,7 @@ headings and their MR rows (see `bebop--nav-stop-p')."
            ("W" . bebop-remote-dissociate-venue)
            ("N" . bebop-remote-new-set)
            ("m" . bebop-remote-assign-set)
+           ("t" . bebop-remote-nickname)
            ("r" . bebop-remote-resume)
            ("k" . bebop-remote-kill)
            ("n" . bebop-remote-new-session)
@@ -1266,6 +1267,22 @@ NONE adds a \"none\" choice, which returns nil."
     (bebop-remote--eval (format "(progn (bebop-assign-set %S %S) t)" name
                                 (unless (string-empty-p (string-trim set)) set)))
     (bebop-remote-refresh)))
+
+(defun bebop-remote-nickname ()
+  "Set or clear the far session at point's nickname (its chart's title).
+The host does the write, so its open chart buffer is reverted, not
+clobbered; the host renders the strip, so the refresh shows the result."
+  (interactive)
+  (let ((name (bebop-remote--name-at-point)))
+    (unless (plist-get (bebop-remote--row name) :chart)
+      (user-error "%s has no chart; the nickname lives in the chart" name))
+    (let* ((current (car (read-from-string
+                          (bebop-remote--eval
+                           (format "(or (bebop--nickname-of %S) \"\")" name)))))
+           (nick (read-string (format "Nickname for %s (empty clears): " name)
+                              current)))
+      (bebop-remote--eval (format "(progn (bebop-set-nickname %S %S) t)" name nick))
+      (bebop-remote-refresh))))
 
 (defun bebop-remote--host-tabs ()
   "The dashboard host tabs as (LABEL . BUFFER): this machine, the host.
