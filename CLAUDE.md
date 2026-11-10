@@ -18,7 +18,7 @@ To make a config change:
    easy to introduce and hard to spot by eye. Always validate after tangling:
    ```bash
    # Tangle
-   emacsclient --eval "(org-babel-tangle-file \"/Users/roostuser/Dropbox/.emacs.d/bebop.org\")"
+   emacsclient --eval "(org-babel-tangle-file \"~/.emacs.d/bebop.org\")"
    # Validate each changed .el file (repeat per file)
    /Applications/Emacs.app/Contents/MacOS/Emacs --batch --eval "
    (with-temp-buffer
@@ -76,6 +76,8 @@ design spec and vocabulary are in `bebop.org` — read that first for any non-tr
 | `bebop-set.el` | Sets, shelving, the setlist dashboard tree; persists choices to `bebop-state.json` v2 |
 | `bebop-api.el` | JSON citizen surface for agents over the emacs server (`bebop-session-info`, exile proposals) |
 | `bebop-frame.el` | Conductor and Solo frame layouts |
+| `bebop-remote.el` | Live Remote: the thin client's dashboard onto the resident host's sessions, over ssh + emacsclient. Has its own keymap and cheatsheet — a new dashboard key goes in both |
+| `bebop-call.el` | Call and response: the cross-machine mailbox over Dropbox (`.bebop/HOST.call.json`) |
 
 (Retired 2026-07: `bebop-cue.el`, `bebop-gitlab.el`, and the JIRA sync hooks —
 replaced by agent-side MCP/CLI tooling. See git history.)

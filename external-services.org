@@ -6,7 +6,8 @@
 
 Packages that connect Emacs to external services (Jira, GitLab, etc.). Each
 uses =use-package :ensure t= so installation and configuration are co-located.
-Auth credentials live in =~/.authinfo.gpg= — no plaintext tokens in config.
+Auth credentials live in =~/.authinfo= (plaintext, untracked; see
+dotfiles/SECRETS.md) — never in config.
 
 ** Jira — org-jira
 

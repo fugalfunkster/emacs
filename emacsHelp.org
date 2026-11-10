@@ -61,13 +61,47 @@
 | =C-c b= | =xref-pop-marker-stack=    | Jump back (global; TS overrides) |
 | =C-c j= | =js2-mode=                 | Switch to js2-mode |
 
-* Chant / Bebop
+* Bebop
 
-| Binding   | Command                         | Description                              |
-|-----------+---------------------------------+------------------------------------------|
-| =M-a=     | =abeyance=                      | Toggle chant passthrough mode            |
-| =C-c C-c= | =claude-chant-send-buffer=      | Send buffer to active chant pane         |
-| =C-c C-p= | =bebop-cue-to-active=           | Cue subtree to active Bebop session      |
-| =C-c C-P= | =bebop-cue-to-session=          | Cue subtree to selected Bebop session    |
-| =C-c C-j= | =bebop-jam-to-active=           | Jam subtree to active Bebop session      |
-| =C-c C-J= | =bebop-jam-to-session=          | Jam subtree to selected Bebop session    |
+Most Bebop commands live on the dashboard. Everywhere else:
+
+| Binding   | Command                  | Description                                          |
+|-----------+--------------------------+------------------------------------------------------|
+| =M-a=     | =bebop-passthrough=      | Type straight into the agent's tmux pane (dashboard, composition) |
+| =C-c C-c= | =bebop-composition-send= | Send the composition buffer to its session           |
+| —         | =M-x bebop-jam=          | Jam a subtree or text to a session                   |
+
+** Dashboard (=*bebop*=)
+
+| Key       | Command                          | Description                           |
+|-----------+----------------------------------+---------------------------------------|
+| =RET=     | =bebop-activate-at-point=        | Select the session, focus its composition buffer |
+| =TAB=     | =bebop-set-toggle=               | Fold or unfold a set                  |
+| =j= / =p= | next / previous entry            | Move between rows                     |
+| =n=       | =bebop-new-session=              | New session                           |
+| =k=       | =bebop-kill-session-at-point=    | Kill (type the name to confirm)       |
+| =r=       | =bebop-resume-at-point=          | Resume an on-deck session             |
+| =e=       | =bebop-exile-session-at-point=   | Exile: discard for good               |
+| =C= / =D= | associate / dissociate chart     |                                       |
+| =V= / =W= | associate / dissociate venue     |                                       |
+| =t=       | =bebop-set-nickname=             | Set or clear the session's nickname   |
+| =N=       | =bebop-new-set=                  | New set                               |
+| =m=       | =bebop-assign-set=               | Move the session to a set             |
+| =.=       | =bebop-mark-all-seen=            | Mark every status seen                |
+| =f=       | =bebop-handoff-ack=              | Ack ↪ handoffs                        |
+| =o=       | =bebop-derived-browse=           | Open the MR in the browser (derived sets) |
+| =g=       | =bebop-refresh=                  | Refresh                               |
+| =G=       | =bebop-pulse-run=                | Run pulse (Jira) now                  |
+| =h=       | =bebop-dashboard-next-tab=       | Switch host tab (thin client)         |
+| =!=       | =bebop-toggle-docker=            | Toggle the Docker sandbox             |
+
+** Remote dashboard (thin client)
+
+Same keys as the dashboard — each runs on the resident host — plus:
+
+| Key | Command                          | Description                         |
+|-----+----------------------------------+-------------------------------------|
+| =a= | =bebop-remote-attach=            | Attach to the session over mosh     |
+| =P= | =bebop-remote-forward-port=      | Forward a host port to this machine |
+| =w= | =bebop-remote-workbench=         | Pin the session to the workbench    |
+| =L= | =bebop-remote-workbench-layout=  | Lay out the workbench               |
