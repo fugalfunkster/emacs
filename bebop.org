@@ -4968,6 +4968,71 @@ Reverse-derive the parent repo path from a venue path using the =REPO--BRANCH= n
     path))
 #+end_src
 
+A chart's =#+TITLE= doubles as its session's nickname. Creation writes the
+session name there and nothing reads it back, so a title that differs from
+the name is free to be a human label. The nickname is display only: the
+name stays the session's address — tmux window, composition buffer, chart
+file, registry key, =BEBOP_SESSION=, mailbox. Keeping it in the chart means
+it survives session death and resume, and syncs through Dropbox with the
+chart. Agents set it by editing the line; the dashboard sets it with =t=.
+
+The dashboard reads every row's title on each render, so reads cache on the
+file's mtime: one stat per row unless the chart changed.
+
+#+begin_src emacs-lisp
+(defvar bebop--chart-title-cache (make-hash-table :test #'equal)
+  "CHART path → (MTIME . TITLE), so per-render title reads cost one stat.")
+
+(defun bebop--chart-title (chart)
+  "Return CHART's #+TITLE value, or nil. Cached on the file's mtime."
+  (when (and chart (file-readable-p chart))
+    (let ((mtime (file-attribute-modification-time (file-attributes chart)))
+          (hit (gethash chart bebop--chart-title-cache)))
+      (if (and hit (equal (car hit) mtime))
+          (cdr hit)
+        (let ((title (with-temp-buffer
+                       ;; Keywords sit at the top; never read a whole chart
+                       (insert-file-contents chart nil 0 4096)
+                       (goto-char (point-min))
+                       (let ((case-fold-search t))
+                         (when (re-search-forward
+                                "^#\\+TITLE:[ \t]*\\(.*?\\)[ \t]*$" nil t)
+                           (match-string 1))))))
+          (puthash chart (cons mtime title) bebop--chart-title-cache)
+          title)))))
+
+(defun bebop--session-nickname (name chart)
+  "Return session NAME's nickname: CHART's title when it differs from NAME."
+  (let ((title (bebop--chart-title chart)))
+    (and title (not (string-empty-p title)) (not (equal title name)) title)))
+
+(defun bebop--replace-chart-title (title)
+  "Set the current buffer's #+TITLE to TITLE, adding the line if absent."
+  (goto-char (point-min))
+  (let ((case-fold-search t))
+    (if (re-search-forward "^#\\+TITLE:.*$" nil t)
+        (replace-match (format "#+TITLE: %s" title) t t)
+      (insert (format "#+TITLE: %s\n" title)))))
+
+(defun bebop--write-chart-title (chart title)
+  "Write TITLE as CHART's #+TITLE.
+A buffer visiting CHART is reverted and saved, not bypassed — agents
+write charts on disk, and a stale buffer saved later would undo the
+title. Unsaved edits in that buffer stop the write instead."
+  (let ((buf (find-buffer-visiting chart)))
+    (if buf
+        (with-current-buffer buf
+          (when (buffer-modified-p)
+            (user-error "%s has unsaved edits; save it first"
+                        (file-name-nondirectory chart)))
+          (revert-buffer t t t)
+          (save-excursion (bebop--replace-chart-title title))
+          (save-buffer))
+      (with-temp-file chart
+        (insert-file-contents chart)
+        (bebop--replace-chart-title title)))))
+#+end_src
+
 Prompt for an existing chart file from =bebop-charts-dir=.
 
 #+begin_src emacs-lisp
@@ -8718,7 +8783,7 @@ lone outlier past the cap simply overflows its own line."
   (min 44
        (max 24
             (+ 2 (max (apply #'max 0
-                             (mapcar (lambda (r) (+ 4 (length (plist-get r :name))))
+                             (mapcar (lambda (r) (+ 4 (bebop-set--label-length r)))
                                      rows))
                       (apply #'max 0 (mapcar #'length set-names)))))))
 
@@ -8737,7 +8802,7 @@ lone outlier past the cap simply overflows its own line."
     (magit-insert-section (bebop-session-row name)
       (insert (bebop-set--gutter row))
       (insert indent)
-      (insert (bebop-set--prop name face))
+      (bebop-set--insert-label row face)
       ;; Right region: backline ports anchored off the name column so
       ;; they form a true column down the tree. The age column that hung
       ;; on the right edge retired on 2026-11-06: the ticket lane says
@@ -9226,6 +9291,65 @@ local branch to check out. Returns the session name. Citizen verb."
     (user-error "No merge request at point")))
 #+end_src
 
+*** Nicknames
+
+A row with a nickname (its chart's title, see Chart management) shows the
+name dimmed, then the nickname at the row's own brightness in parens, cut
+to =bebop-nickname-max= characters; the full nickname is the help-echo. A
+row the strip already shadows (quiet, on deck) keeps its nickname shadowed
+too, so dimness still means "gone quiet". =t= on a row sets or clears it.
+
+#+begin_src emacs-lisp
+(defcustom bebop-nickname-max 10
+  "Most nickname characters a dashboard row shows."
+  :type 'integer
+  :group 'bebop)
+
+(defun bebop-set--nickname (row)
+  "Return ROW's full nickname, or nil."
+  (bebop--session-nickname (plist-get row :name) (plist-get row :chart)))
+
+(defun bebop-set--label-length (row)
+  "Columns ROW's name label takes: the name, plus \" (nickname)\" if set."
+  (+ (length (plist-get row :name))
+     (if-let ((nick (bebop-set--nickname row)))
+         (+ 3 (min bebop-nickname-max (string-width nick)))
+       0)))
+
+(defun bebop-set--insert-label (row face)
+  "Insert ROW's name in FACE, or dimmed name plus nickname when it has one."
+  (let ((name (plist-get row :name))
+        (nick (bebop-set--nickname row)))
+    (if (null nick)
+        (insert (bebop-set--prop name face))
+      (insert (bebop-set--prop name (if (eq face 'shadow) face (list 'shadow face))))
+      (insert (propertize
+               (bebop-set--prop
+                (format " (%s)" (truncate-string-to-width nick bebop-nickname-max))
+                face)
+               'help-echo nick)))))
+
+(defun bebop-set-nickname (name nickname)
+  "Set session NAME's NICKNAME, stored as its chart's #+TITLE.
+Empty NICKNAME clears it: the title reverts to NAME."
+  (interactive
+   (let* ((name (or (bebop--entry-name-at-point)
+                    (completing-read "Session: " (bebop--session-names) nil t)))
+          (row (bebop-set--row name nil)))
+     (unless (plist-get row :chart)
+       (user-error "%s has no chart; the nickname lives in the chart" name))
+     (list name (read-string (format "Nickname for %s (empty clears): " name)
+                             (bebop-set--nickname row)))))
+  (let ((chart (plist-get (bebop-set--row name nil) :chart))
+        (nick (string-trim nickname)))
+    (unless chart
+      (user-error "%s has no chart; the nickname lives in the chart" name))
+    (bebop--write-chart-title chart (if (string-empty-p nick) name nick))
+    (bebop--render)
+    (message (if (string-empty-p nick) "%s: nickname cleared" "%s → (%s)")
+             name nick)))
+#+end_src
+
 *** Plug in: renderer, keybindings, cheatsheet
 
 #+begin_src emacs-lisp
@@ -9234,7 +9358,7 @@ local branch to check out. Returns the session name. Citizen verb."
 (setq bebop-dashboard-footer-lines
       '("RET: select  TAB: fold"
         "n: new  k: kill  r: resume  e: exile"
-        "C/D: chart  V/W: venue"
+        "C/D: chart  V/W: venue  t: nickname"
         "N: new set  m: move to set  g: refresh  .: mark seen"
         "f: followed up (ack ↪ handoffs)  o: open MR in browser (derived sets)"))
 
@@ -9256,6 +9380,7 @@ not merely flip magit's visibility overlays."
 (define-key bebop-dashboard-mode-map (kbd ".") #'bebop-mark-all-seen)
 (define-key bebop-dashboard-mode-map (kbd "f") #'bebop-handoff-ack)
 (define-key bebop-dashboard-mode-map (kbd "o") #'bebop-derived-browse)
+(define-key bebop-dashboard-mode-map (kbd "t") #'bebop-set-nickname)
 
 (bebop-set--load)
 (bebop-external--load)

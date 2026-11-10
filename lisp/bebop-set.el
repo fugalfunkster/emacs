@@ -1558,7 +1558,7 @@ lone outlier past the cap simply overflows its own line."
   (min 44
        (max 24
             (+ 2 (max (apply #'max 0
-                             (mapcar (lambda (r) (+ 4 (length (plist-get r :name))))
+                             (mapcar (lambda (r) (+ 4 (bebop-set--label-length r)))
                                      rows))
                       (apply #'max 0 (mapcar #'length set-names)))))))
 
@@ -1577,7 +1577,7 @@ lone outlier past the cap simply overflows its own line."
     (magit-insert-section (bebop-session-row name)
       (insert (bebop-set--gutter row))
       (insert indent)
-      (insert (bebop-set--prop name face))
+      (bebop-set--insert-label row face)
       ;; Right region: backline ports anchored off the name column so
       ;; they form a true column down the tree. The age column that hung
       ;; on the right edge retired on 2026-11-06: the ticket lane says
@@ -2019,12 +2019,61 @@ local branch to check out. Returns the session name. Citizen verb."
       (browse-url (plist-get item :url))
     (user-error "No merge request at point")))
 
+(defcustom bebop-nickname-max 10
+  "Most nickname characters a dashboard row shows."
+  :type 'integer
+  :group 'bebop)
+
+(defun bebop-set--nickname (row)
+  "Return ROW's full nickname, or nil."
+  (bebop--session-nickname (plist-get row :name) (plist-get row :chart)))
+
+(defun bebop-set--label-length (row)
+  "Columns ROW's name label takes: the name, plus \" (nickname)\" if set."
+  (+ (length (plist-get row :name))
+     (if-let ((nick (bebop-set--nickname row)))
+         (+ 3 (min bebop-nickname-max (string-width nick)))
+       0)))
+
+(defun bebop-set--insert-label (row face)
+  "Insert ROW's name in FACE, or dimmed name plus nickname when it has one."
+  (let ((name (plist-get row :name))
+        (nick (bebop-set--nickname row)))
+    (if (null nick)
+        (insert (bebop-set--prop name face))
+      (insert (bebop-set--prop name (if (eq face 'shadow) face (list 'shadow face))))
+      (insert (propertize
+               (bebop-set--prop
+                (format " (%s)" (truncate-string-to-width nick bebop-nickname-max))
+                face)
+               'help-echo nick)))))
+
+(defun bebop-set-nickname (name nickname)
+  "Set session NAME's NICKNAME, stored as its chart's #+TITLE.
+Empty NICKNAME clears it: the title reverts to NAME."
+  (interactive
+   (let* ((name (or (bebop--entry-name-at-point)
+                    (completing-read "Session: " (bebop--session-names) nil t)))
+          (row (bebop-set--row name nil)))
+     (unless (plist-get row :chart)
+       (user-error "%s has no chart; the nickname lives in the chart" name))
+     (list name (read-string (format "Nickname for %s (empty clears): " name)
+                             (bebop-set--nickname row)))))
+  (let ((chart (plist-get (bebop-set--row name nil) :chart))
+        (nick (string-trim nickname)))
+    (unless chart
+      (user-error "%s has no chart; the nickname lives in the chart" name))
+    (bebop--write-chart-title chart (if (string-empty-p nick) name nick))
+    (bebop--render)
+    (message (if (string-empty-p nick) "%s: nickname cleared" "%s → (%s)")
+             name nick)))
+
 (setq bebop--render-body-function #'bebop-set--render-body)
 
 (setq bebop-dashboard-footer-lines
       '("RET: select  TAB: fold"
         "n: new  k: kill  r: resume  e: exile"
-        "C/D: chart  V/W: venue"
+        "C/D: chart  V/W: venue  t: nickname"
         "N: new set  m: move to set  g: refresh  .: mark seen"
         "f: followed up (ack ↪ handoffs)  o: open MR in browser (derived sets)"))
 
@@ -2046,6 +2095,7 @@ not merely flip magit's visibility overlays."
 (define-key bebop-dashboard-mode-map (kbd ".") #'bebop-mark-all-seen)
 (define-key bebop-dashboard-mode-map (kbd "f") #'bebop-handoff-ack)
 (define-key bebop-dashboard-mode-map (kbd "o") #'bebop-derived-browse)
+(define-key bebop-dashboard-mode-map (kbd "t") #'bebop-set-nickname)
 
 (bebop-set--load)
 (bebop-external--load)

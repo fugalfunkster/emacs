@@ -470,6 +470,58 @@ Unlike `bebop--prompt-new-venue', no worktree is created."
         (insert (format "#+TITLE: %s\n" name))))
     path))
 
+(defvar bebop--chart-title-cache (make-hash-table :test #'equal)
+  "CHART path → (MTIME . TITLE), so per-render title reads cost one stat.")
+
+(defun bebop--chart-title (chart)
+  "Return CHART's #+TITLE value, or nil. Cached on the file's mtime."
+  (when (and chart (file-readable-p chart))
+    (let ((mtime (file-attribute-modification-time (file-attributes chart)))
+          (hit (gethash chart bebop--chart-title-cache)))
+      (if (and hit (equal (car hit) mtime))
+          (cdr hit)
+        (let ((title (with-temp-buffer
+                       ;; Keywords sit at the top; never read a whole chart
+                       (insert-file-contents chart nil 0 4096)
+                       (goto-char (point-min))
+                       (let ((case-fold-search t))
+                         (when (re-search-forward
+                                "^#\\+TITLE:[ \t]*\\(.*?\\)[ \t]*$" nil t)
+                           (match-string 1))))))
+          (puthash chart (cons mtime title) bebop--chart-title-cache)
+          title)))))
+
+(defun bebop--session-nickname (name chart)
+  "Return session NAME's nickname: CHART's title when it differs from NAME."
+  (let ((title (bebop--chart-title chart)))
+    (and title (not (string-empty-p title)) (not (equal title name)) title)))
+
+(defun bebop--replace-chart-title (title)
+  "Set the current buffer's #+TITLE to TITLE, adding the line if absent."
+  (goto-char (point-min))
+  (let ((case-fold-search t))
+    (if (re-search-forward "^#\\+TITLE:.*$" nil t)
+        (replace-match (format "#+TITLE: %s" title) t t)
+      (insert (format "#+TITLE: %s\n" title)))))
+
+(defun bebop--write-chart-title (chart title)
+  "Write TITLE as CHART's #+TITLE.
+A buffer visiting CHART is reverted and saved, not bypassed — agents
+write charts on disk, and a stale buffer saved later would undo the
+title. Unsaved edits in that buffer stop the write instead."
+  (let ((buf (find-buffer-visiting chart)))
+    (if buf
+        (with-current-buffer buf
+          (when (buffer-modified-p)
+            (user-error "%s has unsaved edits; save it first"
+                        (file-name-nondirectory chart)))
+          (revert-buffer t t t)
+          (save-excursion (bebop--replace-chart-title title))
+          (save-buffer))
+      (with-temp-file chart
+        (insert-file-contents chart)
+        (bebop--replace-chart-title title)))))
+
 (defun bebop--prompt-existing-chart ()
   "Prompt for an existing chart file. Return its full path."
   (let* ((charts-dir (bebop--ensure-dir bebop-charts-dir))
