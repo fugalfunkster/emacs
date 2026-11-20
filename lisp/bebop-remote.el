@@ -221,7 +221,7 @@ The remote counterpart of `bebop--active-session'.")
         (dolist (line '("RET: select  TAB: fold  h: host  g: refresh  .: mark seen"
                         "n: new  k: kill  r: resume  e: exile"
                         "C/D: chart  V/W: venue  t: nickname  N: new set  m: move to set"
-                        "w: pin W  L: workbench layout  a: attach (mosh)  P: forward port"
+                        "w: pin W  L: workbench layout  T: reopen D tabs  a: attach (mosh)  P: forward port"
                         "f: followed up (ack ↪ handoffs)  o: open MR in browser (derived sets)"))
           (insert (propertize (concat line "\n")
                               'face '(:inherit shadow :height 0.75))))
@@ -1375,6 +1375,20 @@ is missing."
         (next hosts)))))
 
 (advice-add 'bebop-frame--setup-conductor :after #'bebop-remote--conductor-dashboard)
+
+(defun bebop-remote-terminals ()
+  "Reopen the D terminal tabs after Ghostty quits or a tab closes.
+This machine gets a tab on its own tmux; a client also gets one on
+the host. A tab that is still open is only selected. Each tab makes
+a fresh grouped session, since the old one died with its tab."
+  (interactive)
+  (bebop-remote--ensure-terminals
+   (selected-frame)
+   (unless (equal (bebop--host-name) bebop-resident-host)
+     (list (bebop-remote--target)))))
+
+(define-key bebop-dashboard-mode-map (kbd "T") #'bebop-remote-terminals)
+(define-key bebop-remote-mode-map (kbd "T") #'bebop-remote-terminals)
 
 (defun bebop-remote--remote-context-p ()
   "Non-nil when a new session should start on the host.

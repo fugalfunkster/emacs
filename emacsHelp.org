@@ -94,6 +94,7 @@ Most Bebop commands live on the dashboard. Everywhere else:
 | =G=       | =bebop-pulse-run=                | Run pulse (Jira) now                  |
 | =h=       | =bebop-dashboard-next-tab=       | Switch host tab (thin client)         |
 | =!=       | =bebop-toggle-docker=            | Toggle the Docker sandbox             |
+| =T=       | =bebop-remote-terminals=         | Reopen the D Ghostty tabs after Ghostty quits |
 
 ** Remote dashboard (thin client)
 
