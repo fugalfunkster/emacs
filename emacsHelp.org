@@ -81,7 +81,7 @@ Most Bebop commands live on the dashboard. Everywhere else:
 | =n=       | =bebop-new-session=              | New session                           |
 | =k=       | =bebop-kill-session-at-point=    | Kill (type the name to confirm)       |
 | =r=       | =bebop-resume-at-point=          | Resume an on-deck session             |
-| =e=       | =bebop-exile-session-at-point=   | Exile: discard for good               |
+| =E=       | =bebop-exile-session-at-point=   | Exile: discard for good (type the name) |
 | =C= / =D= | associate / dissociate chart     |                                       |
 | =V= / =W= | associate / dissociate venue     |                                       |
 | =t=       | =bebop-set-nickname=             | Set or clear the session's nickname   |

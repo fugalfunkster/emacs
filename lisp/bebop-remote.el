@@ -219,7 +219,7 @@ The remote counterpart of `bebop--active-session'.")
           (bebop-remote--mark-names (point-min) (point))))
         (insert "\n")
         (dolist (line '("RET: select  TAB: fold  h: host  g: refresh  .: mark seen"
-                        "n: new  k: kill  r: resume  e: exile"
+                        "n: new  k: kill  r: resume  E: exile"
                         "C/D: chart  V/W: venue  t: nickname  N: new set  m: move to set"
                         "w: pin W  L: workbench layout  T: reopen D tabs  a: attach (mosh)  P: forward port"
                         "f: followed up (ack ↪ handoffs)  o: open MR in browser (derived sets)"))
@@ -350,7 +350,7 @@ headings and their MR rows (see `bebop--nav-stop-p')."
            ("f" . bebop-remote-ack-handoff)
            ("w" . bebop-remote-workbench)
            ("L" . bebop-remote-workbench-layout)
-           ("e" . bebop-remote-exile)
+           ("E" . bebop-remote-exile)
            ("C" . bebop-remote-associate-chart)
            ("D" . bebop-remote-dissociate-chart)
            ("V" . bebop-remote-associate-venue)
@@ -366,6 +366,8 @@ headings and their MR rows (see `bebop--nav-stop-p')."
            ("<down>" . bebop-remote--next)
            ("<up>" . bebop-remote--prev)))
   (define-key bebop-remote-mode-map (kbd (car b)) (cdr b)))
+;; Exile moved to E (see the dashboard map); unbind e for live clients.
+(define-key bebop-remote-mode-map (kbd "e") nil)
 
 (define-derived-mode bebop-remote-mode special-mode "BebopRemote"
   "Dashboard for a resident host's session pool, rendered over ssh.
@@ -1201,13 +1203,16 @@ NONE adds a \"none\" choice, which returns nil."
             bebop-remote--sessions))
 
 (defun bebop-remote-exile ()
-  "Exile the far session at point, after the host's own confirmation text."
+  "Exile the far session at point, after the host's own confirmation text.
+Confirms as `E' does locally, by typing the session's name."
   (interactive)
   (let* ((name (bebop-remote--name-at-point))
          (desc (bebop-remote--eval-json (format "(bebop-exile-preview %S)" name))))
-    (unless (yes-or-no-p (format "Exile \"%s\" on %s? (%s) "
-                                 name bebop-remote-host desc))
-      (user-error "Exile cancelled"))
+    (unless (equal (read-string
+                    (format "Exile discards %s on %s for good. Type \"%s\" to confirm: "
+                            desc bebop-remote-host name))
+                   name)
+      (user-error "Exile cancelled (name mismatch)"))
     (bebop-remote--eval-json (format "(bebop-discard-session %S)" name))
     (when (equal name bebop-remote--active)
       (setq bebop-remote--active nil))

@@ -103,7 +103,8 @@ Three distinct operations for ending or cleaning up a session:
 subdirectory (=~/Code/Org/charts/archive/NAME-MMDD.org=) while leaving the
 session running. Useful after a session wraps up a phase of work.
 
-*Exile* (=e= in dashboard) — permanently discards a session. Exile asks;
+*Exile* (=E= in dashboard) — permanently discards a session. Exile asks
+for the name typed out;
 =bebop-teardown-session= does the work, and it reaps the *whole tuple*:
 tmux window, backline work shell, UI buffers, chart to the archive,
 venue via =git worktree remove --force= (falling back to =rm -rf= if the
@@ -4429,7 +4430,7 @@ replaces this list again with the full setlist cheatsheet when it loads.
 #+begin_src emacs-lisp
 (setq bebop-dashboard-footer-lines
       '("n: new  C/D: chart  V/W: venue  RET: select"
-        "k: kill  e: exile  r: resume  g: refresh"))
+        "k: kill  E: exile  r: resume  g: refresh"))
 #+end_src
 
 At-point action commands and navigation over both entry kinds.
@@ -4493,7 +4494,10 @@ with no argument."
 (define-key bebop-dashboard-mode-map (kbd "p")      #'bebop--dashboard-prev-entry)
 (define-key bebop-dashboard-mode-map (kbd "k") #'bebop-kill-session-at-point)
 (define-key bebop-dashboard-mode-map (kbd "r") #'bebop-resume-at-point)
-(define-key bebop-dashboard-mode-map (kbd "e") #'bebop-exile-session-at-point)
+(define-key bebop-dashboard-mode-map (kbd "E") #'bebop-exile-session-at-point)
+;; Exile moved from e to E, behind a typed name (2026-11-25): one stray
+;; key and a "yes" discarded onboarding--srg. Unbind e for live Emacsen.
+(define-key bebop-dashboard-mode-map (kbd "e") nil)
 #+end_src
 
 *** Session accessors
@@ -5320,9 +5324,10 @@ deck and cannot be resumed.
 This command asks; `bebop-teardown-session' does the work."
   (interactive
    (list (bebop--read-session "Exile session: " (bebop--teardown-names))))
-  (unless (yes-or-no-p (format "Exile \"%s\"? (%s) "
-                               name (bebop--teardown-desc name)))
-    (user-error "Exile cancelled"))
+  (unless (equal (read-string (format "Exile discards %s for good. Type \"%s\" to confirm: "
+                                      (bebop--teardown-desc name) name))
+                 name)
+    (user-error "Exile cancelled (name mismatch)"))
   (bebop-teardown-session name)
   (message "Exiled session: %s" name))
 #+end_src
@@ -9394,7 +9399,7 @@ Empty NICKNAME clears it: the title reverts to NAME."
 
 (setq bebop-dashboard-footer-lines
       '("RET: select  TAB: fold"
-        "n: new  k: kill  r: resume  e: exile"
+        "n: new  k: kill  r: resume  E: exile"
         "C/D: chart  V/W: venue  t: nickname"
         "N: new set  m: move to set  g: refresh  .: mark seen"
         "f: followed up (ack ↪ handoffs)  o: open MR in browser (derived sets)"))
@@ -10914,7 +10919,7 @@ The remote counterpart of `bebop--active-session'.")
           (bebop-remote--mark-names (point-min) (point))))
         (insert "\n")
         (dolist (line '("RET: select  TAB: fold  h: host  g: refresh  .: mark seen"
-                        "n: new  k: kill  r: resume  e: exile"
+                        "n: new  k: kill  r: resume  E: exile"
                         "C/D: chart  V/W: venue  t: nickname  N: new set  m: move to set"
                         "w: pin W  L: workbench layout  T: reopen D tabs  a: attach (mosh)  P: forward port"
                         "f: followed up (ack ↪ handoffs)  o: open MR in browser (derived sets)"))
@@ -11045,7 +11050,7 @@ headings and their MR rows (see `bebop--nav-stop-p')."
            ("f" . bebop-remote-ack-handoff)
            ("w" . bebop-remote-workbench)
            ("L" . bebop-remote-workbench-layout)
-           ("e" . bebop-remote-exile)
+           ("E" . bebop-remote-exile)
            ("C" . bebop-remote-associate-chart)
            ("D" . bebop-remote-dissociate-chart)
            ("V" . bebop-remote-associate-venue)
@@ -11061,6 +11066,8 @@ headings and their MR rows (see `bebop--nav-stop-p')."
            ("<down>" . bebop-remote--next)
            ("<up>" . bebop-remote--prev)))
   (define-key bebop-remote-mode-map (kbd (car b)) (cdr b)))
+;; Exile moved to E (see the dashboard map); unbind e for live clients.
+(define-key bebop-remote-mode-map (kbd "e") nil)
 
 (define-derived-mode bebop-remote-mode special-mode "BebopRemote"
   "Dashboard for a resident host's session pool, rendered over ssh.
@@ -12138,13 +12145,16 @@ NONE adds a \"none\" choice, which returns nil."
             bebop-remote--sessions))
 
 (defun bebop-remote-exile ()
-  "Exile the far session at point, after the host's own confirmation text."
+  "Exile the far session at point, after the host's own confirmation text.
+Confirms as `E' does locally, by typing the session's name."
   (interactive)
   (let* ((name (bebop-remote--name-at-point))
          (desc (bebop-remote--eval-json (format "(bebop-exile-preview %S)" name))))
-    (unless (yes-or-no-p (format "Exile \"%s\" on %s? (%s) "
-                                 name bebop-remote-host desc))
-      (user-error "Exile cancelled"))
+    (unless (equal (read-string
+                    (format "Exile discards %s on %s for good. Type \"%s\" to confirm: "
+                            desc bebop-remote-host name))
+                   name)
+      (user-error "Exile cancelled (name mismatch)"))
     (bebop-remote--eval-json (format "(bebop-discard-session %S)" name))
     (when (equal name bebop-remote--active)
       (setq bebop-remote--active nil))

@@ -101,7 +101,7 @@ Returns an empty string for bare names like ROOST-1234."
 
 (setq bebop-dashboard-footer-lines
       '("n: new  C/D: chart  V/W: venue  RET: select"
-        "k: kill  e: exile  r: resume  g: refresh"))
+        "k: kill  E: exile  r: resume  g: refresh"))
 
 (defun bebop-resume-at-point ()
   "Resume the on-deck session at point, or call `bebop-resume' interactively.
@@ -161,7 +161,10 @@ with no argument."
 (define-key bebop-dashboard-mode-map (kbd "p")      #'bebop--dashboard-prev-entry)
 (define-key bebop-dashboard-mode-map (kbd "k") #'bebop-kill-session-at-point)
 (define-key bebop-dashboard-mode-map (kbd "r") #'bebop-resume-at-point)
-(define-key bebop-dashboard-mode-map (kbd "e") #'bebop-exile-session-at-point)
+(define-key bebop-dashboard-mode-map (kbd "E") #'bebop-exile-session-at-point)
+;; Exile moved from e to E, behind a typed name (2026-11-25): one stray
+;; key and a "yes" discarded onboarding--srg. Unbind e for live Emacsen.
+(define-key bebop-dashboard-mode-map (kbd "e") nil)
 
 (defun bebop--session-info (name)
   "Return the session plist for NAME, or nil if not found."
@@ -760,9 +763,10 @@ deck and cannot be resumed.
 This command asks; `bebop-teardown-session' does the work."
   (interactive
    (list (bebop--read-session "Exile session: " (bebop--teardown-names))))
-  (unless (yes-or-no-p (format "Exile \"%s\"? (%s) "
-                               name (bebop--teardown-desc name)))
-    (user-error "Exile cancelled"))
+  (unless (equal (read-string (format "Exile discards %s for good. Type \"%s\" to confirm: "
+                                      (bebop--teardown-desc name) name))
+                 name)
+    (user-error "Exile cancelled (name mismatch)"))
   (bebop-teardown-session name)
   (message "Exiled session: %s" name))
 

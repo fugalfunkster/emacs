@@ -2068,7 +2068,7 @@ Empty NICKNAME clears it: the title reverts to NAME."
 
 (setq bebop-dashboard-footer-lines
       '("RET: select  TAB: fold"
-        "n: new  k: kill  r: resume  e: exile"
+        "n: new  k: kill  r: resume  E: exile"
         "C/D: chart  V/W: venue  t: nickname"
         "N: new set  m: move to set  g: refresh  .: mark seen"
         "f: followed up (ack ↪ handoffs)  o: open MR in browser (derived sets)"))
